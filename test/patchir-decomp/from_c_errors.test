@@ -1,0 +1,22 @@
+# `-from-c` failure modes: parse errors are fatal, a marker naming a function
+# that has no definition is fatal unless -strict-symbols=false, and
+# -validate-pcode needs the P-Code model.
+#
+# RUN: printf 'int f( {\n' > %t.bad.c
+# RUN: not %patchir-decomp -from-c %t.bad.c -target-lang ARM:LE:32:Cortex -emit-cir -output %t.bad 2>&1 | %file-check -check-prefix=BAD %s
+# BAD: from-c: {{[0-9]+}} error(s) parsing
+#
+# RUN: printf '// patchestry:tu format=1 target=ARM:LE:32:Cortex arch=ARM\n// patchestry:function-begin ram:1 name=missing symbol=missing\nint present(void) { return 1; }\n' > %t.miss.c
+# RUN: not %patchir-decomp -from-c %t.miss.c -emit-cir -output %t.miss 2>&1 | %file-check -check-prefix=MISS %s
+# MISS: from-c: no definition for marker function 'missing'
+#
+# RUN: %patchir-decomp -from-c %t.miss.c -strict-symbols=false -emit-cir -output %t.lax
+# RUN: %file-check -check-prefix=LAX %s --input-file %t.lax.cir
+# LAX: cir.func {{.*}}@present
+#
+# RUN: not %patchir-decomp -from-c %t.miss.c -validate-pcode -strict-symbols=false -emit-cir -output %t.noinput 2>&1 | %file-check -check-prefix=NOINPUT %s
+# NOINPUT: -validate-pcode requires -input
+#
+# RUN: printf 'int g(void) { return 0; }\n' > %t.notarget.c
+# RUN: not %patchir-decomp -from-c %t.notarget.c -emit-cir -output %t.notarget 2>&1 | %file-check -check-prefix=NOTARGET %s
+# NOTARGET: from-c: no target language

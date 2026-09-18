@@ -11,6 +11,7 @@
 #include <optional>
 #include <string>
 #include <system_error>
+#include <vector>
 
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Decl.h>
@@ -21,9 +22,13 @@
 #include <llvm/Support/JSON.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/raw_ostream.h>
+#include <mlir/IR/BuiltinOps.h>
+#include <mlir/IR/SymbolTable.h>
 
+#include <patchestry/AST/CSourceUnit.hpp>
 #include <patchestry/AST/LiftOptions.hpp>
 #include <patchestry/AST/PcodeLifter.hpp>
+#include <patchestry/AST/PcodeValidator.hpp>
 #include <patchestry/AST/TUPrinter.hpp>
 #include <patchestry/AST/TranslationUnit.hpp>
 #include <patchestry/Codegen/Codegen.hpp>
@@ -47,7 +52,8 @@ namespace {
     );
 
     const llvm::cl::opt< std::string > input_filename( // NOLINT(cert-err58-cpp)
-        "input", llvm::cl::desc("Input JSON file"), llvm::cl::Required
+        "input", llvm::cl::desc("Input P-Code JSON file (required unless -from-c is given)"),
+        llvm::cl::init("")
     );
 
     const llvm::cl::opt< std::string > output_filename( // NOLINT(cert-err58-cpp)
@@ -90,6 +96,41 @@ namespace {
         llvm::cl::init(true)
     );
 
+    const llvm::cl::opt< std::string > from_c_filename( // NOLINT(cert-err58-cpp)
+        "from-c",
+        llvm::cl::desc(
+            "Compile a C translation unit written by -print-tu (or refined from it) "
+            "instead of lifting JSON.  The target comes from -target-lang, else the "
+            "`patchestry:tu` header, else -input."
+        ),
+        llvm::cl::value_desc("file.c"), llvm::cl::init("")
+    );
+
+    const llvm::cl::opt< std::string > target_lang( // NOLINT(cert-err58-cpp)
+        "target-lang",
+        llvm::cl::desc("Ghidra language id for -from-c, e.g. ARM:LE:32:Cortex"),
+        llvm::cl::init("")
+    );
+
+    const llvm::cl::opt< bool > strict_symbols( // NOLINT(cert-err58-cpp)
+        "strict-symbols",
+        llvm::cl::desc(
+            "-from-c: fail when a function named by a patchestry:function-begin marker "
+            "is missing or has no body (default true)"
+        ),
+        llvm::cl::init(true)
+    );
+
+    const llvm::cl::opt< std::string > validate_pcode( // NOLINT(cert-err58-cpp)
+        "validate-pcode",
+        llvm::cl::desc(
+            "-from-c: validate the parsed C against the -input P-Code model and write "
+            "<output>.validation.json.  Bare flag fails on any critical finding; "
+            "=report writes the report and exits 0."
+        ),
+        llvm::cl::ValueOptional, llvm::cl::init("")
+    );
+
     patchestry::Options parseCommandLineOptions(int argc, char **argv) {
         llvm::cl::ParseCommandLineOptions(
             argc, argv, "patche-lifter to represent high pcode into mlir representations\n"
@@ -109,6 +150,11 @@ namespace {
             .input_file                 = input_filename.getValue(),
             .print_tu                   = print_tu.getValue(),
             .emit_dot_cfg               = emit_dot_cfg.getValue(),
+            .from_c_file                = from_c_filename.getValue(),
+            .target_lang                = target_lang.getValue(),
+            .strict_symbols             = strict_symbols.getValue(),
+            .validate_pcode             = validate_pcode.getNumOccurrences() > 0,
+            .validate_report_only       = validate_pcode.getValue() == "report",
         };
     }
 
@@ -238,22 +284,126 @@ namespace {
         return true;
     }
 
+    // `-from-c`: every `patchestry:function-begin` marker must name a function
+    // with a body in the parsed C.  `-strict-symbols=false` only logs a miss.
+    bool checkMarkerDefinitions(patchestry::ast::TranslationUnit &unit, bool strict) {
+        bool missing = false;
+        for (const auto &marker : unit.markers) {
+            if (patchestry::ast::FindFunctionDefinition(unit.context(), marker.name) == nullptr)
+            {
+                LOG(ERROR) << "from-c: no definition for marker function '" << marker.name
+                           << "' (" << marker.key << ")\n";
+                missing = true;
+            }
+        }
+        return !(missing && strict);
+    }
+
+    // `-validate-pcode`: check the unit against the P-Code model and write
+    // `<prefix>.validation.json`, or the report to stdout without a prefix.
+    // Returns false when the report cannot be written; `critical` reports
+    // whether any finding is critical.
+    bool validateAgainstPcode(
+        patchestry::ast::TranslationUnit &unit, const patchestry::ghidra::Program &program,
+        const std::string &output_file, bool &critical
+    ) {
+        auto report =
+            patchestry::ast::ValidateAgainstPcode(unit.context(), program, unit.markers, {});
+        if (!output_file.empty()) {
+            std::error_code ec;
+            llvm::raw_fd_ostream out(
+                output_file + ".validation.json", ec, llvm::sys::fs::OF_Text
+            );
+            if (ec) {
+                LOG(ERROR) << "from-c: cannot write validation report: " << ec.message()
+                           << "\n";
+                return false;
+            }
+            patchestry::ast::WriteValidationReport(out, report);
+        } else {
+            patchestry::ast::WriteValidationReport(llvm::outs(), report);
+        }
+        LOG(WARNING) << "validate: " << report.functions.size() << " function(s), "
+                     << report.failed << " failed, " << report.warned << " with warnings\n";
+        critical = report.HasCritical();
+        return true;
+    }
+
+    // `-from-c`: every marker symbol must have a body in the lowered module.
+    bool checkMarkerSymbols(
+        mlir::ModuleOp module, const std::vector< patchestry::ast::MarkerEntry > &markers,
+        bool strict
+    ) {
+        bool missing = false;
+        for (const auto &marker : markers) {
+            auto *op = mlir::SymbolTable::lookupSymbolIn(module, marker.symbol);
+            const bool defined =
+                op != nullptr && op->getNumRegions() > 0 && !op->getRegion(0).empty();
+            if (!defined) {
+                LOG(ERROR) << "from-c: CIR symbol '" << marker.symbol
+                           << "' is missing or has no body\n";
+                missing = true;
+            }
+        }
+        return !(missing && strict);
+    }
+
 } // namespace
 
 int main(int argc, char **argv) {
-    auto options = parseCommandLineOptions(argc, argv);
+    auto options      = parseCommandLineOptions(argc, argv);
+    const bool from_c = !options.from_c_file.empty();
+    if (!from_c && options.input_file.empty()) {
+        LOG(ERROR) << "-input <json> is required unless -from-c is given\n";
+        return EXIT_FAILURE;
+    }
 
-    auto program = loadProgram(options.input_file);
-    if (!program.has_value()) { return EXIT_FAILURE; }
+    // `-input` is the program to lift, or, with `-from-c`, the target
+    // fallback and the model for `-validate-pcode`.
+    std::optional< patchestry::ghidra::Program > program;
+    if (!options.input_file.empty()) {
+        program = loadProgram(options.input_file);
+        if (!program.has_value()) { return EXIT_FAILURE; }
+    }
 
-    if (!validateBranchindSwitchMetadata(*program)) { return EXIT_FAILURE; }
-
-    // AST source: lift the P-Code model into a Clang translation unit.
-    auto unit = patchestry::ast::LiftProgram(*program, liftOptions(options));
+    // AST source: re-enter printed or refined C, or lift the P-Code model.
+    std::unique_ptr< patchestry::ast::TranslationUnit > unit;
+    if (from_c) {
+        unit = patchestry::ast::ParseCTranslationUnit(
+            { .path = options.from_c_file, .target_lang = options.target_lang },
+            program.has_value() ? &*program : nullptr
+        );
+    } else {
+        if (!validateBranchindSwitchMetadata(*program)) { return EXIT_FAILURE; }
+        unit = patchestry::ast::LiftProgram(*program, liftOptions(options));
+    }
     if (!unit) { return EXIT_FAILURE; }
 
-    if (options.print_tu && !printTranslationUnit(*unit, options.output_file)) {
-        return EXIT_FAILURE;
+    if (!checkMarkerDefinitions(*unit, options.strict_symbols)) { return EXIT_FAILURE; }
+
+    int status = EXIT_SUCCESS;
+    if (options.validate_pcode) {
+        if (!program.has_value()) {
+            LOG(ERROR) << "-validate-pcode requires -input <json>\n";
+            return EXIT_FAILURE;
+        }
+        bool critical = false;
+        if (!validateAgainstPcode(*unit, *program, options.output_file, critical)) {
+            return EXIT_FAILURE;
+        }
+        if (critical && !options.validate_report_only) { status = EXIT_FAILURE; }
+    }
+
+    if (options.print_tu) {
+        if (from_c
+            && (options.output_file.empty()
+                || options.output_file + ".c" == options.from_c_file))
+        {
+            LOG(ERROR) << "from-c: -print-tu needs an -output prefix different from "
+                          "the input file\n";
+            return EXIT_FAILURE;
+        }
+        if (!printTranslationUnit(*unit, options.output_file)) { return EXIT_FAILURE; }
     }
 
     if (unit->has_errors()) {
@@ -261,13 +411,16 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
-    // Lowering: the same call serves any AST source.
+    // Lowering: the same call serves both AST sources.
     patchestry::codegen::CodeGenerator codegen(unit->context(), unit->codegen_options());
     auto module = codegen.lower_ast_to_mlir();
     if (!module.has_value()) {
         LOG(ERROR) << "Failed to emit mlir module\n";
         return EXIT_FAILURE;
     }
-    return codegen.emit_outputs(*module, loweringOptions(options)) ? EXIT_SUCCESS
-                                                                   : EXIT_FAILURE;
+    if (!checkMarkerSymbols(*module, unit->markers, options.strict_symbols)) {
+        return EXIT_FAILURE;
+    }
+    if (!codegen.emit_outputs(*module, loweringOptions(options))) { return EXIT_FAILURE; }
+    return status;
 }

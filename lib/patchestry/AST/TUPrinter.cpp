@@ -102,10 +102,53 @@ namespace patchestry::ast {
             return kPrimary;
         }
 
+        // Object pointer to `void *` without dropping qualifiers.  C converts
+        // that implicitly, and the lifter never does arithmetic on a `void *`
+        // operand (bases are cast to `char *` first), so the printed C means
+        // the same without the cast.
+        bool IsImplicitVoidPointerConversion(const clang::ImplicitCastExpr *cast) {
+            const auto *to   = cast->getType()->getAs< clang::PointerType >();
+            const auto *from = cast->getSubExpr()->getType()->getAs< clang::PointerType >();
+            if (to == nullptr || from == nullptr) { return false; }
+            const auto to_pointee   = to->getPointeeType();
+            const auto from_pointee = from->getPointeeType();
+            if (!to_pointee->isVoidType() || from_pointee->isFunctionType()) { return false; }
+            return (from_pointee.getCVRQualifiers() & ~to_pointee.getCVRQualifiers()) == 0;
+        }
+
+        // Implicit conversions that change the representation are printed as
+        // explicit casts: StmtPrinter drops them, and the resulting C would be
+        // ill-typed (pointer mismatches, int-to-pointer) or mean something
+        // else (`void *` arithmetic where the lifter had `char *`).  The one
+        // exception is the conversion to `void *` C makes on its own.
+        bool IsPrintedConversion(const clang::ImplicitCastExpr *cast) {
+            switch (cast->getCastKind()) {
+                case clang::CK_BitCast:
+                    return !IsImplicitVoidPointerConversion(cast);
+                case clang::CK_IntegralToPointer:
+                case clang::CK_PointerToIntegral:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
         // Rank at which StmtPrinter prints `expr`.  Implicit nodes print
-        // nothing of their own, so look through them.
+        // nothing of their own, so look through them, except for the
+        // conversions printed as casts.
         int PrintedRank(const clang::Expr *expr) {
-            expr = expr->IgnoreImplicit();
+            while (true) {
+                if (const auto *ice = llvm::dyn_cast< clang::ImplicitCastExpr >(expr)) {
+                    if (IsPrintedConversion(ice)) { return kUnary; }
+                    expr = ice->getSubExpr();
+                    continue;
+                }
+                if (const auto *full = llvm::dyn_cast< clang::FullExpr >(expr)) {
+                    expr = full->getSubExpr();
+                    continue;
+                }
+                break;
+            }
             if (llvm::isa< clang::ParenExpr >(expr)) { return kPrimary; }
             if (const auto *bin = llvm::dyn_cast< clang::BinaryOperator >(expr)) {
                 return BinaryRank(bin->getOpcode());
@@ -136,6 +179,7 @@ namespace patchestry::ast {
             while (true) {
                 clang::Expr *next = nullptr;
                 if (auto *ice = llvm::dyn_cast< clang::ImplicitCastExpr >(inner)) {
+                    if (IsPrintedConversion(ice)) { break; } // printed: wrap it whole
                     next = ice->getSubExpr();
                 } else if (auto *full = llvm::dyn_cast< clang::FullExpr >(inner)) {
                     next = full->getSubExpr();
@@ -213,6 +257,12 @@ namespace patchestry::ast {
                 cast->setSubExpr(WrapIfBelow(ctx, cast->getSubExpr(), kUnary));
                 return;
             }
+            if (auto *ice = llvm::dyn_cast< clang::ImplicitCastExpr >(expr);
+                ice != nullptr && IsPrintedConversion(ice))
+            {
+                ice->setSubExpr(WrapIfBelow(ctx, ice->getSubExpr(), kUnary));
+                return;
+            }
             if (auto *trait = llvm::dyn_cast< clang::UnaryExprOrTypeTraitExpr >(expr)) {
                 if (!trait->isArgumentType()) {
                     trait->setArgument(WrapIfBelow(ctx, trait->getArgumentExpr(), kUnary));
@@ -256,6 +306,8 @@ namespace patchestry::ast {
         class CPrinterHelper : public clang::PrinterHelper
         {
           public:
+            explicit CPrinterHelper(clang::ASTContext &ctx) : ctx_(ctx) {}
+
             bool handledStmt(clang::Stmt *stmt, llvm::raw_ostream &os) override {
                 if (auto *lit = llvm::dyn_cast< clang::IntegerLiteral >(stmt)) {
                     return PrintNarrowInt(lit, os);
@@ -263,10 +315,22 @@ namespace patchestry::ast {
                 if (auto *lit = llvm::dyn_cast< clang::FloatingLiteral >(stmt)) {
                     return PrintNonFinite(lit, os);
                 }
+                if (auto *cast = llvm::dyn_cast< clang::ImplicitCastExpr >(stmt)) {
+                    return PrintConversion(cast, os);
+                }
                 return false;
             }
 
           private:
+            bool PrintConversion(clang::ImplicitCastExpr *cast, llvm::raw_ostream &os) {
+                if (!IsPrintedConversion(cast)) { return false; }
+                os << "(" << cast->getType().getAsString(ctx_.getPrintingPolicy()) << ")";
+                cast->getSubExpr()->printPretty(
+                    os, this, ctx_.getPrintingPolicy(), 0, "\n", &ctx_
+                );
+                return true;
+            }
+
             // StmtPrinter spells char/short literals with the MS-only
             // i8/Ui8/i16/Ui16 suffixes.  The value fits in int, so a plain
             // decimal literal keeps its meaning.
@@ -291,7 +355,8 @@ namespace patchestry::ast {
             }
 
             // APFloat spells non-finite values as `NaN`/`inf`, which are not
-            // C literals.
+            // C literals.  Spell them as expressions rather than builtins so
+            // they parse under any frontend configuration.
             static bool PrintNonFinite(clang::FloatingLiteral *lit, llvm::raw_ostream &os) {
                 const auto &value = lit->getValue();
                 if (value.isFinite()) { return false; }
@@ -300,16 +365,19 @@ namespace patchestry::ast {
                     if (builtin->getKind() == clang::BuiltinType::Float) {
                         suffix = "f";
                     } else if (builtin->getKind() == clang::BuiltinType::LongDouble) {
-                        suffix = "l";
+                        suffix = "L";
                     }
                 }
                 if (value.isNaN()) {
-                    os << "__builtin_nan" << suffix << "(\"\")";
+                    os << "(0.0" << suffix << " / 0.0" << suffix << ")";
                 } else {
-                    os << (value.isNegative() ? "-" : "") << "__builtin_inf" << suffix << "()";
+                    os << "(" << (value.isNegative() ? "-1.0" : "1.0") << suffix << " / 0.0"
+                       << suffix << ")";
                 }
                 return true;
             }
+
+            clang::ASTContext &ctx_;
         };
 
         // ------------------------------------------------------------------
@@ -418,7 +486,20 @@ namespace patchestry::ast {
             std::vector< clang::Decl * > type_decls;
 
             for (auto *decl : ctx.getTranslationUnitDecl()->decls()) {
-                if (decl->isImplicit()) { continue; }
+                if (decl->isImplicit()) {
+                    // Library builtins the lifter declared (ceilf, memcpy) need a
+                    // prototype to re-parse; compiler builtins (__builtin_*) do not.
+                    auto *function = llvm::dyn_cast< clang::FunctionDecl >(decl);
+                    if (function == nullptr || function->getIdentifier() == nullptr
+                        || function->getName().starts_with("__"))
+                    {
+                        continue;
+                    }
+                    if (seen_prototypes.insert(function->getCanonicalDecl()).second) {
+                        sections.prototypes.push_back(function);
+                    }
+                    continue;
+                }
                 if (auto *tag = llvm::dyn_cast< clang::TagDecl >(decl)) {
                     if (llvm::isa< clang::RecordDecl >(tag)
                         && seen_tags.insert(tag->getCanonicalDecl()).second)
@@ -482,7 +563,7 @@ namespace patchestry::ast {
         const auto &policy = ctx.getPrintingPolicy();
         auto terse         = policy;
         terse.TerseOutput  = true;
-        CPrinterHelper helper;
+        CPrinterHelper helper(ctx);
 
         if (opts.emit_markers) {
             os << "// patchestry:tu format=1";

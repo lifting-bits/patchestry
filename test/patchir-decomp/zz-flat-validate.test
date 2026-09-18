@@ -1,0 +1,8 @@
+# Lean-lift validation guard.
+#
+# Every fixture's flat goto C must lower through `-from-c` and pass
+# `-validate-pcode` against its own P-Code with zero critical findings, except
+# the fixtures listed in flat-validate-known-failures.txt.  Pins the round trip
+# and the validator's false-positive rate at the same time.
+#
+# RUN: bash %S/check-flat-validate.sh %patchir-decomp %strip-json-comments %S

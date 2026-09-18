@@ -1,0 +1,30 @@
+# `-from-c` round trip: lift a fixture with the lean path, feed the printed C
+# back, validate it against its own P-Code, and lower it to CIR and LLVM IR
+# with the same target triple as the `-input` run.
+#
+# RUN: bash %strip-json-comments %S/bl_device__match.json > %t.json
+# RUN: %patchir-decomp -input %t.json -emit-flat-baseline -print-tu -emit-cir -output %t.flat
+# RUN: %patchir-decomp -from-c %t.flat.c -input %t.json -validate-pcode -emit-cir -emit-llvm -output %t.rt
+# RUN: %file-check -check-prefix=RT %s --input-file %t.rt.cir
+# RUN: %file-check -check-prefix=RTLL %s --input-file %t.rt.ll
+# RUN: %file-check -check-prefix=REPORT %s --input-file %t.rt.validation.json
+#
+# RT: cir.func dso_local @bl_device__match
+# RTLL: target triple = "arm-unknown-linux-gnueabihf"
+# REPORT: "failed": 0
+#
+# The header carries the target, so neither -input nor -target-lang is needed
+# to lower; -target-lang overrides both.
+#
+# RUN: %patchir-decomp -from-c %t.flat.c -emit-llvm -output %t.hdr
+# RUN: %file-check -check-prefix=RTLL %s --input-file %t.hdr.ll
+# RUN: %patchir-decomp -from-c %t.flat.c -target-lang AARCH64:LE:64:v8A -emit-llvm -output %t.a64
+# RUN: %file-check -check-prefix=A64 %s --input-file %t.a64.ll
+# A64: target triple = "aarch64-unknown-linux"
+#
+# Re-printing the parsed unit regenerates the header and markers.
+#
+# RUN: %patchir-decomp -from-c %t.flat.c -input %t.json -print-tu -emit-cir -output %t.reprint
+# RUN: %file-check -check-prefix=REPRINT %s --input-file %t.reprint.c
+# REPRINT: // patchestry:tu format=1 target=ARM:LE:32:v7 arch=ARM
+# REPRINT: // patchestry:function-begin ram:00022cd4 name=bl_device__match symbol=bl_device__match
