@@ -7,42 +7,44 @@
 
 #pragma once
 
-#include <clang/Frontend/ASTUnit.h>
 #include <memory>
+#include <optional>
 #include <string>
-#include <vector>
 
 #include <clang/AST/ASTContext.h>
-#include <clang/Frontend/CompilerInstance.h>
+#include <clang/Basic/CodeGenOptions.h>
 #include <llvm/Support/VirtualFileSystem.h>
 #include <mlir/IR/BuiltinOps.h>
 #include <mlir/IR/MLIRContext.h>
 
 #include <clang/CIR/CIRGenerator.h>
 
-#include <patchestry/Util/Options.hpp>
-
-namespace clang {
-    class ASTUnit;
-} // namespace clang
-
-namespace llvm {
-    class Module;
-    class raw_fd_ostream;
-} // namespace llvm
-
 namespace patchestry::codegen {
 
-    using LocationMap = std::vector< std::string >;
+    /// Which lowered forms to write.  Files are named `<output_prefix>.cir`,
+    /// `<output_prefix>.mlir` and `<output_prefix>.ll`.
+    struct LoweringOptions
+    {
+        bool emit_cir  = false;
+        bool emit_mlir = false;
+        bool emit_llvm = false;
+        std::string output_prefix;
+    };
 
+    /// Lowers one Clang translation unit to ClangIR and writes the selected
+    /// outputs.  Independent of where the AST came from: it needs only the
+    /// ASTContext (diagnostics are reported through its engine) and the
+    /// codegen options, both of which must outlive this object.  The module
+    /// returned by `lower_ast_to_mlir` lives in this object's MLIRContext, so
+    /// keep the generator alive while the module is in use.
     class CodeGenerator
     {
       public:
-        explicit CodeGenerator(clang::CompilerInstance &ci) : ci(ci) {
+        CodeGenerator(clang::ASTContext &ctx, const clang::CodeGenOptions &cg_opts) : ctx(ctx) {
             cirdriver = std::make_shared< cir::CIRGenerator >(
-                ci.getDiagnostics(), llvm::vfs::getRealFileSystem(), ci.getCodeGenOpts()
+                ctx.getDiagnostics(), llvm::vfs::getRealFileSystem(), cg_opts
             );
-            cirdriver->Initialize(ci.getASTContext());
+            cirdriver->Initialize(ctx);
         }
 
         CodeGenerator(const CodeGenerator &)                = delete;
@@ -52,24 +54,21 @@ namespace patchestry::codegen {
 
         virtual ~CodeGenerator() = default;
 
-        // lower clang AST to CIR representation
-        void lower_to_ir(clang::ASTContext &actx, const patchestry::Options &options);
+        // Emit the CIR module for the bound ASTContext
+        std::optional< mlir::ModuleOp > lower_ast_to_mlir();
 
-        // Emit CIR representation from ASTContext
-        std::optional< mlir::ModuleOp > lower_ast_to_mlir(clang::ASTContext &ctx);
+        // Write the .cir/.mlir/.ll outputs selected by `options` for an
+        // already-lowered module.
+        void emit_outputs(mlir::ModuleOp module, const LoweringOptions &options);
 
       private:
-        void emit_cir(clang::ASTContext &ctx, const patchestry::Options &options);
-
         // Restore the varargs flag on cir.func declarations that ClangIR
         // lowering emitted as non-variadic, using the Clang FunctionDecl as
         // ground truth (works around first-materialization caching in
         // getOrCreateCIRFunction).
-        void reconcile_variadic_decls(clang::ASTContext &ctx, mlir::ModuleOp mod);
+        void reconcile_variadic_decls(mlir::ModuleOp mod);
 
-        void visit_locations(clang::ASTContext &ctx);
-
-        clang::CompilerInstance &ci;
+        clang::ASTContext &ctx;
         std::shared_ptr< cir::CIRGenerator > cirdriver;
     };
 

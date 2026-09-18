@@ -5,7 +5,6 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
-#include <clang/Frontend/CompilerInstance.h>
 #include <llvm/IR/Module.h>
 #include <memory>
 #include <mlir/Parser/Parser.h>
@@ -23,7 +22,6 @@
 #include <clang/CIR/Dialect/IR/CIRTypes.h>
 #include <clang/CIR/LowerToLLVM.h>
 #include <clang/CIR/Passes.h>
-#include <clang/Tooling/Tooling.h>
 #include <llvm/ADT/StringSet.h>
 #include <llvm/Support/raw_ostream.h>
 #include <mlir/IR/Attributes.h>
@@ -41,7 +39,6 @@
 #include <mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h>
 #include <mlir/Target/LLVMIR/Export.h>
 
-#include <patchestry/AST/ASTConsumer.hpp>
 #include <patchestry/Codegen/Codegen.hpp>
 #include <patchestry/Codegen/PassManager.hpp>
 #include <patchestry/Codegen/Serializer.hpp>
@@ -49,7 +46,7 @@
 
 namespace patchestry::codegen {
 
-    std::optional< mlir::ModuleOp > CodeGenerator::lower_ast_to_mlir(clang::ASTContext &ctx) {
+    std::optional< mlir::ModuleOp > CodeGenerator::lower_ast_to_mlir() {
         // Emit declarations first, then definitions in name (= program-address)
         // order. CIRGen caches the first cir.func it lazily creates for a symbol;
         // an unordered emission order let a caller materialize a callee with too
@@ -80,16 +77,14 @@ namespace patchestry::codegen {
 
         cirdriver->emitDeferredDecls();
 
-        reconcile_variadic_decls(ctx, cirdriver->getModule());
+        reconcile_variadic_decls(cirdriver->getModule());
 
         cirdriver->verifyModule();
 
         return std::make_optional(cirdriver->getModule());
     }
 
-    void CodeGenerator::reconcile_variadic_decls(
-        clang::ASTContext &ctx, mlir::ModuleOp mod
-    ) {
+    void CodeGenerator::reconcile_variadic_decls(mlir::ModuleOp mod) {
         // CIRGen can emit a variadic libc function (fcntl, printf, ...) as a
         // non-variadic cir.func when it first materializes through a builtin /
         // no-prototype path, making its variadic call sites fail verification.
@@ -125,32 +120,13 @@ namespace patchestry::codegen {
     }
 
     void
-    CodeGenerator::lower_to_ir(clang::ASTContext &actx, const patchestry::Options &options) {
-        // Check if diagnostic error is set. If yes, ignore it.
-        if (actx.getDiagnostics().hasErrorOccurred()) {
-            actx.getDiagnostics().Reset();
-        }
-
-        emit_cir(actx, options);
-    }
-
-    void CodeGenerator::emit_cir(clang::ASTContext &ctx, const patchestry::Options &options) {
-        // C pretty-print is now handled by ASTConsumer::HandleTranslationUnit
-        // (before codegen) so the .c file is always produced even when CIR
-        // lowering encounters a diagnostic error.
-
-        auto maybe_mod = lower_ast_to_mlir(ctx);
-        if (!maybe_mod.has_value()) {
-            LOG(ERROR) << "Failed to emit mlir module\n";
-            return;
-        }
-
+    CodeGenerator::emit_outputs(mlir::ModuleOp module, const LoweringOptions &options) {
         if (options.emit_cir) {
-            Serializer::SerializeToFile(*maybe_mod, options.output_file + ".cir");
+            Serializer::SerializeToFile(module, options.output_prefix + ".cir");
         }
 
         if (options.emit_mlir) {
-            auto cloned_mod = maybe_mod->clone();
+            auto cloned_mod = module.clone();
             auto *mctx      = cloned_mod.getContext();
             PassManagerBuilder bld(mctx);
             auto pm = bld.build();
@@ -160,13 +136,13 @@ namespace patchestry::codegen {
                 LOG(ERROR) << "Failed to run conversion passes\n";
                 return;
             }
-            Serializer::SerializeToFile(cloned_mod, options.output_file + ".mlir");
+            Serializer::SerializeToFile(cloned_mod, options.output_prefix + ".mlir");
         }
 
         if (options.emit_llvm) {
             llvm::LLVMContext lctx;
-            auto llvm_mod = cir::direct::lowerDirectlyFromCIRToLLVMIR(*maybe_mod, lctx);
-            Serializer::SerializeToFile(llvm_mod.get(), options.output_file + ".ll");
+            auto llvm_mod = cir::direct::lowerDirectlyFromCIRToLLVMIR(module, lctx);
+            Serializer::SerializeToFile(llvm_mod.get(), options.output_prefix + ".ll");
         }
     }
 

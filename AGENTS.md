@@ -42,14 +42,15 @@ not attempt to document LLVM/MLIR internals or vendored dependency internals.
 | Module | Build target | Main paths | Primary role |
 |---|---|---|---|
 | Ghidra model and translation | `patchestry_ghidra` | `include/patchestry/Ghidra/`, `lib/patchestry/Ghidra/` | deserialize Ghidra JSON and register P-Code translation |
-| AST lifting | `patchestry_ast` | `include/patchestry/AST/`, `lib/patchestry/AST/` | lift Ghidra model into Clang AST/CIR-ready structures |
-| Codegen | `patchestry_codegen` | `include/patchestry/Codegen/`, `lib/patchestry/Codegen/` | serialize and lower internal representations during tool pipelines |
+| Clang frontend | `patchestry_frontend` | `include/patchestry/Frontend/`, `lib/patchestry/Frontend/` | set up clang CompilerInstances: a synthetic unit for the lifter, a real-file parse for patch code |
+| AST lifting | `patchestry_ast` | `include/patchestry/AST/`, `lib/patchestry/AST/` | lift the Ghidra model into a Clang translation unit |
+| Codegen | `patchestry_codegen` | `include/patchestry/Codegen/`, `lib/patchestry/Codegen/` | lower a Clang AST to CIR and serialize CIR/MLIR/LLVM outputs |
 | YAML parsing | `patchestry_yaml` | `include/patchestry/YAML/`, `lib/patchestry/YAML/` | parse patch and contract YAML configuration |
 | Patch passes | `patchestry_passes` | `include/patchestry/Passes/`, `lib/patchestry/Passes/` | apply patch and contract transformations to CIR |
 | Contracts dialect | `MLIRContracts` | `include/patchestry/Dialect/Contracts/`, `lib/patchestry/Dialect/Contracts/` | represent contract attributes and verification metadata |
 | Pcode dialect | `MLIRPcode` | `include/patchestry/Dialect/Pcode/`, `lib/patchestry/Dialect/Pcode/` | represent and deserialize P-Code as an MLIR dialect |
 | Intrinsics library | `patchestry_intrinsics` | `include/patchestry/intrinsics/`, `lib/patchestry/intrinsics/` | provide patch helper/runtime functions for patch C code |
-| Utility headers | no standalone target | `include/patchestry/Util/` | shared logging, diagnostics, common options, helper types |
+| Utility headers | no standalone target | `include/patchestry/Util/` | shared logging, diagnostics, `patchir-decomp` driver options, helper types |
 
 #### Tools
 
@@ -75,8 +76,9 @@ These interfaces are the contracts contributors should keep stable while iterati
 | Module | Main paths | Stable interface files | Input format | Output format | Module test command |
 |---|---|---|---|---|---|
 | Ghidra model | `include/patchestry/Ghidra/`, `lib/patchestry/Ghidra/` | `include/patchestry/Ghidra/JsonDeserialize.hpp`, `include/patchestry/Ghidra/Pcode.hpp`, `include/patchestry/Ghidra/PcodeTranslation.hpp` | Ghidra export JSON | in-memory Program/Function/Block/Op model | `lit ./builds/default/test/ghidra -D BUILD_TYPE=Debug -v` |
-| AST lifting | `include/patchestry/AST/`, `lib/patchestry/AST/` | `include/patchestry/AST/ASTConsumer.hpp`, `include/patchestry/AST/FunctionBuilder.hpp`, `include/patchestry/AST/OperationBuilder.hpp`, `include/patchestry/AST/TypeBuilder.hpp` | Ghidra model objects | Clang AST and CIR-ready structures | `lit ./builds/default/test/patchir-decomp -D BUILD_TYPE=Debug -v` |
-| Codegen | `include/patchestry/Codegen/`, `lib/patchestry/Codegen/` | `include/patchestry/Codegen/Codegen.hpp`, `include/patchestry/Codegen/PassManager.hpp`, `include/patchestry/Codegen/Serializer.hpp` | AST/CIR owned by patchestry tools | serialized/lowered outputs consumed by tool frontends | `lit ./builds/default/test/patchir-decomp -D BUILD_TYPE=Debug -v` |
+| Clang frontend | `include/patchestry/Frontend/`, `lib/patchestry/Frontend/` | `include/patchestry/Frontend/ClangFrontend.hpp` | target triple plus a C file or an ASTConsumer factory | `clang::CompilerInstance` ready for lifting or `ParseAST` | `lit ./builds/default/test/patchir-decomp -D BUILD_TYPE=Debug -v` and `lit ./builds/default/test/patchir-transform -D BUILD_TYPE=Debug -v` |
+| AST lifting | `include/patchestry/AST/`, `lib/patchestry/AST/` | `include/patchestry/AST/PcodeLifter.hpp`, `include/patchestry/AST/TranslationUnit.hpp`, `include/patchestry/AST/LiftOptions.hpp`, `include/patchestry/AST/ASTConsumer.hpp`, `include/patchestry/AST/FunctionBuilder.hpp`, `include/patchestry/AST/OperationBuilder.hpp`, `include/patchestry/AST/TypeBuilder.hpp` | Ghidra model objects | `ast::TranslationUnit` (Clang AST) | `lit ./builds/default/test/patchir-decomp -D BUILD_TYPE=Debug -v` |
+| Codegen | `include/patchestry/Codegen/`, `lib/patchestry/Codegen/` | `include/patchestry/Codegen/Codegen.hpp`, `include/patchestry/Codegen/PassManager.hpp`, `include/patchestry/Codegen/Serializer.hpp` | `clang::ASTContext` + `CodeGenOptions` from any AST source | CIR module; `.cir` / `.mlir` / `.ll` files | `lit ./builds/default/test/patchir-decomp -D BUILD_TYPE=Debug -v` |
 | Decompiler tool | `tools/patchir-decomp/` | `tools/patchir-decomp/main.cpp` | P-Code JSON | CIR / LLVM IR / asm / object output selected by flags | `lit ./builds/default/test/patchir-decomp -D BUILD_TYPE=Debug -v` |
 | YAML spec parser | `include/patchestry/YAML/`, `lib/patchestry/YAML/`, `tools/patchir-yaml-parser/` | `include/patchestry/YAML/ConfigurationFile.hpp`, `include/patchestry/YAML/PatchSpec.hpp`, `include/patchestry/YAML/ContractSpec.hpp`, `include/patchestry/YAML/YAMLParser.hpp` | YAML patch/contract spec | validated configuration objects consumed by transform passes | `lit ./builds/default/test/patchir-transform -D BUILD_TYPE=Debug -v` |
 | Patch pass engine | `include/patchestry/Passes/`, `lib/patchestry/Passes/` | `include/patchestry/Passes/InstrumentationPass.hpp`, `include/patchestry/Passes/OperationMatcher.hpp`, `lib/patchestry/Passes/PatchOperationImpl.hpp`, `lib/patchestry/Passes/ContractOperationImpl.hpp` | CIR + parsed patch/contract config | transformed CIR with inserted/replaced operations | `lit ./builds/default/test/patchir-transform/patches -D BUILD_TYPE=Debug -v` |
@@ -108,13 +110,14 @@ Keep these dependency boundaries in mind when editing interfaces:
 
 | Consumer | Depends on patchestry-owned components | Why it depends on them |
 |---|---|---|
-| `patchir-decomp` | `patchestry_ghidra`, `patchestry_ast`, `patchestry_codegen`, `patchestry_yaml` | deserialize exported firmware semantics, lift them, and emit outputs |
-| `patchir-transform` | `patchestry_codegen`, `patchestry_passes`, `patchestry_yaml`, `MLIRContracts` | parse YAML, transform CIR, and preserve contract semantics |
+| `patchir-decomp` | `patchestry_ghidra`, `patchestry_frontend`, `patchestry_ast`, `patchestry_codegen`, `patchestry_yaml` | deserialize exported firmware semantics, lift them, and emit outputs |
+| `patchir-transform` | `patchestry_frontend`, `patchestry_codegen`, `patchestry_passes`, `patchestry_yaml`, `MLIRContracts` | parse YAML, compile patch C code, transform CIR, and preserve contract semantics |
 | `patchir-yaml-parser` | `patchestry_yaml`, `patchestry_codegen`, `patchestry_passes` | validate specs against the same config and pass structures used by transform |
 | `patchir-cir2llvm` | `MLIRContracts` | lower CIR while preserving contract metadata |
 | `pcode-translate` | `patchestry_ghidra` | expose patchestry P-Code translation through the MLIR translation driver |
 | `patchestry_ghidra` | `MLIRPcode` | build/consume patchestry's P-Code dialect layer for translation |
-| `patchestry_passes` | `patchestry_yaml` | consume parsed patch/contract specs during instrumentation |
+| `patchestry_ast` | `patchestry_frontend`, `patchestry_ghidra` | build the lifter's CompilerInstance and read the P-Code model |
+| `patchestry_passes` | `patchestry_yaml`, `patchestry_frontend`, `patchestry_codegen` | consume parsed specs during instrumentation and compile patch C code to CIR |
 
 ### Data interface details by stage
 
@@ -124,8 +127,9 @@ Keep these dependency boundaries in mind when editing interfaces:
    P-Code headers.
 2. Decomp stage:
    `patchir-decomp` consumes that JSON, builds the Ghidra model, lifts it
-   through AST builders, and emits CIR as the primary editable interchange
-   format for later patching.
+   through AST builders into an `ast::TranslationUnit`, and lowers that with
+   `patchestry_codegen` to CIR as the primary editable interchange format for
+   later patching.
 3. Transform stage:
    `patchir-transform` consumes CIR plus YAML parsed through
    `include/patchestry/YAML/*.hpp` and applies `InstrumentationPass` and the

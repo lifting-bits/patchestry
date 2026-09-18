@@ -6,6 +6,7 @@
 add_subdirectory(AST)
 add_subdirectory(Codegen)
 add_subdirectory(Dialect)
+add_subdirectory(Frontend)
 add_subdirectory(Ghidra)
 add_subdirectory(Passes)
 add_subdirectory(YAML)

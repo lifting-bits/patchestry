@@ -19,8 +19,9 @@ internals of LLVM, MLIR, or vendored dependencies.
     | patchir-decomp
     |   uses:
     |   - patchestry_ghidra: JSON -> in-memory program/P-Code model
-    |   - patchestry_ast: Ghidra model -> CGraph -> SNode -> Clang AST/CIR-ready structures
-    |   - patchestry_codegen: emit selected output form
+    |   - patchestry_frontend: clang CompilerInstance for the lifter's synthetic unit
+    |   - patchestry_ast: Ghidra model -> CGraph -> SNode -> Clang translation unit
+    |   - patchestry_codegen: Clang AST -> CIR, then the selected output form
     v
 [Decompilation outputs]
     |- High-level MLIR        (--emit-mlir)      [tested]
@@ -41,6 +42,7 @@ Main patching path:
     |   uses:
     |   - patchestry_yaml: parse config/specs
     |   - patchestry_passes: match + apply patch/contract actions
+    |   - patchestry_frontend + patchestry_codegen: compile `code_file:` C into CIR
     |   - MLIRContracts: contract attrs/metadata
     v
 [Patched CIR]
@@ -124,8 +126,11 @@ The flow is layered:
 4. `CGraph` represents that CFG explicitly for control-flow structuring.
 5. `SNode` represents structured control flow (`if`, `switch`, loops, labels,
    gotos, break, continue, return).
-6. Clang AST emission lowers the `SNode` tree into a function body, and later
-   codegen emits CIR / MLIR / LLVM / pretty-printed C.
+6. Clang AST emission lowers the `SNode` tree into a function body.  The
+   finished unit is handed over as an `ast::TranslationUnit`; `--print-tu` is
+   written from it by the driver before lowering.
+7. `patchestry_codegen` lowers the unit's `ASTContext` to CIR and emits
+   CIR / MLIR / LLVM.  It does not depend on how the unit was produced.
 
 ### Mechanical vs semantic recovery
 

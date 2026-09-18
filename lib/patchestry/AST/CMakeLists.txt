@@ -4,6 +4,7 @@
 
 add_library(patchestry_ast STATIC
   ASTConsumer.cpp
+  PcodeLifter.cpp
   FunctionBuilder.cpp
   IntrinsicHandlers.cpp
   OperationBuilder.cpp
@@ -29,6 +30,7 @@ target_link_libraries(patchestry_ast
     clangFrontend
   PRIVATE
     LLVMSupport
+    patchestry_frontend
     patchestry_settings
     glog::glog
 )

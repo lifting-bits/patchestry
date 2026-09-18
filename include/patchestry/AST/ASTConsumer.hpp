@@ -19,14 +19,13 @@
 #include <clang/AST/Type.h>
 #include <clang/Basic/SourceLocation.h>
 #include <clang/Frontend/CompilerInstance.h>
-#include <clang/Frontend/FrontendAction.h>
 #include <clang/Sema/Sema.h>
 #include <llvm/Support/raw_ostream.h>
 
+#include <patchestry/AST/LiftOptions.hpp>
 #include <patchestry/AST/TypeBuilder.hpp>
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
 #include <patchestry/Ghidra/PcodeOperations.hpp>
-#include <patchestry/Util/Options.hpp>
 
 namespace patchestry::ast {
     using namespace patchestry::ghidra;
@@ -34,31 +33,27 @@ namespace patchestry::ast {
     using ASTTypeMap = std::unordered_map< std::string, clang::QualType >;
     using ASTDeclMap = std::unordered_map< std::string, clang::Decl * >;
 
+    /// Fills the CompilerInstance's translation unit from a P-Code program:
+    /// types, globals, then one function at a time through CGraph, SNode and
+    /// Clang AST emission.  Builds the AST only; printing and lowering are the
+    /// caller's stages.
     class PcodeASTConsumer : public clang::ASTConsumer
     {
       public:
-        explicit PcodeASTConsumer(
-            clang::CompilerInstance &ci, Program &prog, patchestry::Options &opts
-        )
+        explicit PcodeASTConsumer(clang::CompilerInstance &ci, Program &prog, LiftOptions opts)
             : program(prog), ci(ci), options(opts), type_builder(nullptr) {}
 
         void HandleTranslationUnit(clang::ASTContext &ctx) override;
 
       private:
-        void set_sema_context(clang::DeclContext *dc);
-
-        void write_to_file(void);
-
         void create_globals(clang::ASTContext &ctx, VariableMap &serialized_variables);
 
         Program &get_program(void) const { return program; }
 
-        clang::Sema &sema(void) const { return ci.getSema(); }
-
         Program &program;
         clang::CompilerInstance &ci;
 
-        const patchestry::Options &options; // NOLINT
+        LiftOptions options;
         std::unique_ptr< TypeBuilder > type_builder;
 
         std::unordered_map< std::string, clang::FunctionDecl * > function_declarations;

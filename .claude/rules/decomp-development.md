@@ -3,6 +3,10 @@ description: Decompilation pipeline development (AST, Ghidra, patchir-decomp)
 paths:
   - "lib/patchestry/AST/**"
   - "include/patchestry/AST/**"
+  - "lib/patchestry/Frontend/**"
+  - "include/patchestry/Frontend/**"
+  - "lib/patchestry/Codegen/**"
+  - "include/patchestry/Codegen/**"
   - "lib/patchestry/Ghidra/**"
   - "include/patchestry/Ghidra/**"
   - "tools/patchir-decomp/**"
@@ -18,19 +22,31 @@ paths:
 | Add P-Code operation handler | `lib/patchestry/AST/OperationStmt.cpp`, `lib/patchestry/AST/OperationBuilder.cpp` |
 | Modify function building | `lib/patchestry/AST/FunctionBuilder.cpp`, `include/patchestry/AST/FunctionBuilder.hpp` |
 | Modify AST consumer | `lib/patchestry/AST/ASTConsumer.cpp`, `include/patchestry/AST/ASTConsumer.hpp` |
+| Change how the lifter's CompilerInstance is set up | `lib/patchestry/Frontend/ClangFrontend.cpp`, `include/patchestry/Frontend/ClangFrontend.hpp` |
+| Add an AST source or change the AST-to-lowering handoff | `include/patchestry/AST/TranslationUnit.hpp`, `lib/patchestry/AST/PcodeLifter.cpp`, `include/patchestry/AST/LiftOptions.hpp` |
+| Change CIR lowering or output writing | `lib/patchestry/Codegen/Codegen.cpp`, `include/patchestry/Codegen/Codegen.hpp` |
 | Add intrinsic handler | `lib/patchestry/AST/IntrinsicHandlers.cpp`, `include/patchestry/AST/IntrinsicHandlers.hpp` |
 | Modify Ghidra data model | `include/patchestry/Ghidra/JsonDeserialize.hpp`, `lib/patchestry/Ghidra/` |
 | Add LIT decomp test | `test/patchir-decomp/` — copy an existing JSON file and embed `// RUN:` directives |
+
+## Pipeline entry points
+
+`tools/patchir-decomp/main.cpp` is a thin driver: JSON -> `ast::LiftProgram`
+(a `PcodeASTConsumer` inside `frontend::createSyntheticCompilerInstance`) ->
+`ast::TranslationUnit` -> `-print-tu` written by the driver ->
+`codegen::CodeGenerator::lower_ast_to_mlir` -> `emit_outputs`.  The lowering
+takes only an `ASTContext` and `CodeGenOptions`, so any other producer of a
+`TranslationUnit` can feed it without touching `patchestry_codegen`.
 
 ## Build & Test
 
 ```sh
 # macOS
-cmake --build builds/default --config Debug --target patchestry_ast
+cmake --build builds/default --config Debug --target patchir-decomp
 lit ./builds/default/test/patchir-decomp -D BUILD_TYPE=Debug -v
 
 # Linux (dev container)
-cmake --build builds/ci --config Release --target patchestry_ast -j$(nproc)
+cmake --build builds/ci --config Release --target patchir-decomp -j$(nproc)
 lit ./builds/ci/test/patchir-decomp -D BUILD_TYPE=Release -v
 ```
 

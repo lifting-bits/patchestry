@@ -6,37 +6,26 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
-#include <algorithm>
-#include <cctype>
 #include <cstdlib>
-#include <fstream>
 #include <memory>
+#include <optional>
+#include <string>
+#include <system_error>
 
-#include <clang/AST/ASTConsumer.h>
 #include <clang/AST/ASTContext.h>
-#include <clang/AST/Stmt.h>
-#include <clang/Basic/DiagnosticOptions.h>
-#include <clang/Basic/LangStandard.h>
-#include <clang/Basic/TargetInfo.h>
-#include <clang/Basic/TargetOptions.h>
-#include <clang/Frontend/CompilerInstance.h>
-#include <clang/Frontend/CompilerInvocation.h>
-#include <clang/Frontend/FrontendOptions.h>
+#include <clang/AST/Decl.h>
 
-#include <llvm/ADT/StringRef.h>
 #include <llvm/Support/CommandLine.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/JSON.h>
 #include <llvm/Support/MemoryBuffer.h>
-#include <llvm/Support/VirtualFileSystem.h>
 #include <llvm/Support/raw_ostream.h>
-#include <llvm/TargetParser/Host.h>
-#include <llvm/TargetParser/Triple.h>
 
-#include <patchestry/AST/ASTConsumer.hpp>
+#include <patchestry/AST/LiftOptions.hpp>
+#include <patchestry/AST/PcodeLifter.hpp>
+#include <patchestry/AST/TranslationUnit.hpp>
 #include <patchestry/Codegen/Codegen.hpp>
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
-#include <patchestry/Util/Diagnostic.hpp>
 #include <patchestry/Util/Log.hpp>
 #include <patchestry/Util/Options.hpp>
 
@@ -160,117 +149,74 @@ namespace {
         return true;
     }
 
-    void createSourceManager(clang::CompilerInstance &ci) {
-        // Create file manager and setup source manager
-        ci.createFileManager();
-        ci.createSourceManager();
-
-        // get source manager and setup main_file_id for the source manager
-        auto &sm = ci.getSourceManager();
-
-        // Create fake file to support real file system needed for vast
-        // location translation
-        std::string data      = "// temporary patchestry data";
-        std::string file_name = "/tmp/patchestry.c";
-        std::ofstream(file_name) << data;
-        llvm::ErrorOr< clang::FileEntryRef > file_entry_ref_or_err =
-            ci.getFileManager().getVirtualFileRef(
-                file_name, static_cast< off_t >(data.size()), 0
-            );
-        clang::FileID file_id = sm.createFileID(
-            *file_entry_ref_or_err, clang::SourceLocation(), clang::SrcMgr::C_User, 0
-        );
-        sm.setMainFileID(file_id);
-
-        ci.getFrontendOpts().ProgramAction = clang::frontend::ParseSyntaxOnly;
-        ci.getFrontendOpts().Inputs.emplace_back(
-            clang::FrontendInputFile(file_name, clang::InputKind(clang::Language::C))
-        );
-        ci.getLangOpts().C99 = true;
+    patchestry::ast::LiftOptions liftOptions(const patchestry::Options &options) {
+        return {
+            .emit_flat_baseline = options.emit_flat_baseline,
+            .clang_ast_cleanup  = options.clang_ast_cleanup,
+            .emit_dot_cfg       = options.emit_dot_cfg,
+        };
     }
 
-    void setCodegenOptions(clang::CompilerInstance &ci) {
-        clang::CodeGenOptions &cg_opts = ci.getCodeGenOpts();
-        cg_opts.OptimizationLevel      = 0;
-        cg_opts.StrictReturn           = false;
-        cg_opts.StrictEnums            = false;
+    patchestry::codegen::LoweringOptions loweringOptions(const patchestry::Options &options) {
+        return {
+            .emit_cir      = options.emit_cir,
+            .emit_mlir     = options.emit_mlir,
+            .emit_llvm     = options.emit_llvm,
+            .output_prefix = options.output_file,
+        };
     }
 
-    std::string createTargetTriple(std::string &arch, const std::string &lang) {
-        llvm::Triple target_triple;
+    // Read, parse and deserialize a P-Code JSON file.
+    std::optional< patchestry::ghidra::Program > loadProgram(const std::string &path) {
+        llvm::ErrorOr< std::unique_ptr< llvm::MemoryBuffer > > file_or_err =
+            llvm::MemoryBuffer::getFile(path);
+        if (std::error_code error_code = file_or_err.getError()) {
+            LOG(ERROR) << "Error reading json file : " << error_code.message() << "\n";
+            return std::nullopt;
+        }
 
-        // Utility function to split the language identifier (lang) string
-        auto split_language = [](const std::string &lang_id,
-                                 char delim = ':') -> std::vector< std::string > {
-            std::vector< std::string > tokens;
-            std::stringstream ss(lang_id);
-            std::string token;
+        auto json = llvm::json::parse(file_or_err.get()->getBuffer());
+        if (!json) {
+            LOG(ERROR) << "Failed to parse pcode JSON: " << json.takeError();
+            return std::nullopt;
+        }
 
-            while (std::getline(ss, token, delim)) {
-                tokens.push_back(token);
+        const auto *json_obj = json->getAsObject();
+        if (json_obj == nullptr) {
+            LOG(ERROR) << "Input JSON is not an object\n";
+            return std::nullopt;
+        }
+
+        auto program = patchestry::ghidra::JsonParser().deserialize_program(*json_obj);
+        if (!program.has_value()) {
+            LOG(ERROR) << "Failed to deserialize JSON file '" << path
+                       << "' as patchestry program\n";
+        }
+        return program;
+    }
+
+    // `-print-tu`: write the unit as C to `<prefix>.c`, or to stdout when no
+    // output prefix was given.  Runs before lowering so the C file is produced
+    // even when CIR lowering later fails.
+    void printTranslationUnit(
+        patchestry::ast::TranslationUnit &unit, const std::string &output_file
+    ) {
+        auto &ctx = unit.context();
+        if (!output_file.empty()) {
+            std::error_code ec;
+            llvm::raw_fd_ostream out(output_file + ".c", ec, llvm::sys::fs::OF_Text);
+            if (!ec) {
+                ctx.getTranslationUnitDecl()->print(
+                    out, ctx.getPrintingPolicy(), /*Indentation=*/0
+                );
+            } else {
+                LOG(ERROR) << "Failed to write C output: " << ec.message() << "\n";
             }
-            return tokens;
-        };
-
-        // Ghidra export lang id in the format - arch:endianess:size:variant
-        auto lang_vec = split_language(lang);
-        if (lang_vec.size() < 3) {
-            LOG(ERROR
-            ) << "Error: Invalid language format. Expected 'arch:endianess:size:variant'.\n";
-            return "";
-        }
-
-        int bit_size = 0;
-        if (llvm::StringRef(lang_vec[2]).getAsInteger(10, bit_size)) {
-            LOG(ERROR) << "Invalid bit size in language id: " << lang_vec[2] << "\n";
-            return "";
-        }
-        auto is_le = (lang_vec[1] == "LE");
-
-        auto is_equal = [&](std::string astr, std::string bstr) -> bool {
-            // transform both the string to lower-case and compare
-            std::ranges::transform(astr, astr.begin(), [](unsigned char c) {
-                return static_cast< char >(std::toupper(c));
-            });
-            std::ranges::transform(bstr, bstr.begin(), [](unsigned char c) {
-                return static_cast< char >(std::toupper(c));
-            });
-            return astr == bstr;
-        };
-
-        if (is_equal(arch, "x86") || is_equal(arch, "x86-64")) {
-            target_triple.setArch(bit_size == 32U ? llvm::Triple::x86 : llvm::Triple::x86_64);
-        } else if (is_equal(arch, "ARM") || is_equal(arch, "AARCH64")) {
-            target_triple.setArch(
-                bit_size == 32U ? (is_le ? llvm::Triple::arm : llvm::Triple::armeb)
-                                : (is_le ? llvm::Triple::aarch64 : llvm::Triple::aarch64_be)
-            );
-        }
-
-        else if (is_equal(arch, "MIPS"))
-        {
-            target_triple.setArch(
-                bit_size == 32U ? (is_le ? llvm::Triple::mipsel : llvm::Triple::mips)
-                                : (is_le ? llvm::Triple::mips64el : llvm::Triple::mips64)
-            );
-        } else if (is_equal(arch, "POWERPC")) {
-            target_triple.setArch(
-                bit_size == 32U ? (is_le ? llvm::Triple::ppcle : llvm::Triple::ppc)
-                                : (is_le ? llvm::Triple::ppc64le : llvm::Triple::ppc64)
-            );
         } else {
-            target_triple.setArch(llvm::Triple::UnknownArch);
+            ctx.getTranslationUnitDecl()->print(
+                llvm::outs(), ctx.getPrintingPolicy(), /*Indentation=*/0
+            );
         }
-
-        target_triple.setVendor(llvm::Triple::UnknownVendor);
-        target_triple.setOS(llvm::Triple::Linux);
-
-        // Set environment (for specific cases)
-        if (is_equal(arch, "ARM") && bit_size == 32) {
-            target_triple.setEnvironment(llvm::Triple::GNUEABIHF); // Hard float ABI
-        }
-
-        return target_triple.str();
     }
 
 } // namespace
@@ -278,78 +224,29 @@ namespace {
 int main(int argc, char **argv) {
     auto options = parseCommandLineOptions(argc, argv);
 
-    llvm::ErrorOr< std::unique_ptr< llvm::MemoryBuffer > > file_or_err =
-        llvm::MemoryBuffer::getFile(options.input_file);
+    auto program = loadProgram(options.input_file);
+    if (!program.has_value()) { return EXIT_FAILURE; }
 
-    if (std::error_code error_code = file_or_err.getError()) {
-        LOG(ERROR) << "Error reading json file : " << error_code.message() << "\n";
-        return EXIT_FAILURE;
-    }
+    if (!validateBranchindSwitchMetadata(*program)) { return EXIT_FAILURE; }
 
-    std::unique_ptr< llvm::MemoryBuffer > buffer = std::move(file_or_err.get());
-    auto json                                    = llvm::json::parse(buffer->getBuffer());
-    if (!json) {
-        LOG(ERROR) << "Failed to parse pcode JSON: " << json.takeError();
-        return EXIT_FAILURE;
-    }
+    // AST source: lift the P-Code model into a Clang translation unit.
+    auto unit = patchestry::ast::LiftProgram(*program, liftOptions(options));
+    if (!unit) { return EXIT_FAILURE; }
 
-    const auto *json_obj = json->getAsObject();
-    if (!json_obj) {
-        LOG(ERROR) << "Input JSON is not an object\n";
-        return EXIT_FAILURE;
-    }
+    if (options.print_tu) { printTranslationUnit(*unit, options.output_file); }
 
-    auto program = patchestry::ghidra::JsonParser().deserialize_program(*json_obj);
-    if (!program.has_value()) {
-        LOG(ERROR) << "Failed to deserialize JSON file '" << options.input_file
-                   << "' as patchestry program\n";
-        return EXIT_FAILURE;
-    }
-
-    if (!validateBranchindSwitchMetadata(*program)) {
-        return EXIT_FAILURE;
-    }
-
-    clang::CompilerInstance ci;
-    clang::CompilerInvocation &invocation = ci.getInvocation();
-    clang::TargetOptions &inv_target_opts = invocation.getTargetOpts();
-    inv_target_opts.Triple                = llvm::sys::getDefaultTargetTriple();
-
-    ci.createVirtualFileSystem();
-    ci.createDiagnostics(new patchestry::DiagnosticClient(), /*ShouldOwnClient=*/true);
-    if (!ci.hasDiagnostics()) {
-        LOG(ERROR) << "Failed to initialize diagnostics.\n";
-        return EXIT_FAILURE;
-    }
-
-    createSourceManager(ci);
-
-    std::shared_ptr< clang::TargetOptions > target_options =
-        std::make_shared< clang::TargetOptions >();
-    target_options->Triple = createTargetTriple(*program->arch, *program->lang);
-    ci.setTarget(clang::TargetInfo::CreateTargetInfo(ci.getDiagnostics(), *target_options));
-
-    setCodegenOptions(ci);
-
-    // Create the preprocessor and AST context
-    ci.createPreprocessor(clang::TU_Complete);
-    ci.createASTContext();
-
-    auto &ast_context = ci.getASTContext();
-    std::unique_ptr< patchestry::ast::PcodeASTConsumer > consumer =
-        std::make_unique< patchestry::ast::PcodeASTConsumer >(ci, program.value(), options);
-    ci.setASTConsumer(std::move(consumer));
-    ci.createSema(clang::TU_Complete, nullptr);
-    auto &ast_consumer = ci.getASTConsumer();
-    ast_consumer.HandleTranslationUnit(ast_context);
-
-    auto *pcode_consumer = dynamic_cast< patchestry::ast::PcodeASTConsumer * >(&ast_consumer);
-    if (pcode_consumer != nullptr && !ci.getDiagnostics().hasErrorOccurred()) {
-        auto codegen = std::make_unique< patchestry::codegen::CodeGenerator >(ci);
-        codegen->lower_to_ir(ast_context, options);
-    } else if (ci.getDiagnostics().hasErrorOccurred()) {
+    if (unit->has_errors()) {
         LOG(ERROR) << "Skipping code generation due to prior diagnostics errors.\n";
         return EXIT_FAILURE;
+    }
+
+    // Lowering: the same call serves any AST source.
+    patchestry::codegen::CodeGenerator codegen(unit->context(), unit->codegen_options());
+    auto module = codegen.lower_ast_to_mlir();
+    if (module.has_value()) {
+        codegen.emit_outputs(*module, loweringOptions(options));
+    } else {
+        LOG(ERROR) << "Failed to emit mlir module\n";
     }
 
     return EXIT_SUCCESS;

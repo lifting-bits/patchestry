@@ -14,8 +14,6 @@
 #include <unordered_set>
 #include <vector>
 
-#include <clang/Frontend/ASTUnit.h>
-#include <clang/Frontend/CompilerInvocation.h>
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Attr.h>
 #include <clang/AST/Attrs.inc>
@@ -560,33 +558,7 @@ namespace patchestry::ast {
                 }
             }
         }
-
-        if (options.print_tu) {
-            // Pretty-print before codegen so the C file emits even when
-            // CIR lowering later fails.
-            if (!options.output_file.empty()) {
-                std::error_code ec;
-                llvm::raw_fd_ostream out(options.output_file + ".c", ec,
-                                         llvm::sys::fs::OF_Text);
-                if (!ec) {
-                    ctx.getTranslationUnitDecl()->print(
-                        out, ctx.getPrintingPolicy(), /*Indentation=*/0);
-                } else {
-                    LOG(ERROR) << "Failed to write C output: " << ec.message() << "\n";
-                }
-            } else {
-                ctx.getTranslationUnitDecl()->print(
-                    llvm::outs(), ctx.getPrintingPolicy(), /*Indentation=*/0);
-            }
-#ifdef ENABLE_DEBUG
-            ctx.getTranslationUnitDecl()->dumpColor();
-#endif
-        }
     }
-
-    void PcodeASTConsumer::set_sema_context(clang::DeclContext *dc) { sema().CurContext = dc; }
-
-    void PcodeASTConsumer::write_to_file(void) {}
 
     void PcodeASTConsumer::create_globals(
         clang::ASTContext &ctx, VariableMap &serialized_variables
