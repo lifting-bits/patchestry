@@ -68,7 +68,7 @@ not attempt to document LLVM/MLIR internals or vendored dependency internals.
 |---|---|---|
 | Ghidra automation | `scripts/ghidra/` | build headless container, run decompilation, serialize functions/P-Code |
 | JSON rendering helper | `scripts/render_json.py` | utility script for rendering/inspecting JSON artifacts |
-| LLM refinement | `scripts/llm/` | `patchestry-refine`: out-of-process LLM refinement of decompiler output (Tier 1 names/comments/types into a refined JSON copy); official `anthropic`/`openai` SDKs, `uv` project |
+| LLM refinement | `scripts/llm/` | `patchestry-refine`: out-of-process LLM refinement of decompiler output (Tier 1 names/comments/types into a refined JSON copy; Tier 2 structured C validated per function with `-from-c -validate-pcode`); official `anthropic`/`openai` SDKs, `uv` project |
 
 ### Module interface map
 
@@ -201,6 +201,9 @@ patchir-decomp -from-c func.c -input func.json -validate-pcode -emit-cir -output
 
 # LLM Tier 1 refinement (names, comments, types) into a re-lifted JSON copy
 uv run --project scripts/llm patchestry-refine tier1 --input func.json --output func.refined.json
+
+# LLM Tier 2: structured C from the flat lift, each function checked with -validate-pcode
+uv run --project scripts/llm patchestry-refine tier2 --input func.refined.json --output structured --emit-cir
 
 # Apply patches from YAML to CIR
 patchir-transform input.cir -spec patch.yaml -o patched.cir

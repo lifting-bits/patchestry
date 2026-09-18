@@ -143,3 +143,137 @@ def instruction_lines(function: dict[str, Any], limit: int = 400) -> list[str]:
     if len(lines) > limit:
         lines = lines[:limit] + [f"... {len(lines) - limit} more omitted"]
     return lines
+
+
+# ---------------------------------------------------------------- Tier 2
+
+TIER2_SYSTEM_PROMPT = """\
+You rewrite one function of decompiler output into clean, well-structured C
+that behaves exactly like the original.  The decompiler then re-parses the
+whole translation unit with your function spliced in and checks it against
+the binary's P-Code: calls, string literals, global accesses, stores,
+returns, switch cases and the signature.  Anything it cannot match is
+rejected and comes back to you with the reason.
+
+Keep, exactly:
+- the first line (return type, name, parameter types and names);
+- every call, its callee name, argument values and their order, and the
+  relative order of calls, stores and returns on every path;
+- every string literal, byte for byte;
+- every read and write of a global, and every store through a pointer;
+- every returned value on every path, and the set of switch case values.
+
+You may:
+- replace goto/label control flow with while/for/do loops, if/else chains,
+  break, continue and early returns;
+- drop temporaries whose value is never used (for example `__call_ret_N`
+  holding an ignored return value), fold single-use temporaries into the
+  expression that uses them, and remove casts that do not change a value;
+- keep local declarations at the top of the function.
+
+Do not rename parameters, globals or callees.  Do not add calls, literals or
+comments that are not in the original.  Reply with the complete function
+definition only: no markers, no prose, no code fences.
+"""
+
+C_TYPE_WORDS = frozenset(
+    "void char short int long float double signed unsigned struct union enum typedef "
+    "extern static const volatile return if else while for do goto break continue switch "
+    "case default sizeof".split()
+)
+_IDENT = __import__("re").compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def body_identifiers(text: str) -> set[str]:
+    return {tok for tok in _IDENT.findall(text) if len(tok) >= 3 and tok not in C_TYPE_WORDS}
+
+
+def select_declarations(preamble: str, identifiers: set[str], *, max_lines: int = 300) -> str:
+    """The preamble lines a function needs: everything when short, else the
+    declarations and type blocks that share an identifier with the body."""
+    lines = preamble.splitlines()
+    if len(lines) <= max_lines:
+        return preamble.rstrip() + "\n" if preamble.strip() else ""
+    kept: list[str] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        stripped = line.strip()
+        if stripped.startswith("//"):
+            index += 1
+            continue
+        if stripped.endswith("{"):
+            block = [line]
+            index += 1
+            while index < len(lines):
+                block.append(lines[index])
+                if lines[index].strip().startswith("}"):
+                    break
+                index += 1
+            index += 1
+            if identifiers & body_identifiers(block[0]) or identifiers & body_identifiers(block[-1]):
+                kept.extend(block)
+            continue
+        if identifiers & body_identifiers(line):
+            kept.append(line)
+        index += 1
+    return "\n".join(kept).rstrip() + "\n" if kept else ""
+
+
+def instruction_lines_with_pcode(function: dict[str, Any], limit: int = 400) -> list[str]:
+    """`address | text | pcode ; pcode` lines from a `--emit-instructions` export."""
+    export = function.get("instructions")
+    if not isinstance(export, dict):
+        return []
+    lines: list[str] = []
+    for address, entry in export.items():
+        if not isinstance(entry, dict):
+            continue
+        pcode = " ; ".join(str(op) for op in entry.get("pcode", []) or [])
+        lines.append(f"{address} | {entry.get('text', '')} | {pcode}")
+    if len(lines) > limit:
+        lines = lines[:limit] + [f"... {len(lines) - limit} more omitted"]
+    return lines
+
+
+def build_tier2_prompt(
+    printed: PrintedFunction,
+    preamble: str,
+    header: dict[str, str],
+    *,
+    program: Program | None = None,
+    instructions: list[str] | None = None,
+) -> str:
+    lines: list[str] = []
+    target = header.get("target") or (program or {}).get("id") or "unknown"
+    arch = header.get("arch") or (program or {}).get("architecture") or "unknown"
+    lines.append(f"Target: {target} ({arch})")
+    lines.append(f"Function key: {printed.key}")
+    lines.append(f"Function: {printed.name}")
+    lines.append("")
+    declarations = select_declarations(preamble, body_identifiers(printed.text))
+    if declarations:
+        lines.append("Declarations in scope (do not repeat them in your reply):")
+        lines.append("```c")
+        lines.append(declarations.rstrip())
+        lines.append("```")
+        lines.append("")
+    lines.append("Function to rewrite:")
+    lines.append("```c")
+    lines.append(printed.text.rstrip())
+    lines.append("```")
+    lines.append("")
+    if instructions:
+        lines.append("Instructions (address | disassembly | raw P-Code):")
+        lines.extend(f"  {line}" for line in instructions)
+        lines.append("")
+    lines.append("Reply with the complete rewritten function definition only.")
+    return "\n".join(lines) + "\n"
+
+
+def build_tier2_retry(base_prompt: str, attempt: int, findings: list[str]) -> str:
+    lines = [base_prompt.rstrip(), "", f"Attempt {attempt} was rejected by the decompiler:"]
+    lines.extend(f"- {finding}" for finding in findings)
+    lines.append("")
+    lines.append("Fix these and reply with the complete corrected function definition only.")
+    return "\n".join(lines) + "\n"
