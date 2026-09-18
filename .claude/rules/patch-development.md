@@ -3,6 +3,8 @@ description: Patch & contract development (Passes, YAML spec, Contracts dialect,
 paths:
   - "lib/patchestry/Passes/**"
   - "include/patchestry/Passes/**"
+  - "lib/patchestry/Frontend/**"
+  - "include/patchestry/Frontend/**"
   - "lib/patchestry/YAML/**"
   - "include/patchestry/YAML/**"
   - "include/patchestry/Dialect/Contracts/**"
@@ -21,6 +23,7 @@ paths:
 | Extend YAML contract spec | `include/patchestry/YAML/ContractSpec.hpp` |
 | Add patch/contract mode | `lib/patchestry/Passes/InstrumentationPass.cpp`, `lib/patchestry/Passes/ContractOperationImpl.cpp` (static contracts only — runtime validators go under `patches:`) |
 | Change argument handling | `lib/patchestry/Passes/InstrumentationPass.cpp` — `prepare_patch_call_arguments` |
+| Compile patch C code (`code_file:`) | `lib/patchestry/Passes/Compiler.cpp`, `lib/patchestry/Frontend/ClangFrontend.cpp` |
 | Add LIT transform test | `test/patchir-transform/` — copy an existing YAML test as template |
 | Modify CIR→LLVM lowering | `tools/patchir-cir2llvm/main.cpp` — CIR to LLVM IR/bitcode with contract metadata |
 | Update spec docs | `docs/GettingStarted/patch_specifications.md` |
