@@ -7,14 +7,11 @@
 
 #include <patchestry/Frontend/ClangFrontend.hpp>
 
-#include <algorithm>
 #include <array>
-#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <memory>
-#include <sstream>
 #include <string>
 #include <vector>
 
@@ -29,11 +26,9 @@
 #include <clang/Lex/HeaderSearch.h>
 #include <clang/Lex/Preprocessor.h>
 #include <llvm/ADT/SmallString.h>
-#include <llvm/ADT/StringRef.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/Path.h>
-#include <llvm/TargetParser/Triple.h>
 
 #include <patchestry/Util/Diagnostic.hpp>
 #include <patchestry/Util/Log.hpp>
@@ -44,7 +39,7 @@ namespace patchestry::frontend {
 
         // Create the target from the invocation-owned TargetOptions.  TargetInfo
         // keeps a pointer to the options it was created from, so they must
-        // outlive the CompilerInstance; a function-local object would dangle.
+        // outlive the TargetInfo; a function-local object would dangle.
         bool setTarget(clang::CompilerInstance &ci, const std::string &triple) {
             ci.getTargetOpts().Triple = triple;
             ci.setTarget(
@@ -57,13 +52,16 @@ namespace patchestry::frontend {
             return true;
         }
 
-        // The decompiler's codegen options: no optimization and no strict
-        // return/enum assumptions, so lowering does not drop lifted code.
-        void setDecompCodegenOptions(clang::CompilerInstance &ci) {
-            clang::CodeGenOptions &cg_opts = ci.getCodeGenOpts();
-            cg_opts.OptimizationLevel      = 0;
-            cg_opts.StrictReturn           = false;
-            cg_opts.StrictEnums            = false;
+        // Policy is independent of whether the AST is parsed or constructed.
+        void applyPolicy(clang::CompilerInstance &ci, CompilationPolicy policy) {
+            const bool lifted          = policy == CompilationPolicy::LiftedCode;
+            auto &cg_opts              = ci.getCodeGenOpts();
+            cg_opts.OptimizationLevel  = 0;
+            cg_opts.StrictReturn       = !lifted;
+            cg_opts.StrictEnums        = false;
+            ci.getLangOpts().C99       = true;
+            ci.getLangOpts().GNUMode   = !lifted;
+            ci.getLangOpts().NoBuiltin = false;
         }
 
         // Source manager whose main file is a placeholder: the lifter builds the
@@ -98,82 +96,6 @@ namespace patchestry::frontend {
         }
 
     } // namespace
-
-    std::string ghidraLangToTriple(const std::string &arch, const std::string &lang) {
-        llvm::Triple target_triple;
-
-        // Utility function to split the language identifier (lang) string
-        auto split_language = [](const std::string &lang_id,
-                                 char delim = ':') -> std::vector< std::string > {
-            std::vector< std::string > tokens;
-            std::stringstream ss(lang_id);
-            std::string token;
-
-            while (std::getline(ss, token, delim)) { tokens.push_back(token); }
-            return tokens;
-        };
-
-        // Ghidra export lang id in the format - arch:endianess:size:variant
-        auto lang_vec = split_language(lang);
-        if (lang_vec.size() < 3) {
-            LOG(
-                ERROR
-            ) << "Error: Invalid language format. Expected 'arch:endianess:size:variant'.\n";
-            return "";
-        }
-
-        int bit_size = 0;
-        if (llvm::StringRef(lang_vec[2]).getAsInteger(10, bit_size)) {
-            LOG(ERROR) << "Invalid bit size in language id: " << lang_vec[2] << "\n";
-            return "";
-        }
-        auto is_le = (lang_vec[1] == "LE");
-
-        auto is_equal = [&](std::string astr, std::string bstr) -> bool {
-            // transform both the string to lower-case and compare
-            std::ranges::transform(astr, astr.begin(), [](unsigned char c) {
-                return static_cast< char >(std::toupper(c));
-            });
-            std::ranges::transform(bstr, bstr.begin(), [](unsigned char c) {
-                return static_cast< char >(std::toupper(c));
-            });
-            return astr == bstr;
-        };
-
-        if (is_equal(arch, "x86") || is_equal(arch, "x86-64")) {
-            target_triple.setArch(bit_size == 32U ? llvm::Triple::x86 : llvm::Triple::x86_64);
-        } else if (is_equal(arch, "ARM") || is_equal(arch, "AARCH64")) {
-            target_triple.setArch(
-                bit_size == 32U ? (is_le ? llvm::Triple::arm : llvm::Triple::armeb)
-                                : (is_le ? llvm::Triple::aarch64 : llvm::Triple::aarch64_be)
-            );
-        }
-
-        else if (is_equal(arch, "MIPS"))
-        {
-            target_triple.setArch(
-                bit_size == 32U ? (is_le ? llvm::Triple::mipsel : llvm::Triple::mips)
-                                : (is_le ? llvm::Triple::mips64el : llvm::Triple::mips64)
-            );
-        } else if (is_equal(arch, "POWERPC")) {
-            target_triple.setArch(
-                bit_size == 32U ? (is_le ? llvm::Triple::ppcle : llvm::Triple::ppc)
-                                : (is_le ? llvm::Triple::ppc64le : llvm::Triple::ppc64)
-            );
-        } else {
-            target_triple.setArch(llvm::Triple::UnknownArch);
-        }
-
-        target_triple.setVendor(llvm::Triple::UnknownVendor);
-        target_triple.setOS(llvm::Triple::Linux);
-
-        // Set environment (for specific cases)
-        if (is_equal(arch, "ARM") && bit_size == 32) {
-            target_triple.setEnvironment(llvm::Triple::GNUEABIHF); // Hard float ABI
-        }
-
-        return target_triple.str();
-    }
 
     std::optional< std::string > getClangResourceDir() {
         if (const char *clang_resource = std::getenv("CLANG_RESOURCE_DIR")) {
@@ -302,9 +224,7 @@ namespace patchestry::frontend {
         ci->getSourceManager().setMainFileID(file_id);
 
         ci->getFrontendOpts().ProgramAction = clang::frontend::ParseSyntaxOnly;
-        ci->getLangOpts().C99               = true;
-        ci->getLangOpts().GNUMode           = true; // Enable GNU extensions including builtins
-        ci->getLangOpts().NoBuiltin = false; // Enable builtin functions (NoBuiltin=false)
+        applyPolicy(*ci, config.policy);
 
         auto &header_search_opts = ci->getHeaderSearchOpts();
 
@@ -363,7 +283,7 @@ namespace patchestry::frontend {
 
         if (!setTarget(*ci, config.triple)) { return nullptr; }
 
-        setDecompCodegenOptions(*ci);
+        applyPolicy(*ci, config.policy);
 
         // Create the preprocessor and AST context, then the consumer and Sema:
         // Sema's constructor takes the consumer, so it must be installed first.

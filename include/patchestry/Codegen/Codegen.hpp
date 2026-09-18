@@ -54,12 +54,15 @@ namespace patchestry::codegen {
 
         virtual ~CodeGenerator() = default;
 
-        // Emit the CIR module for the bound ASTContext
+        // Emit the CIR module for the bound ASTContext, or nullopt on new
+        // codegen diagnostics or verification failure. Existing parse diagnostics may
+        // be recoverable; the caller decides whether to attempt lowering.
         std::optional< mlir::ModuleOp > lower_ast_to_mlir();
 
         // Write the .cir/.mlir/.ll outputs selected by `options` for an
-        // already-lowered module.
-        void emit_outputs(mlir::ModuleOp module, const LoweringOptions &options);
+        // already-lowered module. Returns false on verification, conversion or write failure.
+        // LLVM emission lowers the supplied module in place.
+        [[nodiscard]] bool emit_outputs(mlir::ModuleOp module, const LoweringOptions &options);
 
       private:
         // Restore the varargs flag on cir.func declarations that ClangIR

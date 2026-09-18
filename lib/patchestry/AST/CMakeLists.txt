@@ -30,6 +30,7 @@ target_link_libraries(patchestry_ast
     clangFrontend
   PRIVATE
     LLVMSupport
+    patchestry_ghidra
     patchestry_frontend
     patchestry_settings
     glog::glog

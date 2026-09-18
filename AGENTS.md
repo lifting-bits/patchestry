@@ -75,8 +75,8 @@ These interfaces are the contracts contributors should keep stable while iterati
 
 | Module | Main paths | Stable interface files | Input format | Output format | Module test command |
 |---|---|---|---|---|---|
-| Ghidra model | `include/patchestry/Ghidra/`, `lib/patchestry/Ghidra/` | `include/patchestry/Ghidra/JsonDeserialize.hpp`, `include/patchestry/Ghidra/Pcode.hpp`, `include/patchestry/Ghidra/PcodeTranslation.hpp` | Ghidra export JSON | in-memory Program/Function/Block/Op model | `lit ./builds/default/test/ghidra -D BUILD_TYPE=Debug -v` |
-| Clang frontend | `include/patchestry/Frontend/`, `lib/patchestry/Frontend/` | `include/patchestry/Frontend/ClangFrontend.hpp` | target triple plus a C file or an ASTConsumer factory | `clang::CompilerInstance` ready for lifting or `ParseAST` | `lit ./builds/default/test/patchir-decomp -D BUILD_TYPE=Debug -v` and `lit ./builds/default/test/patchir-transform -D BUILD_TYPE=Debug -v` |
+| Ghidra model | `include/patchestry/Ghidra/`, `lib/patchestry/Ghidra/` | `include/patchestry/Ghidra/JsonDeserialize.hpp`, `include/patchestry/Ghidra/Pcode.hpp`, `include/patchestry/Ghidra/PcodeTranslation.hpp`, `include/patchestry/Ghidra/Target.hpp` | Ghidra export JSON and language ids | in-memory Program/Function/Block/Op model | `lit ./builds/default/test/ghidra -D BUILD_TYPE=Debug -v` |
+| Clang frontend | `include/patchestry/Frontend/`, `lib/patchestry/Frontend/` | `include/patchestry/Frontend/ClangFrontend.hpp` | target triple and explicit compilation policy plus a C file or an ASTConsumer factory | `clang::CompilerInstance` ready for lifting or `ParseAST` | `lit ./builds/default/test/patchir-decomp -D BUILD_TYPE=Debug -v` and `lit ./builds/default/test/patchir-transform -D BUILD_TYPE=Debug -v` |
 | AST lifting | `include/patchestry/AST/`, `lib/patchestry/AST/` | `include/patchestry/AST/PcodeLifter.hpp`, `include/patchestry/AST/TranslationUnit.hpp`, `include/patchestry/AST/LiftOptions.hpp`, `include/patchestry/AST/ASTConsumer.hpp`, `include/patchestry/AST/FunctionBuilder.hpp`, `include/patchestry/AST/OperationBuilder.hpp`, `include/patchestry/AST/TypeBuilder.hpp` | Ghidra model objects | `ast::TranslationUnit` (Clang AST) | `lit ./builds/default/test/patchir-decomp -D BUILD_TYPE=Debug -v` |
 | Codegen | `include/patchestry/Codegen/`, `lib/patchestry/Codegen/` | `include/patchestry/Codegen/Codegen.hpp`, `include/patchestry/Codegen/PassManager.hpp`, `include/patchestry/Codegen/Serializer.hpp` | `clang::ASTContext` + `CodeGenOptions` from any AST source | CIR module; `.cir` / `.mlir` / `.ll` files | `lit ./builds/default/test/patchir-decomp -D BUILD_TYPE=Debug -v` |
 | Decompiler tool | `tools/patchir-decomp/` | `tools/patchir-decomp/main.cpp` | P-Code JSON | CIR / LLVM IR / asm / object output selected by flags | `lit ./builds/default/test/patchir-decomp -D BUILD_TYPE=Debug -v` |
@@ -117,7 +117,7 @@ Keep these dependency boundaries in mind when editing interfaces:
 | `pcode-translate` | `patchestry_ghidra` | expose patchestry P-Code translation through the MLIR translation driver |
 | `patchestry_ghidra` | `MLIRPcode` | build/consume patchestry's P-Code dialect layer for translation |
 | `patchestry_ast` | `patchestry_frontend`, `patchestry_ghidra` | build the lifter's CompilerInstance and read the P-Code model |
-| `patchestry_passes` | `patchestry_yaml`, `patchestry_frontend`, `patchestry_codegen` | consume parsed specs during instrumentation and compile patch C code to CIR |
+| `patchestry_passes` | `patchestry_yaml`, `patchestry_frontend`, `patchestry_codegen`, `patchestry_ghidra` | consume parsed specs during instrumentation and compile patch C code to CIR |
 
 ### Data interface details by stage
 
@@ -420,6 +420,14 @@ lit ./builds/default/test/patchir-transform -D BUILD_TYPE=Debug -v
 
 # Run the example firmware end-to-end flow with artifact/report output
 scripts/test-example-firmwares.sh --build-type Debug
+```
+
+The frontend/codegen API regression test checks compilation policies, Ghidra
+target mapping, target-option ownership, and lowering failure propagation:
+
+```sh
+cmake --build builds/default --config Debug --target patchestry-frontend-test
+ctest --test-dir builds/default -C Debug -R '^frontend-codegen-tests$' --output-on-failure
 ```
 
 ### Fresh checkout to validated build

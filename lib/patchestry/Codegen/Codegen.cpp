@@ -20,6 +20,7 @@
 #include <clang/AST/Type.h>
 #include <clang/CIR/Dialect/IR/CIRDialect.h>
 #include <clang/CIR/Dialect/IR/CIRTypes.h>
+#include <clang/CIR/Dialect/Passes.h>
 #include <clang/CIR/LowerToLLVM.h>
 #include <clang/CIR/Passes.h>
 #include <llvm/ADT/StringSet.h>
@@ -30,6 +31,7 @@
 #include <mlir/IR/Dialect.h>
 #include <mlir/IR/MLIRContext.h>
 #include <mlir/IR/OperationSupport.h>
+#include <mlir/IR/OwningOpRef.h>
 #include <mlir/IR/Verifier.h>
 #include <mlir/InitAllDialects.h>
 
@@ -47,6 +49,7 @@
 namespace patchestry::codegen {
 
     std::optional< mlir::ModuleOp > CodeGenerator::lower_ast_to_mlir() {
+        const auto errors_before = ctx.getDiagnostics().getNumErrors();
         // Emit declarations first, then definitions in name (= program-address)
         // order. CIRGen caches the first cir.func it lazily creates for a symbol;
         // an unordered emission order let a caller materialize a callee with too
@@ -79,7 +82,9 @@ namespace patchestry::codegen {
 
         reconcile_variadic_decls(cirdriver->getModule());
 
-        cirdriver->verifyModule();
+        if (!cirdriver->verifyModule() || ctx.getDiagnostics().getNumErrors() > errors_before) {
+            return std::nullopt;
+        }
 
         return std::make_optional(cirdriver->getModule());
     }
@@ -119,31 +124,55 @@ namespace patchestry::codegen {
         });
     }
 
-    void
-    CodeGenerator::emit_outputs(mlir::ModuleOp module, const LoweringOptions &options) {
-        if (options.emit_cir) {
-            Serializer::SerializeToFile(module, options.output_prefix + ".cir");
+    bool CodeGenerator::emit_outputs(mlir::ModuleOp module, const LoweringOptions &options) {
+        if (mlir::failed(mlir::verify(module))) { return false; }
+        if (options.emit_cir
+            && !Serializer::SerializeToFile(module, options.output_prefix + ".cir"))
+        {
+            return false;
         }
 
         if (options.emit_mlir) {
-            auto cloned_mod = module.clone();
-            auto *mctx      = cloned_mod.getContext();
-            PassManagerBuilder bld(mctx);
+            mlir::OwningOpRef< mlir::ModuleOp > cloned_mod(module.clone());
+            PassManagerBuilder bld(cloned_mod->getContext());
             auto pm = bld.build();
             cir::direct::populateCIRToLLVMPasses(*pm);
-            auto result = pm->run(cloned_mod);
-            if (result.failed()) {
+            if (mlir::failed(pm->run(*cloned_mod))) {
                 LOG(ERROR) << "Failed to run conversion passes\n";
-                return;
+                return false;
             }
-            Serializer::SerializeToFile(cloned_mod, options.output_prefix + ".mlir");
+            if (!Serializer::SerializeToFile(*cloned_mod, options.output_prefix + ".mlir")) {
+                return false;
+            }
         }
 
         if (options.emit_llvm) {
+            // Match direct CIR lowering, but return failures instead of calling
+            // its fatal-error wrapper. LLVM emission still mutates the module.
+            auto *mctx = module.getContext();
+            mlir::PassManager pm(mctx);
+            cir::direct::populateCIRToLLVMPasses(pm);
+            (void) mlir::applyPassManagerCLOptions(pm);
+            if (mlir::failed(pm.run(module))) {
+                LOG(ERROR) << "Failed to run conversion passes\n";
+                return false;
+            }
+            mlir::registerBuiltinDialectTranslation(*mctx);
+            mlir::registerLLVMDialectTranslation(*mctx);
+            mlir::registerCIRDialectTranslation(*mctx);
             llvm::LLVMContext lctx;
-            auto llvm_mod = cir::direct::lowerDirectlyFromCIRToLLVMIR(module, lctx);
-            Serializer::SerializeToFile(llvm_mod.get(), options.output_prefix + ".ll");
+            auto llvm_mod = mlir::translateModuleToLLVMIR(
+                module, lctx, module.getName().value_or("CIRToLLVMModule")
+            );
+            if (!llvm_mod) {
+                LOG(ERROR) << "Failed to translate LLVM dialect to LLVM IR\n";
+                return false;
+            }
+            if (!Serializer::SerializeToFile(llvm_mod.get(), options.output_prefix + ".ll")) {
+                return false;
+            }
         }
+        return true;
     }
 
 } // namespace patchestry::codegen

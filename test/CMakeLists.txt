@@ -67,3 +67,12 @@ if (PE_ENABLE_EXAMPLE_FIRMWARE_E2E)
     TIMEOUT 3600
   )
 endif()
+
+# API contracts shared by parsed C and programmatically constructed ASTs.
+add_executable(patchestry-frontend-test unit/frontend-codegen.cc)
+target_link_libraries(patchestry-frontend-test PRIVATE
+  patchestry_frontend patchestry_codegen patchestry_ghidra patchestry_settings
+)
+add_test(NAME frontend-codegen-tests COMMAND patchestry-frontend-test
+  "${CMAKE_CURRENT_SOURCE_DIR}/unit/frontend-input.inc"
+)

@@ -198,25 +198,30 @@ namespace {
     // `-print-tu`: write the unit as C to `<prefix>.c`, or to stdout when no
     // output prefix was given.  Runs before lowering so the C file is produced
     // even when CIR lowering later fails.
-    void printTranslationUnit(
+    bool printTranslationUnit(
         patchestry::ast::TranslationUnit &unit, const std::string &output_file
     ) {
         auto &ctx = unit.context();
         if (!output_file.empty()) {
             std::error_code ec;
             llvm::raw_fd_ostream out(output_file + ".c", ec, llvm::sys::fs::OF_Text);
-            if (!ec) {
-                ctx.getTranslationUnitDecl()->print(
-                    out, ctx.getPrintingPolicy(), /*Indentation=*/0
-                );
-            } else {
+            if (ec) {
                 LOG(ERROR) << "Failed to write C output: " << ec.message() << "\n";
+                return false;
+            }
+            ctx.getTranslationUnitDecl()->print(out, ctx.getPrintingPolicy(), 0);
+            out.close();
+            if (out.has_error()) {
+                LOG(ERROR) << "Failed to write C output: " << out.error().message() << "\n";
+                out.clear_error();
+                return false;
             }
         } else {
             ctx.getTranslationUnitDecl()->print(
                 llvm::outs(), ctx.getPrintingPolicy(), /*Indentation=*/0
             );
         }
+        return true;
     }
 
 } // namespace
@@ -233,7 +238,9 @@ int main(int argc, char **argv) {
     auto unit = patchestry::ast::LiftProgram(*program, liftOptions(options));
     if (!unit) { return EXIT_FAILURE; }
 
-    if (options.print_tu) { printTranslationUnit(*unit, options.output_file); }
+    if (options.print_tu && !printTranslationUnit(*unit, options.output_file)) {
+        return EXIT_FAILURE;
+    }
 
     if (unit->has_errors()) {
         LOG(ERROR) << "Skipping code generation due to prior diagnostics errors.\n";
@@ -243,11 +250,10 @@ int main(int argc, char **argv) {
     // Lowering: the same call serves any AST source.
     patchestry::codegen::CodeGenerator codegen(unit->context(), unit->codegen_options());
     auto module = codegen.lower_ast_to_mlir();
-    if (module.has_value()) {
-        codegen.emit_outputs(*module, loweringOptions(options));
-    } else {
+    if (!module.has_value()) {
         LOG(ERROR) << "Failed to emit mlir module\n";
+        return EXIT_FAILURE;
     }
-
-    return EXIT_SUCCESS;
+    return codegen.emit_outputs(*module, loweringOptions(options)) ? EXIT_SUCCESS
+                                                                   : EXIT_FAILURE;
 }

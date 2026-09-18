@@ -1,0 +1,15 @@
+# RUN: bash %strip-json-comments %S/enum_type.json > %t.json
+# RUN: mkdir -p %t.dir
+# An existing regular file used as a parent is a portable, guaranteed write failure.
+# RUN: touch %t.dir/not-a-directory
+# RUN: not %patchir-decomp -input %t.json -emit-cir -output %t.dir/not-a-directory/out 2>&1 | %file-check %s --check-prefix=WRITE
+# RUN: not %patchir-decomp -input %t.json -emit-mlir -output %t.dir/not-a-directory/out 2>&1 | %file-check %s --check-prefix=WRITE
+# RUN: not %patchir-decomp -input %t.json -emit-llvm -output %t.dir/not-a-directory/out 2>&1 | %file-check %s --check-prefix=WRITE
+# RUN: not %patchir-decomp -input %t.json -print-tu -output %t.dir/not-a-directory/out 2>&1 | %file-check %s --check-prefix=C-WRITE
+# RUN: %patchir-decomp -input %t.json -emit-cir -emit-mlir -emit-llvm -print-tu -output %t.dir/out
+# RUN: test -s %t.dir/out.c
+# RUN: test -s %t.dir/out.cir
+# RUN: test -s %t.dir/out.mlir
+# RUN: test -s %t.dir/out.ll
+# WRITE: Failed to write output
+# C-WRITE: Failed to write C output
