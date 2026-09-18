@@ -283,6 +283,11 @@ namespace patchestry::ast {
         auto parameters     = getParameters(function);
         auto num_parameters = function.get().prototype.parameters.size();
         if (parameters.size() != num_parameters) {
+            if (!parameters.empty()) {
+                LOG(WARNING) << "refine: " << GetCName() << ": " << parameters.size()
+                             << " DECLARE_PARAMETER op(s) but the prototype has "
+                             << num_parameters << "; using prototype types and default names\n";
+            }
             // If there is mismatch between number of parameters in function prototype and
             // parameter declaration object, create default parameter considering there is an
             // issue recovering the parameter operation from ghidra and function prototype is
@@ -307,6 +312,16 @@ namespace patchestry::ast {
                 continue;
             }
             const auto &param_type = type_iter->second;
+            const auto param_index = static_cast< size_t >(&param_op - parameters.data());
+            if (param_index < function.get().prototype.parameters.size()
+                && function.get().prototype.parameters[param_index] != *param_op->type)
+            {
+                LOG(WARNING) << "refine: " << GetCName() << ": parameter " << param_index
+                             << " is declared with type key '" << *param_op->type
+                             << "' but the prototype says '"
+                             << function.get().prototype.parameters[param_index]
+                             << "'; using the declared type\n";
+            }
             auto location = SourceLocation(ctx.getSourceManager(), param_op->key);
 
             auto *param_decl = clang::ParmVarDecl::Create(

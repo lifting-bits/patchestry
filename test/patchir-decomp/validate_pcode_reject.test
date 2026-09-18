@@ -1,0 +1,33 @@
+# `-validate-pcode` rejects C that drops or invents facts the P-Code has.
+# Each case mutates the marked lean-lift C of bl_device__match and expects
+# the matching critical flag and a non-zero exit; `=report` keeps the exit
+# code at zero and records the verdict in the JSON report.
+#
+# RUN: bash %strip-json-comments %S/bl_device__match.json > %t.json
+#
+# A dropped call.
+# RUN: grep -v 'iVar1 = udev_new();' %S/from_c/bl_device__match.c > %t.lost.c
+# RUN: not %patchir-decomp -from-c %t.lost.c -input %t.json -validate-pcode -emit-cir -output %t.lost 2>&1 | %file-check -check-prefix=LOST %s
+# LOST: validate: bl_device__match: CALL_LOST: no call to udev_new
+#
+# A dropped string literal.
+# RUN: sed 's/"manufacturer"/"vendor"/' %S/from_c/bl_device__match.c > %t.str.c
+# RUN: not %patchir-decomp -from-c %t.str.c -input %t.json -validate-pcode -emit-cir -output %t.str 2>&1 | %file-check -check-prefix=STR %s
+# STR: validate: bl_device__match: STRING_LOST: string literal "manufacturer" is missing
+#
+# A call the P-Code never makes.
+# RUN: awk 'NR==2{print "int bogus(void);"} /function-begin ram:00022cd4/{f=1} f && /\{$/ && !d {print; print "    bogus();"; d=1; next} {print}' %S/from_c/bl_device__match.c > %t.bogus.c
+# RUN: not %patchir-decomp -from-c %t.bogus.c -input %t.json -validate-pcode -emit-cir -output %t.bogus 2>&1 | %file-check -check-prefix=BOGUS %s
+# BOGUS: validate: bl_device__match: CALL_HALLUCINATED: call to bogus has no CALL in the P-Code
+#
+# A value-returning function that stops returning a value.
+# RUN: sed 's/return local_35;/return;/' %S/from_c/bl_device__match.c > %t.ret.c
+# RUN: not %patchir-decomp -from-c %t.ret.c -input %t.json -validate-pcode -emit-cir -output %t.ret 2>&1 | %file-check -check-prefix=RET %s
+# RET: validate: bl_device__match: RET_MISMATCH:
+#
+# Report mode: same findings, exit 0, verdict in the JSON.
+# RUN: %patchir-decomp -from-c %t.lost.c -input %t.json -validate-pcode=report -emit-cir -output %t.report
+# RUN: %file-check -check-prefix=REPORT %s --input-file %t.report.validation.json
+# REPORT: "ram:00022cd4": {
+# REPORT: "code": "CALL_LOST"
+# REPORT: "verdict": "fail"

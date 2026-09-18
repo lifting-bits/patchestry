@@ -1,0 +1,29 @@
+# `-from-c` with a marked C translation unit: parse it, validate it against
+# the P-Code it was recovered from, and lower it to CIR and LLVM IR under the
+# JSON's target triple.  The fixture is the lean (goto) lift of
+# bl_device__match, the body known to preserve every P-Code fact.
+#
+# RUN: bash %strip-json-comments %S/bl_device__match.json > %t.json
+# RUN: %patchir-decomp -from-c %S/from_c/bl_device__match.c -input %t.json -validate-pcode -emit-cir -emit-llvm -output %t.rt
+# RUN: %file-check -check-prefix=RT %s --input-file %t.rt.cir
+# RUN: %file-check -check-prefix=RTLL %s --input-file %t.rt.ll
+# RUN: %file-check -check-prefix=REPORT %s --input-file %t.rt.validation.json
+#
+# RT: cir.func dso_local @bl_device__match
+# RTLL: target triple = "arm-unknown-linux-gnueabihf"
+# REPORT: "failed": 0
+#
+# The header carries the target, so neither -input nor -target-lang is needed
+# to lower; -target-lang overrides both.
+#
+# RUN: %patchir-decomp -from-c %S/from_c/bl_device__match.c -emit-llvm -output %t.hdr
+# RUN: %file-check -check-prefix=RTLL %s --input-file %t.hdr.ll
+# RUN: %patchir-decomp -from-c %S/from_c/bl_device__match.c -target-lang AARCH64:LE:64:v8A -emit-llvm -output %t.a64
+# RUN: %file-check -check-prefix=A64 %s --input-file %t.a64.ll
+# A64: target triple = "aarch64-unknown-linux"
+#
+# -print-tu on a -from-c run must not overwrite its own input.
+#
+# RUN: cp %S/from_c/bl_device__match.c %t.same.c
+# RUN: not %patchir-decomp -from-c %t.same.c -print-tu -emit-cir -output %t.same 2>&1 | %file-check -check-prefix=SAME %s
+# SAME: from-c: -print-tu needs an -output prefix different from the input file

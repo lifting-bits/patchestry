@@ -56,7 +56,7 @@ not attempt to document LLVM/MLIR internals or vendored dependency internals.
 
 | Tool | Build target | Main paths | Purpose |
 |---|---|---|---|
-| `patchir-decomp` | `patchir-decomp` | `tools/patchir-decomp/` | decompile Ghidra JSON into CIR/LLVM/asm/object outputs |
+| `patchir-decomp` | `patchir-decomp` | `tools/patchir-decomp/` | decompile Ghidra JSON into CIR/LLVM/asm/object outputs; re-enter a marked C translation unit with `-from-c` and check it against the P-Code with `-validate-pcode` |
 | `patchir-transform` | `patchir-transform` | `tools/patchir-transform/` | apply YAML-defined patches and contracts to CIR |
 | `patchir-cir2llvm` | `patchir-cir2llvm` | `tools/patchir-cir2llvm/` | lower CIR to LLVM IR or bitcode |
 | `patchir-yaml-parser` | `patchir-yaml-parser` | `tools/patchir-yaml-parser/` | validate and inspect YAML configuration |
@@ -77,7 +77,7 @@ These interfaces are the contracts contributors should keep stable while iterati
 |---|---|---|---|---|---|
 | Ghidra model | `include/patchestry/Ghidra/`, `lib/patchestry/Ghidra/` | `include/patchestry/Ghidra/JsonDeserialize.hpp`, `include/patchestry/Ghidra/Pcode.hpp`, `include/patchestry/Ghidra/PcodeTranslation.hpp`, `include/patchestry/Ghidra/Target.hpp` | Ghidra export JSON and language ids | in-memory Program/Function/Block/Op model | `lit ./builds/default/test/ghidra -D BUILD_TYPE=Debug -v` |
 | Clang frontend | `include/patchestry/Frontend/`, `lib/patchestry/Frontend/` | `include/patchestry/Frontend/ClangFrontend.hpp` | target triple and explicit compilation policy plus a C file or an ASTConsumer factory | `clang::CompilerInstance` ready for lifting or `ParseAST` | `lit ./builds/default/test/patchir-decomp -D BUILD_TYPE=Debug -v` and `lit ./builds/default/test/patchir-transform -D BUILD_TYPE=Debug -v` |
-| AST lifting | `include/patchestry/AST/`, `lib/patchestry/AST/` | `include/patchestry/AST/PcodeLifter.hpp`, `include/patchestry/AST/TranslationUnit.hpp`, `include/patchestry/AST/LiftOptions.hpp`, `include/patchestry/AST/ASTConsumer.hpp`, `include/patchestry/AST/FunctionBuilder.hpp`, `include/patchestry/AST/OperationBuilder.hpp`, `include/patchestry/AST/TypeBuilder.hpp` | Ghidra model objects | `ast::TranslationUnit` (Clang AST) | `lit ./builds/default/test/patchir-decomp -D BUILD_TYPE=Debug -v` |
+| AST lifting | `include/patchestry/AST/`, `lib/patchestry/AST/` | `include/patchestry/AST/PcodeLifter.hpp`, `include/patchestry/AST/TranslationUnit.hpp`, `include/patchestry/AST/LiftOptions.hpp`, `include/patchestry/AST/CSourceUnit.hpp`, `include/patchestry/AST/PcodeValidator.hpp`, `include/patchestry/AST/ASTConsumer.hpp`, `include/patchestry/AST/FunctionBuilder.hpp`, `include/patchestry/AST/OperationBuilder.hpp`, `include/patchestry/AST/TypeBuilder.hpp` | Ghidra model objects | `ast::TranslationUnit` (Clang AST) | `lit ./builds/default/test/patchir-decomp -D BUILD_TYPE=Debug -v` |
 | Codegen | `include/patchestry/Codegen/`, `lib/patchestry/Codegen/` | `include/patchestry/Codegen/Codegen.hpp`, `include/patchestry/Codegen/PassManager.hpp`, `include/patchestry/Codegen/Serializer.hpp` | `clang::ASTContext` + `CodeGenOptions` from any AST source | CIR module; `.cir` / `.mlir` / `.ll` files | `lit ./builds/default/test/patchir-decomp -D BUILD_TYPE=Debug -v` |
 | Decompiler tool | `tools/patchir-decomp/` | `tools/patchir-decomp/main.cpp` | P-Code JSON | CIR / LLVM IR / asm / object output selected by flags | `lit ./builds/default/test/patchir-decomp -D BUILD_TYPE=Debug -v` |
 | YAML spec parser | `include/patchestry/YAML/`, `lib/patchestry/YAML/`, `tools/patchir-yaml-parser/` | `include/patchestry/YAML/ConfigurationFile.hpp`, `include/patchestry/YAML/PatchSpec.hpp`, `include/patchestry/YAML/ContractSpec.hpp`, `include/patchestry/YAML/YAMLParser.hpp` | YAML patch/contract spec | validated configuration objects consumed by transform passes | `lit ./builds/default/test/patchir-transform -D BUILD_TYPE=Debug -v` |
@@ -129,7 +129,10 @@ Keep these dependency boundaries in mind when editing interfaces:
    `patchir-decomp` consumes that JSON, builds the Ghidra model, lifts it
    through AST builders into an `ast::TranslationUnit`, and lowers that with
    `patchestry_codegen` to CIR as the primary editable interchange format for
-   later patching.
+   later patching.  `-from-c` re-enters a marked C translation unit (LLM-written
+   or hand-written) as the same `ast::TranslationUnit`, optionally checked against the
+   JSON P-Code model with `-validate-pcode`, so later stages see the same CIR
+   contract either way.
 3. Transform stage:
    `patchir-transform` consumes CIR plus YAML parsed through
    `include/patchestry/YAML/*.hpp` and applies `InstrumentationPass` and the
@@ -187,6 +190,9 @@ The `scripts/ghidra/` tree is part of the project interface surface:
 ```sh
 # Decompile a function from P-Code JSON to CIR
 patchir-decomp -input func.json -emit-cir -output func
+
+# Re-enter a marked C translation unit, check it against the P-Code, and lower it to CIR
+patchir-decomp -from-c func.c -input func.json -validate-pcode -emit-cir -output func.rt
 
 # Apply patches from YAML to CIR
 patchir-transform input.cir -spec patch.yaml -o patched.cir

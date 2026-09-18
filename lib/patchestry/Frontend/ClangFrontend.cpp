@@ -15,9 +15,11 @@
 #include <string>
 #include <vector>
 
+#include <clang/Basic/Builtins.h>
 #include <clang/Basic/CodeGenOptions.h>
 #include <clang/Basic/Diagnostic.h>
 #include <clang/Basic/LangOptions.h>
+#include <clang/Basic/LangStandard.h>
 #include <clang/Basic/SourceManager.h>
 #include <clang/Basic/TargetInfo.h>
 #include <clang/Basic/TargetOptions.h>
@@ -53,15 +55,33 @@ namespace patchestry::frontend {
         }
 
         // Policy is independent of whether the AST is parsed or constructed.
-        void applyPolicy(clang::CompilerInstance &ci, CompilationPolicy policy) {
-            const bool lifted          = policy == CompilationPolicy::LiftedCode;
-            auto &cg_opts              = ci.getCodeGenOpts();
-            cg_opts.OptimizationLevel  = 0;
-            cg_opts.StrictReturn       = !lifted;
-            cg_opts.StrictEnums        = false;
+        void applyPolicy(clang::CompilerInstance &ci, const FrontendConfig &config) {
+            const bool lifted         = config.policy == CompilationPolicy::LiftedCode;
+            const bool reentered      = config.policy == CompilationPolicy::ReenteredCode;
+            auto &cg_opts             = ci.getCodeGenOpts();
+            cg_opts.OptimizationLevel = 0;
+            cg_opts.StrictReturn      = !lifted && !reentered;
+            cg_opts.StrictEnums       = false;
+            if (reentered) {
+                // gnu23 accepts Ghidra's zero-named-parameter variadics, `void f(...)`.
+                std::vector< std::string > includes;
+                clang::LangOptions::setLangDefaults(
+                    ci.getLangOpts(), clang::Language::C, llvm::Triple(config.triple), includes,
+                    clang::LangStandard::lang_gnu23
+                );
+            }
             ci.getLangOpts().C99       = true;
             ci.getLangOpts().GNUMode   = !lifted;
             ci.getLangOpts().NoBuiltin = false;
+        }
+
+        // Re-entered code: ignore every warning-class diagnostic (like `-w`),
+        // keeping hard errors.
+        void applyDiagnosticPolicy(clang::CompilerInstance &ci, const FrontendConfig &config) {
+            if (config.policy != CompilationPolicy::ReenteredCode) { return; }
+            ci.getDiagnostics().setSeverityForAll(
+                clang::diag::Flavor::WarningOrError, clang::diag::Severity::Ignored
+            );
         }
 
         // Source manager whose main file is a placeholder: the lifter builds the
@@ -191,6 +211,7 @@ namespace patchestry::frontend {
             LOG(ERROR) << "Failed to initialize diagnostics.\n";
             return nullptr;
         }
+        applyDiagnosticPolicy(*ci, config);
 
         if (!setTarget(*ci, config.triple)) { return nullptr; }
 
@@ -224,7 +245,7 @@ namespace patchestry::frontend {
         ci->getSourceManager().setMainFileID(file_id);
 
         ci->getFrontendOpts().ProgramAction = clang::frontend::ParseSyntaxOnly;
-        applyPolicy(*ci, config.policy);
+        applyPolicy(*ci, config);
 
         auto &header_search_opts = ci->getHeaderSearchOpts();
 
@@ -247,6 +268,15 @@ namespace patchestry::frontend {
         ci->createPreprocessor(clang::TU_Complete);
         auto &pp      = ci->getPreprocessor();
         auto &headers = pp.getHeaderSearchInfo();
+
+        // FrontendAction::BeginSourceFile does this for driver-built
+        // instances; without it no `__builtin_*` or library builtin resolves.
+        // Patch code keeps builtins as plain functions: vendored CIRGen cannot
+        // lower some of them (`__builtin_va_start` with a pointer-typed last
+        // named parameter fails the `cir.va_start` verifier).
+        if (config.policy == CompilationPolicy::ReenteredCode) {
+            pp.getBuiltinInfo().initializeBuiltins(pp.getIdentifierTable(), ci->getLangOpts());
+        }
 
         // Re-add the patchestry include path to the preprocessor's header search
         for (const auto &header_path : include_paths) {
@@ -283,7 +313,7 @@ namespace patchestry::frontend {
 
         if (!setTarget(*ci, config.triple)) { return nullptr; }
 
-        applyPolicy(*ci, config.policy);
+        applyPolicy(*ci, config);
 
         // Create the preprocessor and AST context, then the consumer and Sema:
         // Sema's constructor takes the consumer, so it must be installed first.

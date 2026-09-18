@@ -21,6 +21,8 @@ add_library(patchestry_ast STATIC
   CGraphBuilder.cpp
   SNodePostPasses.cpp
   BuildSNodeFromRegion.cpp
+  PcodeValidator.cpp
+  CSourceUnit.cpp
 )
 
 add_library(patchestry::ast ALIAS patchestry_ast)
@@ -32,6 +34,7 @@ target_link_libraries(patchestry_ast
     LLVMSupport
     patchestry_ghidra
     patchestry_frontend
+    clangAnalysis
     patchestry_settings
     glog::glog
 )

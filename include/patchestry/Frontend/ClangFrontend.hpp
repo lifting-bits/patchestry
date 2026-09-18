@@ -24,7 +24,13 @@ namespace patchestry::frontend {
         /// C99, no GNU mode, no strict-return assumptions, no optimization.
         LiftedCode,
         /// C99 with GNU mode and strict-return assumptions, no optimization.
-        PatchCode
+        PatchCode,
+        /// Marked C re-entered with `-from-c` (LLM-written or hand-written): gnu23
+        /// (accepts Ghidra's zero-named-parameter variadics, `void f(...)`),
+        /// clang builtins registered so `__builtin_*` and library builtins
+        /// resolve, warnings ignored (decompiled C carries conversions ISO C
+        /// only warns about), no strict-return assumptions, no optimization.
+        ReenteredCode
     };
 
     struct FrontendConfig

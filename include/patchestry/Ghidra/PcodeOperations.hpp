@@ -141,7 +141,7 @@ namespace patchestry::ghidra {
     {
         std::string name;
         std::string type;
-        uint32_t size;
+        uint32_t size = 0;
         std::string key;
     };
 

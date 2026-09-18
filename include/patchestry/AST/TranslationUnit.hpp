@@ -8,11 +8,14 @@
 #pragma once
 
 #include <memory>
+#include <vector>
 
 #include <clang/AST/ASTContext.h>
 #include <clang/Basic/CodeGenOptions.h>
 #include <clang/Basic/Diagnostic.h>
 #include <clang/Frontend/CompilerInstance.h>
+
+#include <patchestry/AST/PcodeValidator.hpp>
 
 namespace patchestry::ast {
 
@@ -23,6 +26,10 @@ namespace patchestry::ast {
     struct TranslationUnit
     {
         std::unique_ptr< clang::CompilerInstance > ci;
+
+        /// `-from-c`: the `patchestry:function-begin` markers found in the C
+        /// file.  Empty for a lifted unit.
+        std::vector< MarkerEntry > markers;
 
         clang::ASTContext &context() { return ci->getASTContext(); }
 

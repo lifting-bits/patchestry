@@ -27,6 +27,9 @@ paths:
 | Change CIR lowering or output writing | `lib/patchestry/Codegen/Codegen.cpp`, `include/patchestry/Codegen/Codegen.hpp` |
 | Add intrinsic handler | `lib/patchestry/AST/IntrinsicHandlers.cpp`, `include/patchestry/AST/IntrinsicHandlers.hpp` |
 | Modify Ghidra data model | `include/patchestry/Ghidra/JsonDeserialize.hpp`, `lib/patchestry/Ghidra/` |
+| Validate re-entered C against P-Code (`-validate-pcode`) | `lib/patchestry/AST/PcodeValidator.cpp`, `include/patchestry/AST/PcodeValidator.hpp` |
+| Re-enter a marked C translation unit (`-from-c`) | `lib/patchestry/AST/CSourceUnit.cpp`, `include/patchestry/AST/CSourceUnit.hpp` |
+| Change clang frontend policies (`-from-c`, patch code) | `lib/patchestry/Frontend/ClangFrontend.cpp`, `include/patchestry/Frontend/ClangFrontend.hpp` |
 | Add LIT decomp test | `test/patchir-decomp/` — copy an existing JSON file and embed `// RUN:` directives |
 
 ## Pipeline entry points
@@ -76,11 +79,29 @@ The batch run checks:
 
 If `/patchir-inspect` is not installed, skip structuring validation.
 
+## C re-entry validation
+
+`-from-c` parses a marked C translation unit instead of lifting JSON and
+`-validate-pcode` checks it against the JSON P-Code model.  The files under
+`test/patchir-decomp/from_c/` are marked C fixtures (the lean goto lift of the
+matching JSON fixture, the one body known to preserve every P-Code fact).
+`from_c_roundtrip.test` requires them to validate with zero critical findings
+and lower; `validate_pcode_reject.test` mutates them and requires the matching
+critical flag.  A finding on an unchanged fixture is a validator false
+positive and counts as a regression.  Thresholds live in `ValidationOptions`
+in `include/patchestry/AST/PcodeValidator.hpp`.
+
 ## Inspection
 
 ```sh
 # Decompile P-Code JSON to C (full AST pipeline output)
 patchir-decomp -input func.json -print-tu -output /tmp/out -verbose
+
+# Re-enter a marked C translation unit, check it against the P-Code, lower to CIR
+patchir-decomp -from-c func.c -input func.json -validate-pcode -emit-cir -output /tmp/rt
+
+# Same, but report only (exit 0)
+patchir-decomp -from-c func.c -input func.json -validate-pcode=report -emit-cir -output /tmp/rt
 
 # Decompile to CIR
 patchir-decomp -input func.json -emit-cir -output /tmp/out
