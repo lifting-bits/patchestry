@@ -543,6 +543,94 @@ public class PcodeSerializerTest extends AbstractGhidraHeadlessIntegrationTest {
         return null;
     }
 
+    // -------- --emit-instructions --------
+
+    // Serialize one function through the default constructor with the
+    // instruction emission switch set as given, and return the JSON.
+    private String runWithInstructions(Function target, boolean emit) throws Exception {
+        StringWriter sw = new StringWriter();
+        JsonWriter jw = new JsonWriter(sw);
+        List<Function> onlyTarget = new ArrayList<>();
+        onlyTarget.add(target);
+
+        PcodeSerializer s = new PcodeSerializer(
+            jw, onlyTarget, "Cortex", fakeMonitor, program, decompInterface);
+        s.setEmitInstructions(emit);
+        s.serialize();
+        jw.close();
+        String json = sw.toString();
+        sw.close();
+        return json;
+    }
+
+    // Instruction emission is opt-in: the default document has no key.
+    @Test
+    public void testEmitInstructionsOffByDefault() throws Exception {
+        Function target = findFunction("bl_usb__send_message");
+        assumeTrue(target != null,
+            "bl_usb__send_message not present in the test fixture");
+
+        String json = runWithInstructions(target, /*emit=*/false);
+        assertFalse(json.contains("\"instructions\""),
+            "instructions must not be emitted unless --emit-instructions is given");
+    }
+
+    // With the switch on, the function carries one entry per listing
+    // instruction in its body, keyed by address, placed after
+    // address_ranges, each with text, length and a pcode array whose
+    // strings name registers rather than (space, offset, size) tuples.
+    @Test
+    public void testEmitInstructionsListsEveryBodyInstruction() throws Exception {
+        Function target = findFunction("bl_usb__send_message");
+        assumeTrue(target != null,
+            "bl_usb__send_message not present in the test fixture");
+
+        String json = runWithInstructions(target, /*emit=*/true);
+        int at = json.indexOf("\"instructions\":{");
+        assertTrue(at >= 0, "instructions map missing from the emitted JSON");
+        int ranges = json.indexOf("\"address_ranges\":[");
+        assertTrue(ranges >= 0 && ranges < at,
+            "instructions must follow address_ranges");
+
+        // Function keys are entry-point labels (thunks resolve to their target).
+        Function keyed = target.isThunk() ? target.getThunkedFunction(true) : target;
+        JsonObject root = JsonParser.parseString(json).getAsJsonObject();
+        JsonObject fn = root.getAsJsonObject("functions")
+            .getAsJsonObject(PcodeSerializer.label(keyed.getEntryPoint()));
+        JsonObject instructions = fn.getAsJsonObject("instructions");
+        assertNotNull(instructions, "instructions map missing from the function");
+
+        int count = 0;
+        boolean sawRegisterName = false;
+        InstructionIterator it =
+            program.getListing().getInstructions(target.getBody(), true);
+        while (it.hasNext()) {
+            Instruction insn = it.next();
+            String key = PcodeSerializer.label(insn.getMinAddress());
+            JsonObject entry = instructions.getAsJsonObject(key);
+            assertNotNull(entry, "missing instruction entry " + key);
+            assertEquals(insn.toString(), entry.get("text").getAsString());
+            assertEquals(insn.getLength(), entry.get("length").getAsInt());
+            JsonArray pcode = entry.getAsJsonArray("pcode");
+            assertEquals(insn.getPcode().length, pcode.size(),
+                "pcode count differs for " + key);
+            for (JsonElement line : pcode) {
+                String text = line.getAsString();
+                assertFalse(text.contains("(register, "),
+                    "raw varnode tuple leaked into " + key + ": " + text);
+                if (text.matches(".*\\b(r[0-9]+|sp|lr|pc)\\b.*")) {
+                    sawRegisterName = true;
+                }
+            }
+            ++count;
+        }
+        assertEquals(count, instructions.size(),
+            "instructions map has entries outside the function body");
+        assertTrue(count > 0, "test function body has no instructions");
+        assertTrue(sawRegisterName,
+            "no pcode string names a Cortex register (r0..r12, sp, lr, pc)");
+    }
+
     // With the sanitizer flag ON, bl_usb__send_message's JSON must have
     // dropped the extraout_r1 DECLARE_LOCAL via the full Tier 2 rewrite
     // path. Gated by assumeTrue on candidate presence so the test skips
