@@ -9,6 +9,7 @@
 #include <clang/AST/Type.h>
 #include <clang/Basic/SourceLocation.h>
 
+#include <clang/AST/RecordLayout.h>
 #include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/StringRef.h>
 #include <patchestry/AST/TypeBuilder.hpp>
@@ -105,6 +106,59 @@ namespace patchestry::ast {
             return llvm::is_contained(kKeywords, name);
         }
 
+        // Warn when the C layout of a completed record disagrees with the
+        // offsets and size the P-Code model declared.  Ghidra structures may
+        // carry padding gaps; refined structures may simply be wrong.  The
+        // `refine:` prefix is what the refinement driver greps for.
+        template< typename DeclMap >
+        void VerifyRecordLayouts(
+            clang::ASTContext &ctx, const TypeMap &lifted_types, const DeclMap &completed
+        ) {
+            for (const auto &[key, decl] : completed) {
+                const auto *record = llvm::dyn_cast< clang::RecordDecl >(decl);
+                if (record == nullptr) { continue; }
+                const auto *definition = record->getDefinition();
+                if (definition == nullptr || definition->isInvalidDecl()) { continue; }
+                auto iter = lifted_types.find(key);
+                if (iter == lifted_types.end()) { continue; }
+                const auto *composite =
+                    dynamic_cast< const CompositeType * >(iter->second.get());
+                if (composite == nullptr) { continue; }
+                std::unordered_map< std::string, const clang::FieldDecl * > fields;
+                bool complete = true;
+                for (const auto *field : definition->fields()) {
+                    if (field->isInvalidDecl() || field->getType()->isIncompleteType()) {
+                        complete = false;
+                        break;
+                    }
+                    fields.emplace(field->getNameAsString(), field);
+                }
+                if (!complete) { continue; }
+
+                const auto &layout = ctx.getASTRecordLayout(definition);
+                if (!definition->isUnion()) {
+                    for (const auto &component : composite->GetComponents()) {
+                        auto field = fields.find(component.name);
+                        if (field == fields.end() || field->second->isBitField()) { continue; }
+                        const auto c_offset =
+                            layout.getFieldOffset(field->second->getFieldIndex()) / 8;
+                        if (c_offset != component.offset) {
+                            LOG(WARNING)
+                                << "refine: " << composite->name << "." << component.name
+                                << " is at byte " << c_offset << " in C but at "
+                                << component.offset << " in the P-Code model\n";
+                        }
+                    }
+                }
+                const auto c_size = static_cast< uint64_t >(layout.getSize().getQuantity());
+                if (composite->size != 0 && c_size != composite->size) {
+                    LOG(WARNING) << "refine: " << composite->name << " is " << c_size
+                                 << " bytes in C but " << composite->size
+                                 << " in the P-Code model\n";
+                }
+            }
+        }
+
     } // namespace
 
     void TypeBuilder::create_types(clang::ASTContext &ctx, TypeMap &lifted_types) {
@@ -131,6 +185,8 @@ namespace patchestry::ast {
                 );
             }
         }
+
+        VerifyRecordLayouts(ctx, lifted_types, missing_type_definition);
     }
 
     /**

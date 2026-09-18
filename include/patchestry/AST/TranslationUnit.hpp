@@ -9,12 +9,14 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <clang/AST/ASTContext.h>
 #include <clang/Basic/CodeGenOptions.h>
 #include <clang/Basic/Diagnostic.h>
 #include <clang/Frontend/CompilerInstance.h>
 
+#include <patchestry/AST/PcodeValidator.hpp>
 #include <patchestry/AST/TUPrinter.hpp>
 
 namespace patchestry::ast {
@@ -33,6 +35,10 @@ namespace patchestry::ast {
         DefinitionMap definitions;
         std::string lang_id;
         std::string arch;
+
+        /// `-from-c`: the `patchestry:function-begin` markers found in the C
+        /// file.  Empty for a lifted unit.
+        std::vector< MarkerEntry > markers;
 
         clang::ASTContext &context() { return ci->getASTContext(); }
 

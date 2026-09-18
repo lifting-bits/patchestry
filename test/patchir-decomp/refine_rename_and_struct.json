@@ -1,0 +1,79 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-cir -print-tu -output %t >> /dev/null 2>&1
+// RUN: %file-check -vv -check-prefix=C %s --input-file %t.c
+// RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
+//
+// Tier 1 refinements are plain JSON edits: `display_name` renames the
+// function (the linker symbol in `name` is untouched), DECLARE_PARAMETER
+// `name` renames a parameter, `globals[].name` renames a global, and new
+// struct/typedef/pointer entries in `types` reach the C and the CIR.
+//
+// C: typedef struct device_ctx device_ctx_t;
+// C: struct device_ctx {
+// C-NEXT: int fd;
+// C-NEXT: int flags;
+// C-NEXT: };
+// C: extern int g_state;
+// C: int get_state(int count);
+// C: int get_state(int count) {
+// C: return count + g_state;
+// CIR: cir.global {{.*}}@g_state
+// CIR: cir.func dso_local @get_state
+//
+// The printed C survives the lean round trip and validates against its own
+// P-Code: the global is referenced and the value is returned.
+//
+// RUN: %patchir-decomp -input %t.json -emit-flat-baseline -print-tu -output %t.flat >> /dev/null 2>&1
+// RUN: %patchir-decomp -from-c %t.flat.c -input %t.json -validate-pcode -emit-cir -output %t.rt
+// RUN: %file-check -vv -check-prefix=REPORT %s --input-file %t.rt.validation.json
+// REPORT: "ram:20000000": {
+// REPORT: "verdict": "pass"
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:20000000": {
+      "name": "FUN_20000000",
+      "display_name": "get_state",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["t_int"]
+      },
+      "basic_blocks": {
+        "ram:20000000:entry": {
+          "operations": {
+            "p0": { "mnemonic": "DECLARE_PARAMETER", "name": "count", "type": "t_int", "kind": "parameter", "index": 0 },
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:20000000:0:basic" }
+          },
+          "ordered_operations": ["p0", "br"]
+        },
+        "ram:20000000:0:basic": {
+          "operations": {
+            "op0": { "mnemonic": "INT_ADD", "type": "t_int",
+                     "inputs": [ { "type": "t_int", "kind": "parameter", "operation": "p0" },
+                                 { "type": "t_int", "kind": "global", "global": "ram:30000000" } ] },
+            "ret": { "mnemonic": "RETURN",
+                     "inputs": [ { "type": "t_int", "kind": "temporary", "operation": "op0" } ] }
+          },
+          "ordered_operations": ["op0", "ret"]
+        }
+      },
+      "entry_block": "ram:20000000:entry"
+    }
+  },
+  "globals": {
+    "ram:30000000": { "name": "g_state", "size": "4", "type": "t_int" }
+  },
+  "types": {
+    "t_int":    { "name": "int", "size": 4, "kind": "integer", "is_signed": true },
+    "t_ctx":    { "name": "device_ctx", "kind": "struct", "size": 8,
+                  "fields": [ { "name": "fd",    "type": "t_int", "offset": 0 },
+                              { "name": "flags", "type": "t_int", "offset": 4 } ] },
+    "t_ctxp":   { "kind": "pointer", "size": 4, "element_type": "t_ctx" },
+    "t_ctx_td": { "name": "device_ctx_t", "kind": "typedef", "size": 8, "base_type": "t_ctx" }
+  }
+}

@@ -27,6 +27,10 @@ paths:
 | Change CIR lowering or output writing | `lib/patchestry/Codegen/Codegen.cpp`, `include/patchestry/Codegen/Codegen.hpp` |
 | Add intrinsic handler | `lib/patchestry/AST/IntrinsicHandlers.cpp`, `include/patchestry/AST/IntrinsicHandlers.hpp` |
 | Modify Ghidra data model | `include/patchestry/Ghidra/JsonDeserialize.hpp`, `lib/patchestry/Ghidra/` |
+| Change printed C (`-print-tu`) | `lib/patchestry/AST/TUPrinter.cpp` |
+| Validate re-entered C against P-Code (`-validate-pcode`) | `lib/patchestry/AST/PcodeValidator.cpp`, `include/patchestry/AST/PcodeValidator.hpp` |
+| Re-enter printed or refined C (`-from-c`) | `lib/patchestry/AST/CSourceUnit.cpp`, `include/patchestry/AST/CSourceUnit.hpp` |
+| Change clang frontend policies (`-from-c`, patch code) | `lib/patchestry/Frontend/ClangFrontend.cpp`, `include/patchestry/Frontend/ClangFrontend.hpp` |
 | Add LIT decomp test | `test/patchir-decomp/` — copy an existing JSON file and embed `// RUN:` directives |
 
 ## Pipeline entry points
@@ -83,6 +87,17 @@ runs every fixture through `check-roundtrip.sh`.  A new failure means the
 printer (`lib/patchestry/AST/TUPrinter.cpp`) or the lifted AST regressed; a
 fixture that starts passing must be removed from `roundtrip-known-failures.txt`.
 
+## Lean-lift validation
+
+`test/patchir-decomp/zz-flat-validate.test` runs `check-flat-validate.sh`:
+every fixture's `-emit-flat-baseline -print-tu` C goes back through
+`-from-c -input <json> -validate-pcode -emit-cir` and must lower with zero
+critical findings.  A new failure means the re-entry path, the printer or the
+validator regressed (a validator false positive counts); a fixture that
+starts passing must be removed from `flat-validate-known-failures.txt`.
+Validator thresholds live in `ValidationOptions` in
+`include/patchestry/AST/PcodeValidator.hpp`.
+
 ## Inspection
 
 ```sh
@@ -91,6 +106,12 @@ patchir-decomp -input func.json -print-tu -output /tmp/out -verbose
 
 # Lean lift only: goto CFG, no structuring, no cleanup (LLM-stage input)
 patchir-decomp -input func.json -emit-flat-baseline -print-tu -output /tmp/out
+
+# Re-enter printed or refined C, check it against the P-Code, lower to CIR
+patchir-decomp -from-c /tmp/out.c -input func.json -validate-pcode -emit-cir -output /tmp/rt
+
+# Same, but report only (exit 0) and re-print the parsed unit as /tmp/rt.c
+patchir-decomp -from-c /tmp/out.c -input func.json -validate-pcode=report -print-tu -output /tmp/rt
 
 # Decompile to CIR
 patchir-decomp -input func.json -emit-cir -output /tmp/out

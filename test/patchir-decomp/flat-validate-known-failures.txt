@@ -1,0 +1,9 @@
+# Fixtures whose lean-lift C is known not to survive `-from-c -validate-pcode`.
+# One fixture basename per line; `#` starts a comment.  check-flat-validate.sh
+# fails when a listed fixture starts passing, so remove entries as they fix.
+
+# Two prototypes for the same callee (see roundtrip-known-failures.txt).
+cve_2016_6563_fun_00011708
+
+# Address-of applied to an rvalue.
+cwe22_init_logger

@@ -1,0 +1,56 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-cir -print-tu -output %t 2>&1 | %file-check -vv -check-prefix=WARN %s
+// RUN: %file-check -vv -check-prefix=C %s --input-file %t.c
+//
+// Refined JSON that disagrees with itself is lifted with a `refine:` warning
+// the refinement driver can grep: more DECLARE_PARAMETER ops than prototype
+// entries fall back to prototype types and default names, and a struct whose
+// field offsets or size do not match the natural C layout is reported.
+//
+// WARN-DAG: refine: get_state: 2 DECLARE_PARAMETER op(s) but the prototype has 1; using prototype types and default names
+// WARN-DAG: refine: device_ctx.flags is at byte 4 in C but at 8 in the P-Code model
+// WARN-DAG: refine: device_ctx is 8 bytes in C but 16 in the P-Code model
+// C: int get_state(int param_0) {
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:20000000": {
+      "name": "FUN_20000000",
+      "display_name": "get_state",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["t_int"]
+      },
+      "basic_blocks": {
+        "ram:20000000:entry": {
+          "operations": {
+            "p0": { "mnemonic": "DECLARE_PARAMETER", "name": "count", "type": "t_int", "kind": "parameter", "index": 0 },
+            "p1": { "mnemonic": "DECLARE_PARAMETER", "name": "extra", "type": "t_int", "kind": "parameter", "index": 1 },
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:20000000:0:basic" }
+          },
+          "ordered_operations": ["p0", "p1", "br"]
+        },
+        "ram:20000000:0:basic": {
+          "operations": {
+            "ret": { "mnemonic": "RETURN",
+                     "inputs": [ { "type": "t_int", "kind": "constant", "value": 0 } ] }
+          },
+          "ordered_operations": ["ret"]
+        }
+      },
+      "entry_block": "ram:20000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "t_int": { "name": "int", "size": 4, "kind": "integer", "is_signed": true },
+    "t_ctx": { "name": "device_ctx", "kind": "struct", "size": 16,
+               "fields": [ { "name": "fd",    "type": "t_int", "offset": 0 },
+                           { "name": "flags", "type": "t_int", "offset": 8 } ] }
+  }
+}

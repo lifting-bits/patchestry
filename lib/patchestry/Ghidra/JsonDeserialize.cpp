@@ -1256,6 +1256,9 @@ namespace patchestry::ghidra {
             }
             if (auto maybe_size = global_obj->getInteger("size")) {
                 variable.size = static_cast< uint32_t >(*maybe_size);
+            } else if (auto size_text = global_obj->getString("size")) {
+                // The serializer emits `size` as a string.
+                (void) size_text->getAsInteger(10, variable.size);
             }
 
             serialized_globals.emplace(variable.key, std::move(variable));

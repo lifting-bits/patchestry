@@ -31,6 +31,24 @@ internals of LLVM, MLIR, or vendored dependencies.
     |- Assembly               (--emit-asm)       [flag exists, path unimplemented]
     \- Object file            (--emit-obj)       [flag exists, path unimplemented]
 
+C re-entry path (LLM refinement stage):
+[Pretty-printed C TU from -emit-flat-baseline -print-tu]
+    |
+    | out-of-process refinement: renames, types, structuring
+    | (scripts/llm, not yet in tree)
+    v
+[Refined C TU, patchestry:tu header and function markers intact]
+    +
+[Original Ghidra JSON (-input)]
+    |
+    | patchir-decomp -from-c refined.c -input func.json -validate-pcode
+    |   uses:
+    |   - patchestry_frontend + patchestry_ast CSourceUnit: parse the C under the target triple
+    |   - patchestry_ast PcodeValidator: check the parsed C against the P-Code model
+    |   - patchestry_codegen: lower to CIR / LLVM IR
+    v
+[CIR / LLVM IR]  +  [<output>.validation.json]                 [tested]
+
 Main patching path:
 [CIR from patchir-decomp or hand-provided CIR]
     +
@@ -90,6 +108,9 @@ Current firmware runtime-validation path:
   high-level MLIR, CIR, LLVM IR, and pretty-printed C are exercised by tests.
 - `--emit-asm` and `--emit-obj` are currently exposed by CLI parsing but are not
   implemented end-to-end in the reviewed PR branch.
+- `-from-c` re-enters a printed or refined C translation unit and produces the
+  same CIR/LLVM outputs as an `-input` run; with `-validate-pcode` it also
+  writes `<output>.validation.json`.
 - `patchir-transform` produces patched CIR.
 - `patchir-cir2llvm` produces LLVM IR text or LLVM bitcode.
 - `patchir-yaml-parser` produces validation/inspection output, not a transformed
@@ -179,6 +200,52 @@ LLM stage and by clang, so:
 `test/patchir-decomp/zz-roundtrip.test` re-parses every fixture's `.c` with
 clang under its target triple; `roundtrip-known-failures.txt` lists the
 fixtures whose lifted AST is itself not valid C.
+
+### C re-entry and P-Code validation
+
+`-from-c <file.c>` compiles a translation unit written by `-print-tu`, or
+refined from it, instead of lifting JSON.  The target comes from
+`-target-lang`, else the `patchestry:tu` header, else `-input`.  The file is
+parsed as gnu23 under the same triple and codegen options as an `-input` run,
+with warnings off, through `lib/patchestry/AST/CSourceUnit.cpp` and the
+`ReenteredCode` policy of `lib/patchestry/Frontend/ClangFrontend.cpp`, the
+frontend setup that `patchir-transform` also uses for patch C code.  Target
+intrinsics the lifter declares as plain functions (`__wfi`, `__dmb`) lose the
+builtin identity Sema gives them on re-parse; library builtins (`memcpy`,
+`ceilf`) keep it, as in an `-input` run.
+
+Every `patchestry:function-begin` marker must name a function with a body in
+the C and a `cir.func` with a body in the lowered module.
+`-strict-symbols=false` turns a missing one into a warning.  `-print-tu` on a
+`-from-c` run re-prints the parsed unit with a fresh header and markers.
+
+`-validate-pcode` (requires `-input`) checks each marker-listed function
+against the P-Code model it was lifted from, through
+`lib/patchestry/AST/PcodeValidator.cpp`.  It is a fact-preservation check,
+not an equivalence proof: signature arity and types, callee names and call
+counts, string literals, global references, return arity, store and condition
+counts, switch cases, reachability and duplicate stores.  Finding codes:
+`SIGNATURE_MISMATCH`, `SIGNATURE_TYPE_MISMATCH`, `CALL_LOST`,
+`CALL_HALLUCINATED`, `CALL_REWRITTEN`, `CALL_COUNT_DELTA`,
+`CALL_ARGC_MISMATCH`, `CALLIND_DEFICIT`, `STRING_LOST`, `GLOBAL_LOST`,
+`GLOBAL_HALLUCINATED`, `RET_MISMATCH`, `RET_COUNT_DELTA`, `STORE_DEFICIT`,
+`COND_DEFICIT`, `SWITCH_CASE_LOST`, `UNREACHABLE_CODE`, `DUP_ASSIGN`,
+`FUNCTION_MISSING`, `UNKNOWN_FUNCTION`.  Each finding is a warning or
+critical; the report goes to `<output>.validation.json` (stdout without
+`-output`).  The bare flag exits non-zero on any critical finding;
+`-validate-pcode=report` writes the report and exits zero.
+
+`test/patchir-decomp/zz-flat-validate.test` runs every fixture through
+`-emit-flat-baseline -print-tu`, feeds the C back through
+`-from-c -validate-pcode -emit-cir`, and requires zero critical findings.
+This pins the re-entry path and the validator's false-positive rate on the one
+body known to preserve every P-Code fact.  `flat-validate-known-failures.txt`
+lists the fixtures whose lifted AST is not valid C.
+
+The lifter also emits `refine:`-prefixed warnings when the JSON disagrees with
+itself: `DECLARE_PARAMETER` count or type versus the prototype, and record
+field offsets or size versus the C layout.  An out-of-process refinement
+driver can grep for them.
 
 ### Mechanical vs semantic recovery
 

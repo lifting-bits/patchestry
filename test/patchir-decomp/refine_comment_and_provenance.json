@@ -1,0 +1,68 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-cir -print-tu -output %t >> /dev/null 2>&1
+// RUN: %file-check -vv -check-prefix=C %s --input-file %t.c
+// RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
+//
+// Refined JSON may carry a per-function `comment`, a top-level `refinement`
+// provenance object and a per-function `instructions` export.  The comment
+// prints above the definition; the other two are ignored by the lifter.
+//
+// C: // patchestry:tu format=1 target=ARM:LE:32:Cortex arch=ARM
+// C: // patchestry:function-begin ram:10000000 name=subpiece_test symbol=subpiece_test
+// C-NEXT: /* Returns the low byte of its argument. Escaped: * / */
+// C-NEXT: unsigned char subpiece_test(unsigned int a) {
+// C: // patchestry:function-end ram:10000000
+// CIR: cir.func dso_local @subpiece_test
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "refinement": {
+    "provider": "fake",
+    "model": "none",
+    "generated_at": "2026-09-17T00:00:00Z"
+  },
+  "functions": {
+    "ram:10000000": {
+      "name": "subpiece_test",
+      "is_intrinsic": false,
+      "comment": "Returns the low byte of its argument. Escaped: */",
+      "instructions": [
+        { "address": "ram:10000000", "bytes": "c0b2", "mnemonic": "uxtb",
+          "text": "uxtb r0,r0", "raw_pcode": ["r0 = INT_ZEXT r0:1"] }
+      ],
+      "type": {
+        "return_type": "type_byte",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["type_int"]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "p0": { "mnemonic": "DECLARE_PARAMETER", "name": "a", "type": "type_int", "kind": "parameter", "index": 0 },
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:10000000:0:basic" }
+          },
+          "ordered_operations": ["p0", "br"]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "op0": { "mnemonic": "SUBPIECE", "type": "type_byte",
+                     "inputs": [ { "type": "type_int",    "kind": "parameter", "operation": "p0" },
+                                 { "type": "type_offset", "kind": "constant",  "value": 0 } ] },
+            "ret": { "mnemonic": "RETURN",
+                     "inputs": [ { "type": "type_byte", "kind": "temporary", "operation": "op0" } ] }
+          },
+          "ordered_operations": ["op0", "ret"]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int":    { "name": "unsigned int",  "size": 4, "kind": "integer" },
+    "type_byte":   { "name": "unsigned char", "size": 1, "kind": "integer" },
+    "type_offset": { "name": "undefined4",    "size": 4, "kind": "undefined" }
+  }
+}

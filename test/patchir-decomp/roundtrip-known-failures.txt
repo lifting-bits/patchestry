@@ -11,5 +11,3 @@ cve_2016_6563_fun_00011708
 # Address-of applied to an rvalue: `*(struct QString *)&(&shared_null)`.
 cwe22_init_logger
 
-# Pointer-typed switch discriminant: `switch ((void *)0U)`.
-switch_successor_blocks
