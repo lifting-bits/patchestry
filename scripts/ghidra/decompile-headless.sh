@@ -38,6 +38,11 @@ Options:
                                        (default on). Pass
                                        --no-repair-function-boundaries to
                                        skip the pass.
+      --emit-instructions[=on|off]     Add per-function disassembly text,
+                                       length and raw P-Code for every
+                                       instruction to the JSON (default off).
+                                       Input for the out-of-process
+                                       refinement stage.
 
 Environment:
   HOST_WORKSPACE        When running in Docker-in-Docker, set this to the host
@@ -144,6 +149,10 @@ parse_args() {
                 shift
                 ;;
             --repair-function-boundaries=*)
+                SANITIZER_ARGS+=("$1")
+                shift
+                ;;
+            --emit-instructions|--no-emit-instructions|--emit-instructions=*)
                 SANITIZER_ARGS+=("$1")
                 shift
                 ;;

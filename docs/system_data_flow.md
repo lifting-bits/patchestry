@@ -131,6 +131,10 @@ Current firmware runtime-validation path:
   - high P-Code operations and varnodes
   - branch metadata such as `taken_block`, `not_taken_block`, `target_block`
   - switch metadata such as `switch_input`, `switch_cases`, and fallback edges
+  - with `--emit-instructions`, a per-function `instructions` map: for
+    every instruction in the body, keyed by address, the disassembly text,
+    the encoded length and the raw P-Code strings (opt-in; the lifter
+    ignores it, the out-of-process refinement stage reads it)
 - The schema boundary is defined by `include/patchestry/Ghidra/PcodeOperations.hpp`
   and loaded by `patchestry_ghidra`.
 

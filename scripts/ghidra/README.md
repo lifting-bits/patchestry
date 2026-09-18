@@ -32,6 +32,13 @@ The script also list all functions in the binary using the `--list-functions` fl
 
 ```sh ./decompile-headless.sh --input <binary> --list-functions --output <output-file> ```
 
+`--emit-instructions` adds a per-function `instructions` map to the JSON: for
+every instruction in the body, keyed by address, the disassembly text, the
+encoded length and the raw P-Code strings. It is off by default; `patchir-decomp`
+ignores the key, the out-of-process refinement stage reads it.
+
+```sh ./decompile-headless.sh --input <binary> --function <function-name> --output <output-file> --emit-instructions ```
+
 ## Running Patchestry via Ghidra GUI
 
 1. Ensure Patchestry is available via PATH:
