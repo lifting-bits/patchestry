@@ -352,6 +352,10 @@ public class PcodeSerializer {
 		// Mirrors --[no-]repair-function-boundaries: suppresses TAIL_CALL
 		// rewrites and boundary_repairs even if prior state survives.
 		private boolean repairFunctionBoundaries = true;
+
+		// --emit-instructions (default off): add a per-function `instructions`
+		// map (disassembly text, length and raw P-Code per instruction).
+		private boolean emitInstructions = false;
 		
 		// Sometimes we need to arrange for some operations to exist prior to
 		// another one, e.g. if there is a `CALL foo, SP` that decompiles to
@@ -482,6 +486,11 @@ public class PcodeSerializer {
 		// See --[no-]repair-function-boundaries.
 		public void setRepairFunctionBoundaries(boolean enabled) {
 			this.repairFunctionBoundaries = enabled;
+		}
+
+		// See --[no-]emit-instructions.
+		public void setEmitInstructions(boolean enabled) {
+			this.emitInstructions = enabled;
 		}
 
 		// Resolve the effective Tier 2 enablement from the CLI mode and the
@@ -5563,6 +5572,9 @@ public class PcodeSerializer {
 			writer.name("entry_point")
 				.value(functionToSerialize.getEntryPoint().toString(true));
 			serializeAddressRanges(functionToSerialize);
+			if (emitInstructions) {
+				serializeInstructions(functionToSerialize);
+			}
 
 			// If we have a high P-Code function, then serialize the blocks.
 			if (highFunction != null) {
@@ -5714,6 +5726,37 @@ public class PcodeSerializer {
 			writer.endArray();
 		}
 		
+		// Opt-in (--emit-instructions): the listing's view of the function
+		// body, one entry per instruction keyed by address, in address order.
+		// `text` is Ghidra's disassembly rendering, `length` the encoded size
+		// in bytes and `pcode` the raw (low) P-Code of the instruction as
+		// PcodeOp.toString() renders it, `(space, offset, size)` varnodes
+		// included. Emitted next to address_ranges so it is present even when
+		// the decompiler produced no high function. The C++ lifter ignores the
+		// key; it feeds the out-of-process refinement stage, which wants the
+		// machine-level truth beside the high P-Code.
+		void serializeInstructions(Function function) throws Exception {
+			writer.name("instructions").beginObject();
+			AddressSetView body = function.getBody();
+			if (body != null && !body.isEmpty()) {
+				InstructionIterator iter =
+					currentProgram.getListing().getInstructions(body, true);
+				while (iter.hasNext()) {
+					Instruction insn = iter.next();
+					writer.name(label(insn.getMinAddress())).beginObject();
+					writer.name("text").value(insn.toString());
+					writer.name("length").value(insn.getLength());
+					writer.name("pcode").beginArray();
+					for (PcodeOp op : insn.getPcode()) {
+						writer.value(op.toString());
+					}
+					writer.endArray();
+					writer.endObject();
+				}
+			}
+			writer.endObject();
+		}
+
 		// Skip entries at function-entry addresses — emitting both as
 		// function and global trips the lifter's CIRGen FuncOp assertion (#226).
 		void serializeGlobals() throws Exception {
