@@ -20,6 +20,7 @@ printed C and its `// patchestry:` markers, and greps `refine:` warnings.
 | Tier 1 prompt text | `patchestry_llm/prompt.py` |
 | Providers (`anthropic`, `openai`, `fake`) | `patchestry_llm/providers/` |
 | Tier 1 orchestration and provenance | `patchestry_llm/tier1.py` |
+| Tier 2 loop: splice, `-from-c -validate-pcode`, retry with findings | `patchestry_llm/tier2.py` |
 | CLI | `patchestry_llm/cli.py` |
 
 ## Rules
@@ -31,6 +32,10 @@ printed C and its `// patchestry:` markers, and greps `refine:` warnings.
   context7 for `openai`. Keep each provider in its own module.
 - New edit kinds go through `Refiner` with a rejection reason and a test.
 - The `fake` provider is the test path; no test may need a network or a key.
+  A list value serves one reply per call, which is how retry loops are tested.
+- Tier 2 never runs the structuring engine: the flat lift is the input, the
+  validator report (`<prefix>.validation.json`) is the gate, the flat body is
+  the fallback.
 
 ## Test
 

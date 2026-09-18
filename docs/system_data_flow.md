@@ -35,8 +35,11 @@ C re-entry path (LLM refinement stage):
 [Pretty-printed C TU from -emit-flat-baseline -print-tu]
     |
     | out-of-process refinement (scripts/llm, `patchestry-refine`):
-    |   Tier 1 today: names, comments, types as edits to a JSON copy,
-    |   re-lifted by patchir-decomp; Tier 2 (structured C) pending
+    |   Tier 1: names, comments, types as edits to a JSON copy,
+    |           re-lifted by patchir-decomp
+    |   Tier 2: the model rewrites each flat function into structured C;
+    |           each reply is spliced in and checked with -validate-pcode,
+    |           findings go back to the model, the flat body is the fallback
     v
 [Refined C TU, patchestry:tu header and function markers intact]
     +
@@ -267,6 +270,18 @@ edits go to `<output>.report.json`.  The refined JSON gets a top-level
 warnings and hard failures land in the report and the exit code.  Providers
 are the official `anthropic` and `openai` SDKs plus a `fake` provider that
 replays canned proposals; no network code lives in C++.
+
+`patchestry-refine tier2` is the lean replacement for the structuring
+engine.  It prints the flat goto C, prompts the model per function with
+that function, the declarations it uses and, optionally, the
+`--emit-instructions` disassembly and raw P-Code, then splices the reply
+into the unit and runs `patchir-decomp -from-c ... -validate-pcode=report`.
+A reply is kept when its function parses, lowers and validates; otherwise
+the validator flags (`CALL_LOST`, `GLOBAL_LOST`, `STRING_LOST`, ...) and
+the compiler diagnostics go back to the model for another attempt, and
+after the last attempt the flat body stays.  The output is a complete
+marked translation unit plus `.validation.json`, a report and, on request,
+CIR and LLVM IR, all produced by the tool from the accepted C.
 
 ### Mechanical vs semantic recovery
 

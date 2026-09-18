@@ -14,9 +14,15 @@ layouts); rejected edits go to the report. The refined JSON is lifted once
 more so the lifter's `refine:` warnings and any hard failure surface in the
 report and exit code.
 
-Tier 2 (structured C written by the model, checked by
-`patchir-decomp -from-c -validate-pcode`) is not in this package yet; the
-`decomp.run_from_c` helper is its entry point.
+Tier 2 (`patchestry-refine tier2`) replaces the structuring engine: the
+decompiler prints the flat goto C (`-emit-flat-baseline -print-tu`), the
+model rewrites one function at a time into structured C, and the reply is
+spliced into the unit and checked with `patchir-decomp -from-c -input
+<json> -validate-pcode`. A reply is kept when its function parses, lowers
+and validates (`pass`, or `warn` unless `--no-accept-warnings`); otherwise
+the validator findings and compiler errors go back to the model for another
+attempt (`--attempts`, default 3), and after the last one the flat body
+stays. Correctness is decided by the tool, never by this package.
 
 ## Install
 
@@ -45,7 +51,17 @@ uv run --project scripts/llm patchestry-refine tier1 \
 uv run --project scripts/llm patchestry-refine tier1 \
     --input func.json --output func.refined.json \
     --provider fake --fake-responses proposals.json
+
+# Tier 2: structured C from the flat lift, validated against the P-Code;
+# writes structured.c, structured.validation.json, structured.report.json, structured.cir
+uv run --project scripts/llm patchestry-refine tier2 \
+    --input func.refined.json --output structured --emit-cir --with-instructions
 ```
+
+Tier 2 exit code 2 means the final unit did not lift, or `--strict` saw a
+function that kept its flat body. The `.c` output is a complete
+translation unit with the `patchestry:` markers, so it re-enters the tool
+with `-from-c` as is.
 
 The decompiler is found through `--patchir-decomp`, `$PATCHIR_DECOMP`, `PATH`,
 or the repository build tree. `--lean` prompts with the flat goto C
