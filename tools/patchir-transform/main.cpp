@@ -26,7 +26,6 @@
 #include <patchestry/Dialect/Contracts/ContractsDialect.hpp>
 #include <patchestry/Passes/InstrumentationPass.hpp>
 #include <patchestry/Util/Log.hpp>
-#include <patchestry/Util/Options.hpp>
 
 namespace patchestry::cl {
     namespace cl = llvm::cl;

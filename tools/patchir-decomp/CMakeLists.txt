@@ -18,6 +18,7 @@ target_link_libraries(patchir-decomp
     PRIVATE
         patchestry::ghidra
         patchestry::ast
+        patchestry::frontend
         patchestry::codegen
         patchestry::yaml
         glog::glog
