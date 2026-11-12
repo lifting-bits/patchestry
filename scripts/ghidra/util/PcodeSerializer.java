@@ -488,7 +488,7 @@ public class PcodeSerializer {
 			this.repairFunctionBoundaries = enabled;
 		}
 
-		// See --[no-]emit-instructions.
+		// See --emit-instructions.
 		public void setEmitInstructions(boolean enabled) {
 			this.emitInstructions = enabled;
 		}
@@ -5746,8 +5746,9 @@ public class PcodeSerializer {
 					Instruction insn = iter.next();
 					writer.name(label(insn.getMinAddress())).beginObject();
 					writer.name("text").value(insn.toString());
-					writer.name("length").value(insn.getLength());
+					writer.name("length").value(insn.getParsedLength());
 					writer.name("pcode").beginArray();
+					// Deliberately export raw semantics, without flow overrides.
 					for (PcodeOp op : insn.getPcode()) {
 						writer.value(renderPcodeOp(op, language));
 					}
@@ -5758,15 +5759,17 @@ public class PcodeSerializer {
 			writer.endObject();
 		}
 
-		// `r0 = INT_ADD r0, 0x1` rather than PcodeOp.toString()'s
+		// `r0 = INT_ADD r0, 0x1:4` rather than PcodeOp.toString()'s
 		// `(register, 0x20, 4) INT_ADD (register, 0x20, 4) , (const, 0x1, 4)`.
 		// Varnode.toString(Language) names registers, spells uniques as
 		// `u_<offset>:<size>`, constants as `0x<value>` and other memory as
 		// `A_<address>:<size>`; an LLM reader does not have to know the
-		// register file layout. Constants carry no size in this form. The
+		// register file layout. Append constant sizes in bytes to preserve
+		// operand widths (for example, STORE of 0x0:1 versus 0x0:8). The
 		// first input of LOAD and STORE is the address space id as a
 		// constant; it prints as the space name (`STORE ram, sp, r0`), the
-		// way Ghidra's own listing formatter resolves it.
+		// way Ghidra's own listing formatter resolves it. CALLOTHER
+		// selectors use SLEIGH userop names, with a sized numeric fallback.
 		static String renderPcodeOp(PcodeOp op, Language language) {
 			StringBuilder sb = new StringBuilder();
 			Varnode output = op.getOutput();
@@ -5792,7 +5795,20 @@ public class PcodeSerializer {
 						continue;
 					}
 				}
+				if (i == 0 && opcode == PcodeOp.CALLOTHER && input.isConstant()) {
+					long index = input.getOffset();
+					if (index >= 0 && index < language.getNumberOfUserDefinedOpNames()) {
+						String name = language.getUserDefinedOpName((int) index);
+						if (name != null && !name.isEmpty()) {
+							sb.append(name);
+							continue;
+						}
+					}
+				}
 				sb.append(input.toString(language));
+				if (input.isConstant()) {
+					sb.append(":").append(input.getSize());
+				}
 			}
 			return sb.toString();
 		}

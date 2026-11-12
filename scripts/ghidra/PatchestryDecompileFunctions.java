@@ -172,7 +172,7 @@ public class PatchestryDecompileFunctions extends GhidraScript {
     // --[no-]repair-function-boundaries (default on): run TailCallAnalysis.
     private boolean repairFunctionBoundaries = true;
 
-    // --[no-]emit-instructions (default off): add a per-function
+    // --emit-instructions (default off): add a per-function
     // `instructions` map (disassembly text, length and raw P-Code per
     // instruction, keyed by address) to the JSON. Input for the
     // out-of-process refinement stage; patchir-decomp ignores it.
@@ -265,15 +265,6 @@ public class PatchestryDecompileFunctions extends GhidraScript {
             }
             if (arg.equals("--emit-instructions")) {
                 emitInstructions = true;
-                continue;
-            }
-            if (arg.equals("--no-emit-instructions")) {
-                emitInstructions = false;
-                continue;
-            }
-            if (arg.startsWith("--emit-instructions=")) {
-                emitInstructions = parseBoolFlag(arg,
-                    arg.substring("--emit-instructions=".length()));
                 continue;
             }
             positional.add(arg);

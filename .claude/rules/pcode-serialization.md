@@ -111,11 +111,15 @@ Tier 2 allowlist: `util.PcodeSerializer.TIER2_DEFAULT_ARCHITECTURES`
 `--emit-instructions` (default off) adds `"instructions"` to every function,
 right after `address_ranges`: one entry per instruction keyed by address
 (`ram:0000f7b8`), with `text` (Ghidra's disassembly), `length` (bytes) and
-`pcode` (raw P-Code, one string per op such as `r0 = INT_ADD r0, 0x1`:
+`pcode` (raw P-Code, one string per op such as `r0 = INT_ADD r0, 0x1:4`:
 registers by name via `Varnode.toString(Language)`, uniques as
-`u_<offset>:<size>`, LOAD/STORE address spaces by name). It comes from the
-listing, not the decompiler, so it is present even when no high function was
+`u_<offset>:<size>`, constants as `0x<value>:<size>` with size in bytes,
+LOAD/STORE address spaces by name). It comes from the listing, not the decompiler, so it is present even when no high function was
 produced. `patchir-decomp` ignores the key; the LLM decompilation stage reads
 it. Implementation: `PcodeSerializer.serializeInstructions` and
 `renderPcodeOp`, flag plumbing in `PatchestryDecompileFunctions.parseScriptFlags`
 and both shell wrappers. LIT: `test/ghidra/emit_instructions.c`.
+
+Instruction `length` is the parsed encoded byte length, unaffected by listing
+length overrides. Raw P-Code excludes flow overrides. `CALLOTHER` selectors
+use SLEIGH userop names when available, otherwise sized numeric IDs.

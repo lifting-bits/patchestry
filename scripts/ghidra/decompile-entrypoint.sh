@@ -65,11 +65,10 @@ Options:
       --no-repair-function-boundaries (or --repair-function-boundaries=off)
       to disable. Forwarded to PatchestryDecompileFunctions.
 
-  --emit-instructions[=<on|off>]
+  --emit-instructions
       Add a per-function `instructions` map to the JSON: for every
       instruction in the body, keyed by address, the disassembly text,
-      the encoded length and the raw P-Code strings. Default: off. Pass
-      --no-emit-instructions (or --emit-instructions=off) to disable.
+      the encoded length and the raw P-Code strings. Default: off.
       Forwarded to PatchestryDecompileFunctions.
 
 Examples:
@@ -155,7 +154,7 @@ function parse_args {
             --repair-function-boundaries=*)
                 SCRIPT_EXTRA_ARGS+=("$1")
                 ;;
-            --emit-instructions|--no-emit-instructions|--emit-instructions=*)
+            --emit-instructions)
                 SCRIPT_EXTRA_ARGS+=("$1")
                 ;;
             *)

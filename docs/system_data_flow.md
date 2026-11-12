@@ -113,8 +113,12 @@ Current firmware runtime-validation path:
   - with `--emit-instructions`, a per-function `instructions` map: for
     every instruction in the body, keyed by address, the disassembly text,
     the encoded length and the raw P-Code, one string per op with
-    register names (opt-in; the lifter ignores it, the LLM decompilation
-    stage reads it)
+    register names and explicit constant byte widths (`0x<value>:<size>`)
+    (opt-in; the lifter ignores it, the LLM decompilation
+    stage reads it). Encoded length uses the parsed instruction length,
+    independent of listing length overrides. Raw P-Code excludes flow
+    overrides; `CALLOTHER` selectors use SLEIGH names when available,
+    falling back to sized numeric IDs.
 - The schema boundary is defined by `include/patchestry/Ghidra/PcodeOperations.hpp`
   and loaded by `patchestry_ghidra`.
 
