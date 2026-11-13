@@ -19,8 +19,10 @@
 #include <clang/AST/Attrs.inc>
 #include <clang/AST/OperationKinds.h>
 #include <clang/Basic/SourceLocation.h>
+#include <clang/Basic/TargetInfo.h>
 #include <clang/Frontend/CompilerInstance.h>
 #include <llvm/Support/ErrorHandling.h>
+#include <llvm/TargetParser/Triple.h>
 
 #include <patchestry/AST/FunctionBuilder.hpp>
 #include <patchestry/AST/OperationBuilder.hpp>
@@ -99,6 +101,54 @@ namespace patchestry::ast {
         }
 
 
+        // Ghidra prototype-model names that select the same argument and
+        // return placement as the Clang target's default C convention.  The
+        // lifter emits every function with that default (ClangIR lowers no
+        // other convention), so any other name means the lifted prototype
+        // does not place arguments where the binary does.
+        //
+        // The names come from the Ghidra compiler specs for each processor.
+        // `__thiscall` is listed where the spec either does not define it
+        // (Ghidra then falls back to the default model) or the target ABI
+        // passes `this` as an ordinary first argument.  The JSON does not say
+        // which compiler spec was used, so the table is keyed on the Clang
+        // triple alone.
+        bool is_target_default_convention(const llvm::Triple &triple, llvm::StringRef name) {
+            // No model recorded, or Ghidra could not name one: nothing to
+            // contradict the default.
+            if (name.empty() || name == "unknown" || name == "default") {
+                return true;
+            }
+
+            switch (triple.getArch()) {
+                case llvm::Triple::arm:
+                case llvm::Triple::armeb:
+                case llvm::Triple::thumb:
+                case llvm::Triple::thumbeb:
+                    // ARM.cspec, ARM_v45.cspec: default model is `__stdcall` (AAPCS).
+                    return name == "__stdcall" || name == "__thiscall";
+                case llvm::Triple::aarch64:
+                case llvm::Triple::aarch64_be:
+                    // AARCH64.cspec: default model is `__cdecl` (AAPCS64).
+                    return name == "__cdecl" || name == "__thiscall";
+                case llvm::Triple::x86_64:
+                    // x86-64-win.cspec: default is `__fastcall` (Microsoft x64).
+                    // x86-64-gcc.cspec: default is `__stdcall` (System V).
+                    if (triple.isOSWindows()) {
+                        return name == "__fastcall" || name == "__thiscall";
+                    }
+                    return name == "__stdcall" || name == "__thiscall";
+                case llvm::Triple::x86:
+                    // x86 32-bit: only `__cdecl` matches the default; `__stdcall`,
+                    // `__fastcall` and `__thiscall` differ in stack cleanup or
+                    // register use.
+                    return name == "__cdecl";
+                default:
+                    // No table for this architecture.
+                    return false;
+            }
+        }
+
     } // namespace
 
     FunctionBuilder::FunctionBuilder(
@@ -125,6 +175,18 @@ namespace patchestry::ast {
         , loss_reporter(loss_reporter)
         , local_variables({}) {
         if (!function.key.empty()) {
+            const auto &triple     = ci.getASTContext().getTargetInfo().getTriple();
+            const auto &convention = function.prototype.calling_convention;
+            if (!is_target_default_convention(triple, convention)) {
+                loss_reporter.report(
+                    SourceLocation(ci.getASTContext().getSourceManager(), function.key),
+                    "callconv-unsupported",
+                    "calling convention '" + convention + "' of function '" + function.name
+                        + "' is not the default for " + triple.getArchName().str()
+                        + "; lifted with the target default convention"
+                );
+            }
+
             if (auto *function_decl = create_declaration(
                     ci.getASTContext(),
                     create_function_type(ci.getASTContext(), function.prototype)
@@ -372,7 +434,8 @@ namespace patchestry::ast {
         // __fastcall, __thiscall, __vectorcall) to clang::CallingConv once
         // ClangIR supports them. Currently ClangIR only handles the default
         // CC_C convention; all others hit UNREACHABLE in CIRGenTypes.cpp.
-        // The calling convention string is available in proto.calling_convention.
+        // Until then a convention that is not the target default is reported
+        // as `callconv-unsupported` by the FunctionBuilder constructor.
 
         return ctx.getFunctionType(rttype, args_vector, ext_proto_info);
     }
