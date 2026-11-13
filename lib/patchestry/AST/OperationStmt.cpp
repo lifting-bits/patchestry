@@ -2359,11 +2359,55 @@ namespace patchestry::ast {
         auto type_it      = types.find(function.prototype.rttype_key);
         if (type_it != types.end() && !type_it->second->isVoidType()) {
             auto ret_type = type_it->second;
-            report_lossy(
-                "return-synthesized",
-                "RETURN carries no value but the return type is '" + ret_type.getAsString()
-                    + "'; a zero value is returned"
-            );
+
+            // The zero returned here is invented.  It is not reported when the
+            // operation directly before this RETURN in the same block is a
+            // call Ghidra marked noreturn (abort, __stack_chk_fail): the
+            // operations of a block run in order, so the return never
+            // executes and the value cannot be observed.
+            auto follows_noreturn_call = [&]() {
+                auto block_it = function.basic_blocks.find(op.parent_block_key);
+                if (block_it == function.basic_blocks.end()) {
+                    return false;
+                }
+                const auto &block = block_it->second;
+                auto position     = std::ranges::find(block.ordered_operations, op.key);
+                if (position == block.ordered_operations.end()
+                    || position == block.ordered_operations.begin())
+                {
+                    return false;
+                }
+                auto previous_it = block.operations.find(*std::prev(position));
+                if (previous_it == block.operations.end()) {
+                    return false;
+                }
+                const auto &previous = previous_it->second;
+                if (previous.mnemonic != Mnemonic::OP_CALL
+                    && previous.mnemonic != Mnemonic::OP_CALLIND)
+                {
+                    return false;
+                }
+                if (!previous.target.has_value()) {
+                    return false;
+                }
+                if (previous.target->is_noreturn) {
+                    return true;
+                }
+                if (previous.target->function) {
+                    const auto &functions = function_builder().function_list.get();
+                    auto callee_it        = functions.find(*previous.target->function);
+                    return callee_it != functions.end() && callee_it->second != nullptr
+                        && callee_it->second->isNoReturn();
+                }
+                return false;
+            };
+            if (!follows_noreturn_call()) {
+                report_lossy(
+                    "return-synthesized",
+                    "RETURN carries no value but the return type is '"
+                        + ret_type.getAsString() + "'; a zero value is returned"
+                );
+            }
             auto *zero    = clang::IntegerLiteral::Create(
                 ctx, llvm::APInt(32, 0), ctx.IntTy, location
             );

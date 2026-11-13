@@ -7,6 +7,8 @@
 //   ret_wide_declared   u64 f(u64 v) { return v; }   ret i64, no report
 //   ret_wide_narrowed   u32 f(u64 v) { return v; }   high word dropped
 //   ret_missing         u32 f(u32 a) { return; }     zero returned
+//   ret_after_noreturn  u32 f(u32 a) { abort(); return; }   no report: the
+//                       return follows a noreturn call and never executes
 //   ret_promoted        u8 f(u32 a, u32 b) { return a == b; }   no report: the
 //                       P-Code value is 1 byte; only the C expression is an int
 //
@@ -23,6 +25,7 @@
 // WARN-DAG: Diag Warning: {{.*}}lossy lift [return-synthesized]: RETURN carries no value but the return type is 'unsigned int'; a zero value is returned in function 'ret_missing'
 // WARN-NOT: in function 'ret_wide_declared'
 // WARN-NOT: in function 'ret_promoted'
+// WARN-NOT: in function 'ret_after_noreturn'
 // WARN-NOT: Diag Error
 //
 // C-DAG: return (unsigned int)v;
@@ -288,6 +291,75 @@
         }
       },
       "entry_block": "ram:10000300:entry"
+    },
+    "ram:10000400": {
+      "name": "ret_after_noreturn",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": [
+          "type_int"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000400:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "a",
+              "type": "type_int",
+              "kind": "parameter",
+              "index": 0
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000400:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "br"
+          ]
+        },
+        "ram:10000400:0:basic": {
+          "operations": {
+            "die": {
+              "mnemonic": "CALL",
+              "has_return_value": false,
+              "target": {
+                "kind": "function",
+                "function": "EXTERNAL:00000001",
+                "is_variadic": false,
+                "is_noreturn": true
+              },
+              "inputs": []
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": []
+            }
+          },
+          "ordered_operations": [
+            "die",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000400:entry"
+    },
+    "EXTERNAL:00000001": {
+      "name": "abort",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": true,
+        "calling_convention": "__stdcall",
+        "parameter_types": []
+      }
     }
   },
   "globals": {},
