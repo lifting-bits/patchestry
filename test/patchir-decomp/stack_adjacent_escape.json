@@ -1,9 +1,9 @@
-// Every local is lifted as an independent C object, which loses the layout of
-// the original stack frame.  The serializer records each local's storage and
-// the lifter reports a local that overlaps, or directly follows, a local whose
-// address is taken: an access through that address reached it in the binary
-// and does not in the lifted code.  A warning by default, an error under
-// -strict.
+// Every local is lifted as an independent C object unless the frame layout
+// says that loses something.  The serializer records each local's storage.
+// When a local overlaps, or directly follows, a local whose address is taken,
+// an access through that address reached it in the binary, so the lifter puts
+// both in one backing array and reaches each through a view at its recovered
+// offset.
 //
 // split_record, read_second and overlap are Ghidra's output for
 //
@@ -14,39 +14,53 @@
 //                                     fill(&u.c[1]); return u.i; }
 //
 // built for arm-none-eabi -mcpu=cortex-m3 -O1.  The decompiler splits `p` into
-// two 4-byte locals:
-//
-//   split_record: local_10 = param_1; uStack_c = param_2; consume(&local_10);
-//                 uStack_c (sp-12) follows local_10 (sp-16) and is only written
-//   read_second:  fill(auStack_10); return local_c;
-//                 local_c (sp-12) follows auStack_10 (sp-16) and is only read
-//   overlap:      one local, nothing to report
+// two 4-byte locals at sp-16 and sp-12.  Lifted as two objects, clang -O2
+// deleted the second store in split_record and returned undef from
+// read_second; as one array both survive.  overlap has a single local and is
+// left alone.
 //
 // piece_view is hand-written: `rec_lo` is a 4-byte view of the first half of
 // the 8-byte `rec` (the shape Ghidra gives a field of a stack structure it
-// tracks on its own) and is reported as overlapping.  `used` follows `rec` but
-// is both written and read by the function, and `reg` lives in a register;
-// neither is reported.
+// tracks on its own) and shares its region.  `used` follows `rec` but is both
+// written and read by the function, and `reg` lives in a register; both stay
+// ordinary locals.
+//
+// misaligned is hand-written: `odd` is a 4-byte local one byte after the
+// address-taken `tag`.  A typed view at that offset would be misaligned, so
+// the two stay separate and the loss is reported: a warning by default, an
+// error under -strict.
 //
 // RUN: bash %strip-json-comments %s > %t.json
-// RUN: %patchir-decomp -input %t.json -emit-cir -print-tu -output %t > %t.log 2>&1
+// RUN: %patchir-decomp -input %t.json -emit-llvm -print-tu -output %t > %t.log 2>&1
 // RUN: %file-check -vv -check-prefix=WARN %s --input-file %t.log
-// RUN: test -e %t.cir
+// RUN: %file-check -vv -check-prefix=C %s --input-file %t.c
+// RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
 // RUN: not %patchir-decomp -input %t.json -emit-cir -strict -output %t.strict > %t.strict.log 2>&1
 // RUN: %file-check -vv -check-prefix=ERR %s --input-file %t.strict.log
 // RUN: test ! -e %t.strict.cir
 //
-// WARN-DAG: Diag Warning: {{.*}}lossy lift [stack-adjacent-escape]: local 'uStack_c' (stack offset -12, 4 bytes) in function 'split_record' follows local 'local_10' (stack offset -16, 4 bytes) whose address is taken
-// WARN-DAG: Diag Warning: {{.*}}lossy lift [stack-adjacent-escape]: local 'local_c' (stack offset -12, 4 bytes) in function 'read_second' follows local 'auStack_10' (stack offset -16, 4 bytes) whose address is taken
-// WARN-DAG: Diag Warning: {{.*}}lossy lift [stack-adjacent-escape]: local 'rec_lo' (stack offset -24, 4 bytes) in function 'piece_view' overlaps local 'rec' (stack offset -24, 8 bytes) whose address is taken
+// WARN: Diag Warning: {{.*}}lossy lift [stack-adjacent-escape]: local 'odd' (stack offset -27, 4 bytes) in function 'misaligned' follows local 'tag' (stack offset -28, 1 bytes) whose address is taken
 // WARN-NOT: Diag Error
+// WARN-NOT: in function 'split_record'
+// WARN-NOT: in function 'read_second'
 // WARN-NOT: in function 'overlap'
-// WARN-NOT: local 'used'
-// WARN-NOT: local 'reg'
+// WARN-NOT: in function 'piece_view'
 //
-// ERR-DAG: Diag Error: {{.*}}lossy lift [stack-adjacent-escape]: local 'uStack_c'
-// ERR-DAG: Diag Error: {{.*}}lossy lift [stack-adjacent-escape]: local 'local_c' (stack offset -12, 4 bytes) in function 'read_second'
-// ERR-DAG: Diag Error: {{.*}}lossy lift [stack-adjacent-escape]: local 'rec_lo'
+// C-DAG: (*(undefined4 *)__stack_m16) = param_1;
+// C-DAG: (*(undefined4 *)((unsigned char *)__stack_m16 + 4U)) = param_2;
+// C-DAG: consume(&(*(undefined4 *)__stack_m16));
+// C-DAG: return (*(undefined4 *)((unsigned char *)__stack_m16 + 4U));
+// C-DAG: unsigned int __stack_m24[2];
+// C-DAG: (*(undefined4 *)__stack_m24) = param_1;
+// C-DAG: undefined4 used;
+// C-DAG: undefined4 reg;
+// C-DAG: undefined4 odd;
+// C-DAG: undefined4 local_c;
+//
+// LL-DAG: define {{.*}}void @split_record
+// LL-DAG: alloca [2 x i32]
+//
+// ERR: Diag Error: {{.*}}lossy lift [stack-adjacent-escape]: local 'odd'
 // ERR: Skipping code generation due to prior diagnostics errors
 {
   "architecture": "ARM",
@@ -59,6 +73,13 @@
       "display_name": "split_record",
       "is_intrinsic": false,
       "entry_point": "ram:00010000",
+      "frame": {
+        "size": 16,
+        "local_size": 16,
+        "parameter_size": 0,
+        "parameter_offset": 0,
+        "grows_negative": true
+      },
       "address_ranges": [
         {
           "start": "ram:00010000",
@@ -251,6 +272,13 @@
       "display_name": "read_second",
       "is_intrinsic": false,
       "entry_point": "ram:00010014",
+      "frame": {
+        "size": 12,
+        "local_size": 12,
+        "parameter_size": 0,
+        "parameter_offset": 0,
+        "grows_negative": true
+      },
       "address_ranges": [
         {
           "start": "ram:00010014",
@@ -399,6 +427,13 @@
       "display_name": "overlap",
       "is_intrinsic": false,
       "entry_point": "ram:00010024",
+      "frame": {
+        "size": 12,
+        "local_size": 12,
+        "parameter_size": 0,
+        "parameter_offset": 0,
+        "grows_negative": true
+      },
       "address_ranges": [
         {
           "start": "ram:00010024",
@@ -603,6 +638,13 @@
       "display_name": "consume",
       "is_intrinsic": false,
       "entry_point": "ram:00011000",
+      "frame": {
+        "size": 0,
+        "local_size": 0,
+        "parameter_size": 0,
+        "parameter_offset": 0,
+        "grows_negative": true
+      },
       "address_ranges": [
         {
           "start": "ram:00011000",
@@ -624,6 +666,13 @@
       "display_name": "fill",
       "is_intrinsic": false,
       "entry_point": "ram:00011004",
+      "frame": {
+        "size": 0,
+        "local_size": 0,
+        "parameter_size": 0,
+        "parameter_offset": 0,
+        "grows_negative": true
+      },
       "address_ranges": [
         {
           "start": "ram:00011004",
@@ -854,6 +903,133 @@
         }
       },
       "entry_block": "ram:00020000:entry"
+    },
+    "ram:00030000": {
+      "name": "misaligned",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t0",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": [
+          "t1"
+        ]
+      },
+      "basic_blocks": {
+        "ram:00030000:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "param_1",
+              "type": "t1",
+              "kind": "parameter",
+              "index": 0
+            },
+            "tag": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "live_in": false,
+              "name": "tag",
+              "type": "t8",
+              "storage": [
+                {
+                  "kind": "stack",
+                  "offset": -28,
+                  "size": 1
+                }
+              ]
+            },
+            "odd": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "live_in": false,
+              "name": "odd",
+              "type": "t1",
+              "storage": [
+                {
+                  "kind": "stack",
+                  "offset": -27,
+                  "size": 4
+                }
+              ]
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:00030000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "tag",
+            "odd",
+            "br"
+          ]
+        },
+        "ram:00030000:0:basic": {
+          "operations": {
+            "addr": {
+              "mnemonic": "ADDRESS_OF",
+              "type": "t9",
+              "size": 4,
+              "inputs": [
+                {
+                  "kind": "local",
+                  "operation": "tag",
+                  "type": "t8",
+                  "size": 1
+                }
+              ]
+            },
+            "w_odd": {
+              "mnemonic": "COPY",
+              "type": "t1",
+              "size": 4,
+              "output": {
+                "kind": "local",
+                "operation": "odd"
+              },
+              "inputs": [
+                {
+                  "type": "t1",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "p0"
+                }
+              ]
+            },
+            "call": {
+              "mnemonic": "CALL",
+              "has_return_value": false,
+              "target": {
+                "kind": "function",
+                "function": "EXTERNAL:00000002",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "t9",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "addr"
+                }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": []
+            }
+          },
+          "ordered_operations": [
+            "addr",
+            "w_odd",
+            "call",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:00030000:entry"
     }
   },
   "globals": {},
@@ -900,6 +1076,17 @@
       "size": 8,
       "num_elements": 8,
       "element_type": "t6"
+    },
+    "t8": {
+      "is_signed": true,
+      "name": "char",
+      "size": 1,
+      "kind": "integer"
+    },
+    "t9": {
+      "kind": "pointer",
+      "size": 4,
+      "element_type": "t8"
     }
   },
   "boundary_repairs": []

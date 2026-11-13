@@ -1,7 +1,7 @@
 // An operation whose builder fails is absent from the lifted function.  The
 // default lift reports it as a warning and still lowers; `-strict` turns the
 // report into an error and stops before lowering.  The dropped operation here
-// is a DECLARE_LOCAL that carries a size but no type.
+// is a DECLARE_LOCAL that carries neither a type nor a size.
 //
 // RUN: bash %strip-json-comments %s > %t.json
 // RUN: %patchir-decomp -input %t.json -emit-cir -output %t > %t.log 2>&1
@@ -33,7 +33,7 @@
       "basic_blocks": {
         "ram:1a000000:entry": {
           "operations": {
-            "shadow": { "mnemonic": "DECLARE_LOCAL", "kind": "local", "name": "shadow", "size": 4 },
+            "shadow": { "mnemonic": "DECLARE_LOCAL", "kind": "local", "name": "shadow" },
             "entry.exit": { "mnemonic": "BRANCH", "target_block": "ram:1a000000:0:basic" }
           },
           "ordered_operations": ["shadow", "entry.exit"]

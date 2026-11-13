@@ -184,6 +184,10 @@ namespace patchestry::ast {
             return {};
         }
 
+        if (auto *view = make_local_view(ctx, *vnode.operation, VirtualLoc(ctx))) {
+            return view;
+        }
+
         // Already materialized as a named VarDecl — return a fresh DeclRefExpr.
         if (function_builder().local_variables.contains(*vnode.operation)) {
             auto *var_decl = function_builder().local_variables.at(*vnode.operation);
@@ -259,6 +263,13 @@ namespace patchestry::ast {
         if (!vnode.operation || vnode.kind != Varnode::VARNODE_LOCAL) {
             LOG(ERROR) << "Invalid varnode or local operation.\n";
             return {};
+        }
+
+        if (auto *view = make_local_view(
+                ctx, *vnode.operation, SourceLocation(ctx.getSourceManager(), *vnode.operation)
+            ))
+        {
+            return view;
         }
 
         if (function_builder().local_variables.contains(*vnode.operation)) {

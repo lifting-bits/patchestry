@@ -1,0 +1,274 @@
+// A shadow declaration is a differently sized view of another local's
+// storage: the serializer creates one when a use of a variable has a width
+// other than the variable's.  It carries a size, no type, and (from a current
+// serializer) the key of the local it views and the byte offset inside it.
+// It used to be dropped, taking every operation that used it along.
+//
+//   word_0   1 byte at offset 0 of `word`: lifted as *(unsigned char *)&word
+//   word_1   2 bytes at offset 2 of `word`
+//   word_2   8 bytes, wider than the 4-byte `word`: cannot be a view
+//   legacy_3 older JSON, no `shadow_of`: nothing to tie it to
+//
+// The last two become objects of their own and are reported, a warning by
+// default and an error under -strict.
+//
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-llvm -print-tu -output %t > %t.log 2>&1
+// RUN: %file-check -vv -check-prefix=WARN %s --input-file %t.log
+// RUN: %file-check -vv -check-prefix=C %s --input-file %t.c
+// RUN: test -e %t.ll
+// RUN: not %patchir-decomp -input %t.json -emit-cir -strict -output %t.strict > %t.strict.log 2>&1
+// RUN: %file-check -vv -check-prefix=ERR %s --input-file %t.strict.log
+// RUN: test ! -e %t.strict.cir
+//
+// WARN-DAG: Diag Warning: {{.*}}lossy lift [local-view-detached]: local 'word_2' in function 'shadow_views' is a view (8 bytes) of local 'word' that cannot be tied to it
+// WARN-DAG: Diag Warning: {{.*}}lossy lift [local-view-detached]: local 'legacy_3' in function 'shadow_views' is a view (2 bytes) of another local that cannot be tied to it
+// WARN-NOT: lossy lift [op-dropped]
+// WARN-NOT: Diag Error
+// WARN-NOT: local 'word_0'
+// WARN-NOT: local 'word_1'
+//
+// C: unsigned int word;
+// C: word = a;
+// C: (*(unsigned char *)&word) = 127U;
+// C: (*(unsigned short *)((unsigned char *)&word + 2U)) = 4660U;
+// C: word_2 = 1ULL;
+// C: legacy_3 = 2U;
+// C: return word;
+//
+// ERR-DAG: Diag Error: {{.*}}lossy lift [local-view-detached]: local 'word_2'
+// ERR-DAG: Diag Error: {{.*}}lossy lift [local-view-detached]: local 'legacy_3'
+// ERR: Skipping code generation due to prior diagnostics errors
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "shadow_views",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "type_int"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "a",
+              "type": "type_int",
+              "kind": "parameter",
+              "index": 0
+            },
+            "word": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "live_in": false,
+              "name": "word",
+              "type": "type_int"
+            },
+            "word_lo": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "live_in": false,
+              "name": "word_0",
+              "size": 1,
+              "shadow_of": "word",
+              "shadow_size": 1,
+              "shadow_offset": 0
+            },
+            "word_hi": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "live_in": false,
+              "name": "word_1",
+              "size": 2,
+              "shadow_of": "word",
+              "shadow_size": 2,
+              "shadow_offset": 2
+            },
+            "word_wide": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "live_in": false,
+              "name": "word_2",
+              "size": 8,
+              "shadow_of": "word",
+              "shadow_size": 8
+            },
+            "legacy": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "legacy_3",
+              "size": 2
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "word",
+            "word_lo",
+            "word_hi",
+            "word_wide",
+            "legacy",
+            "br"
+          ]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "w": {
+              "mnemonic": "COPY",
+              "type": "type_int",
+              "size": 4,
+              "output": {
+                "kind": "local",
+                "operation": "word"
+              },
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "p0"
+                }
+              ]
+            },
+            "w_lo": {
+              "mnemonic": "COPY",
+              "type": "type_byte",
+              "size": 1,
+              "output": {
+                "kind": "local",
+                "operation": "word_lo"
+              },
+              "inputs": [
+                {
+                  "type": "type_byte",
+                  "size": 1,
+                  "kind": "constant",
+                  "value": 127
+                }
+              ]
+            },
+            "w_hi": {
+              "mnemonic": "COPY",
+              "type": "type_short",
+              "size": 2,
+              "output": {
+                "kind": "local",
+                "operation": "word_hi"
+              },
+              "inputs": [
+                {
+                  "type": "type_short",
+                  "size": 2,
+                  "kind": "constant",
+                  "value": 4660
+                }
+              ]
+            },
+            "w_wide": {
+              "mnemonic": "COPY",
+              "type": "type_long",
+              "size": 8,
+              "output": {
+                "kind": "local",
+                "operation": "word_wide"
+              },
+              "inputs": [
+                {
+                  "type": "type_long",
+                  "size": 8,
+                  "kind": "constant",
+                  "value": 1
+                }
+              ]
+            },
+            "w_legacy": {
+              "mnemonic": "COPY",
+              "type": "type_short",
+              "size": 2,
+              "output": {
+                "kind": "local",
+                "operation": "legacy"
+              },
+              "inputs": [
+                {
+                  "type": "type_short",
+                  "size": 2,
+                  "kind": "constant",
+                  "value": 2
+                }
+              ]
+            },
+            "r": {
+              "mnemonic": "COPY",
+              "type": "type_int",
+              "size": 4,
+              "inputs": [
+                {
+                  "kind": "local",
+                  "operation": "word",
+                  "type": "type_int",
+                  "size": 4
+                }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "r"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "w",
+            "w_lo",
+            "w_hi",
+            "w_wide",
+            "w_legacy",
+            "r",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": {
+      "name": "unsigned int",
+      "size": 4,
+      "kind": "integer"
+    },
+    "type_byte": {
+      "name": "unsigned char",
+      "size": 1,
+      "kind": "integer"
+    },
+    "type_short": {
+      "name": "unsigned short",
+      "size": 2,
+      "kind": "integer"
+    },
+    "type_long": {
+      "name": "unsigned long long",
+      "size": 8,
+      "kind": "integer"
+    }
+  }
+}

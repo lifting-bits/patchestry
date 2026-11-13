@@ -29,6 +29,33 @@ namespace patchestry::ast {
 namespace patchestry::ast {
     using namespace patchestry::ghidra;
 
+    // Shared stack storage.  Locals the original frame placed next to or
+    // on top of each other, where one of them has its address taken, are
+    // not lifted as separate C objects: they become views into one
+    // backing array, so an access through the escaped address reaches the
+    // same bytes it reached in the binary.
+    struct StackRegion
+    {
+        std::string name;                // C identifier of the backing array
+        int64_t offset     = 0;          // entry-SP-relative start
+        uint64_t size      = 0;          // bytes
+        uint64_t align     = 1;          // bytes, a power of two
+        clang::VarDecl *decl = nullptr;  // created with the first member
+    };
+
+    // How a DECLARE_LOCAL that is not an object of its own is reached.
+    struct LocalView
+    {
+        // Index into `stack_regions`, or -1 for a view of another local.
+        int region = -1;
+        // Key of the local the view is over when `region` is -1.
+        std::string origin;
+        // Byte offset inside the region or the origin.
+        uint64_t offset = 0;
+        // Type the bytes are read and written as.
+        clang::QualType type;
+    };
+
     class [[nodiscard]] FunctionBuilder : public std::enable_shared_from_this< FunctionBuilder >
     {
         friend OpBuilder;
@@ -198,6 +225,10 @@ namespace patchestry::ast {
         std::reference_wrapper< const LossReporter > loss_reporter;
 
         std::unordered_map< std::string, clang::VarDecl * > local_variables;
+
+        // Shared stack storage; see `StackRegion` and `LocalView`.
+        std::vector< StackRegion > stack_regions;
+        std::unordered_map< std::string, LocalView > local_views;
         std::unordered_map< std::string, clang::LabelDecl * > labels_declaration;
         std::unordered_map< std::string, clang::Stmt * > operation_stmts;
 

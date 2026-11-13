@@ -404,11 +404,23 @@ def repo_tool(repo_root: Path, build_type: str, tool_name: str) -> Path:
     )
 
 
+# Flags for the Patcherex2 compile of the patched LLVM IR.  The lifter emits
+# IR with no type-based aliasing, no `inbounds` and wrapping signed arithmetic;
+# the patch compiler must not add those assumptions back.  The optimization
+# level is appended per run (`--patch-opt-level`).
+PATCH_COMPILER_FLAGS = ("-fno-strict-aliasing", "-fwrapv")
+
+
+def patch_compiler_flags(opt_level: str) -> list[str]:
+    return [*PATCH_COMPILER_FLAGS, f"-{opt_level}"]
+
+
 def patch_function_in_elf(
     original_elf: Path,
     patched_ll: Path,
     target_function: str,
     rewritten_elf: Path,
+    extra_compiler_flags: list[str],
 ) -> None:
     snippets = extract_functions_from_llvm_ir(patched_ll.read_text(encoding="utf-8"))
     if target_function not in snippets:
@@ -451,7 +463,11 @@ def patch_function_in_elf(
         },
     )
 
-    compile_opts = {"extension": ".ll", "load_options": PATCHEREX2_LOAD_OPTIONS}
+    compile_opts = {
+        "extension": ".ll",
+        "load_options": PATCHEREX2_LOAD_OPTIONS,
+        "extra_compiler_flags": list(extra_compiler_flags),
+    }
     # Cortex-M / ElfArmBare targets only execute Thumb. InsertFunctionPatch
     # defaults is_thumb=False, which makes patcherex2 compile the patch with
     # -mno-thumb (ARM mode); the BLX from the Thumb trampoline then jumps
@@ -476,7 +492,14 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--fixture-dir", type=Path)
     parser.add_argument("--refresh-ghidra-fixtures", action="store_true")
+    parser.add_argument(
+        "--patch-opt-level",
+        default="O0",
+        choices=["O0", "O1", "O2", "Os", "Oz"],
+        help="optimization level for the Patcherex2 compile of the patched IR",
+    )
     args = parser.parse_args()
+    compiler_flags = patch_compiler_flags(args.patch_opt_level)
 
     repo_root = args.repo_root.resolve()
     output_dir = args.output_dir.resolve()
@@ -580,6 +603,7 @@ def main() -> int:
             patched_ll_path,
             case.function_name,
             rewritten_elf_path,
+            compiler_flags,
         )
 
         transcript_lines = run_qemu(args.qemu_system_arm, rewritten_elf_path)
@@ -591,6 +615,7 @@ def main() -> int:
 
         summary_rows.append(f"{case.name}\tpass\t{rewritten_elf_path}")
 
+    write_lines(output_dir / "patch-compiler-flags.txt", compiler_flags)
     summary_tsv = output_dir / "summary.tsv"
     summary_md = output_dir / "summary.md"
     write_lines(summary_tsv, summary_rows)

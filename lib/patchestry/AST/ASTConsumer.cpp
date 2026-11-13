@@ -155,6 +155,7 @@ namespace patchestry::ast {
 
     void PcodeASTConsumer::HandleTranslationUnit(clang::ASTContext &ctx) {
         type_builder = std::make_unique< TypeBuilder >(ci.getASTContext());
+        type_builder->set_loss_reporter(&loss_reporter);
         if (!get_program().serialized_types.empty()) {
             type_builder->create_types(ctx, get_program().serialized_types);
 

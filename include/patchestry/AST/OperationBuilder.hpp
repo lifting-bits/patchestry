@@ -202,6 +202,13 @@ namespace patchestry::ast {
             clang::SourceLocation loc
         );
 
+        // The lvalue for a local that is a view into shared storage
+        // (`FunctionBuilder::local_views`): `*(T *)(base + offset)`.  Null
+        // when `key` is an ordinary local.
+        clang::Expr *make_local_view(
+            clang::ASTContext &ctx, const std::string &key, clang::SourceLocation loc
+        );
+
         // Public for intrinsic handlers: resolve a serialized type key.
         TypeBuilder &type_builder(void) { return builder->type_builder.get(); }
 

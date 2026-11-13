@@ -326,6 +326,10 @@ public class PcodeSerializer {
 		// Maps (HighVariable, size) → shadow DECLARE_LOCAL operation key.
 		private Map<HighVariable, String> varDeclKeyMap;
 		private Map<String, String> varShadowMap;
+		// Shadow declaration key -> key of the declaration it is a view of,
+		// and -> byte offset of the view inside that variable (-1: unknown).
+		private Map<String, String> shadowOriginMap;
+		private Map<String, Long> shadowOffsetMap;
 		private int shadowVarCounter;
 
 		// Replacement operations. Sometimes we have something that we actually
@@ -1347,6 +1351,10 @@ public class PcodeSerializer {
 				writer.beginObject();
 				writer.name("type").value(label(dtc.getDataType()));
 				writer.name("offset").value(dtc.getOffset());
+				// Bytes the member occupies in the record.  For a dynamically
+				// sized type (a string) this is the only place the length is
+				// known; the type itself reports -1.
+				writer.name("size").value(dtc.getLength());
 
 				if (dtc.getFieldName() != null) {
 					writer.name("name").value(dtc.getFieldName());
@@ -1874,7 +1882,7 @@ public class PcodeSerializer {
 					// If this variable has instances with mismatched sizes,
 					// redirect to a shadow declaration matching this use-site's size.
 					if (hasInstanceSizeMismatch(highVariable)) {
-						String shadowKey = getOrCreateShadowVarKey(highVariable, node.getSize());
+						String shadowKey = getOrCreateShadowVarKey(highVariable, node);
 						if (shadowKey != null) {
 							localKey = shadowKey;
 						}
@@ -3679,14 +3687,37 @@ public class PcodeSerializer {
 		// varnode size differs from the declared variable's size.  Returns the
 		// operation key for the shadow declaration, or the original key if no
 		// split is needed.
-		String getOrCreateShadowVarKey(HighVariable highVariable, int useSize) throws Exception {
+		String getOrCreateShadowVarKey(HighVariable highVariable, Varnode useNode) throws Exception {
 			String origKey = varDeclKeyMap.get(highVariable);
 			if (origKey == null) return null;  // not a tracked local
 
+			int useSize = useNode.getSize();
 			int declSize = highVariable.getSize();
 			if (useSize == declSize) return origKey;  // sizes match, no split
 
-			String shadowKey = origKey + ":shadow:" + Integer.toString(useSize);
+			// Where the use sits inside the variable.  When both are in the
+			// same address space the addresses say so directly.  Otherwise a
+			// narrower use is taken as the least-significant bytes, which is
+			// what a size-mismatched instance of one variable is in practice.
+			// -1: unknown (the use is wider than the variable).
+			long useOffset = -1;
+			Varnode rep = highVariable.getRepresentative();
+			Address repAddress = rep != null ? rep.getAddress() : null;
+			Address useAddress = useNode.getAddress();
+			if (repAddress != null && useAddress != null
+					&& repAddress.getAddressSpace().equals(useAddress.getAddressSpace())
+					&& !rep.isUnique() && !rep.isConstant()) {
+				long delta = useAddress.getOffset() - repAddress.getOffset();
+				if (delta >= 0 && delta + useSize <= declSize) {
+					useOffset = delta;
+				}
+			}
+			if (useOffset < 0 && useSize < declSize) {
+				useOffset = language.isBigEndian() ? declSize - useSize : 0;
+			}
+
+			String shadowKey = origKey + ":shadow:" + Integer.toString(useSize)
+				+ ":" + Long.toString(useOffset);
 			if (varShadowMap.containsKey(shadowKey)) {
 				return varShadowMap.get(shadowKey);
 			}
@@ -3702,6 +3733,8 @@ public class PcodeSerializer {
 
 			String newKey = label(shadowOp);
 			varShadowMap.put(shadowKey, newKey);
+			shadowOriginMap.put(newKey, origKey);
+			shadowOffsetMap.put(newKey, useOffset);
 			return newKey;
 		}
 
@@ -4944,6 +4977,22 @@ public class PcodeSerializer {
 							highVariableOfPcodeOp.getDataType())));
 				}
 			}
+
+			// A shadow is a differently sized view of another declaration's
+			// storage, not a variable of its own: say which one, where in it,
+			// and how wide the view is.
+			if (isShadow) {
+				String shadowKey = label(pcodeOp);
+				String origin = shadowOriginMap.get(shadowKey);
+				if (origin != null) {
+					writer.name("shadow_of").value(origin);
+					writer.name("shadow_size").value(declSize);
+					Long shadowOffset = shadowOffsetMap.get(shadowKey);
+					if (shadowOffset != null && shadowOffset >= 0) {
+						writer.name("shadow_offset").value(shadowOffset);
+					}
+				}
+			}
 		}
 		
 		void serializeDeclareNamedTemporary(PcodeOp pcodeOp) throws Exception {
@@ -5634,6 +5683,8 @@ public class PcodeSerializer {
 			unnamedVarCounter = 0;
 			varDeclKeyMap = new HashMap<>();
 			varShadowMap = new HashMap<>();
+			shadowOriginMap = new HashMap<>();
+			shadowOffsetMap = new HashMap<>();
 			shadowVarCounter = 0;
 
 			FunctionPrototype functionPrototype = null;
@@ -5685,6 +5736,19 @@ public class PcodeSerializer {
 
 			writer.name("entry_point")
 				.value(functionToSerialize.getEntryPoint().toString(true));
+
+			// The frame Ghidra recovered for the function, for comparison
+			// with the frame of the recompiled function.  Sizes are bytes.
+			StackFrame stackFrame = functionToSerialize.getStackFrame();
+			if (stackFrame != null) {
+				writer.name("frame").beginObject();
+				writer.name("size").value(stackFrame.getFrameSize());
+				writer.name("local_size").value(stackFrame.getLocalSize());
+				writer.name("parameter_size").value(stackFrame.getParameterSize());
+				writer.name("parameter_offset").value(stackFrame.getParameterOffset());
+				writer.name("grows_negative").value(stackFrame.growsNegative());
+				writer.endObject();
+			}
 			serializeAddressRanges(functionToSerialize);
 
 			// If we have a high P-Code function, then serialize the blocks.

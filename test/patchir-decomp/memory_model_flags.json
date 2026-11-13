@@ -1,0 +1,307 @@
+// Lifted code states what the binary does to memory; the recovered types and
+// object boundaries are estimates.  The lifter therefore compiles it with
+// type-based aliasing off, pointer overflow defined and signed arithmetic
+// wrapping, so nothing downstream can optimize on a promise the binary never
+// made.  The LLVM IR for a member access, an array index, raw byte arithmetic
+// and signed additions must carry none of: `inbounds`, `nsw`/`nuw`, `!tbaa`,
+// `noalias`, lifetime markers.
+//
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-llvm -print-tu -output %t > %t.log 2>&1
+// RUN: %file-check -vv -check-prefix=C %s --input-file %t.c
+// RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
+//
+// C: *(int *)((char *)arr + 8) = n;
+// C: return rec->second + arr[n] + (*(int *)((char *)arr + 8));
+//
+// LL-NOT: inbounds
+// LL-NOT: nsw
+// LL-NOT: nuw
+// LL-NOT: !tbaa
+// LL-NOT: noalias
+// LL-NOT: llvm.lifetime
+// LL: define {{.*}}@memory_model
+// LL: getelementptr i8, ptr %{{[0-9]+}}, i32 8
+// LL: getelementptr %struct.rec, ptr %{{[0-9]+}}, i32 0, i32 1
+// LL: getelementptr i32, ptr %{{[0-9]+}}, i32 %{{[0-9]+}}
+// LL: add i32
+// LL: add i32
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "memory_model",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "p_rec",
+          "type_intp",
+          "type_int"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "rec",
+              "type": "p_rec",
+              "kind": "parameter",
+              "index": 0
+            },
+            "p1": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "arr",
+              "type": "type_intp",
+              "kind": "parameter",
+              "index": 1
+            },
+            "p2": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "n",
+              "type": "type_int",
+              "kind": "parameter",
+              "index": 2
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "p1",
+            "p2",
+            "br"
+          ]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "field": {
+              "mnemonic": "PTRSUB",
+              "type": "type_intp",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "p_rec",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "p0"
+                },
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 4
+                }
+              ]
+            },
+            "ld_field": {
+              "mnemonic": "LOAD",
+              "type": "type_int",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "type_intp",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "field"
+                }
+              ]
+            },
+            "elem": {
+              "mnemonic": "PTRADD",
+              "type": "type_intp",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "type_intp",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "p1"
+                },
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "p2"
+                },
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 4
+                }
+              ]
+            },
+            "ld_elem": {
+              "mnemonic": "LOAD",
+              "type": "type_int",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "type_intp",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "elem"
+                }
+              ]
+            },
+            "sum": {
+              "mnemonic": "INT_ADD",
+              "type": "type_int",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ld_field"
+                },
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ld_elem"
+                }
+              ]
+            },
+            "raw": {
+              "mnemonic": "PTRSUB",
+              "type": "type_intp",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "type_intp",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "p1"
+                },
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 8
+                }
+              ]
+            },
+            "st": {
+              "mnemonic": "STORE",
+              "inputs": [
+                {
+                  "type": "type_intp",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "raw"
+                },
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "p2"
+                }
+              ]
+            },
+            "ld_raw": {
+              "mnemonic": "LOAD",
+              "type": "type_int",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "type_intp",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "raw"
+                }
+              ]
+            },
+            "sum2": {
+              "mnemonic": "INT_ADD",
+              "type": "type_int",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "sum"
+                },
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ld_raw"
+                }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "sum2"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "raw",
+            "st",
+            "field",
+            "ld_field",
+            "elem",
+            "ld_elem",
+            "sum",
+            "ld_raw",
+            "sum2",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": {
+      "name": "int",
+      "size": 4,
+      "kind": "integer",
+      "is_signed": true
+    },
+    "type_intp": {
+      "kind": "pointer",
+      "size": 4,
+      "element_type": "type_int"
+    },
+    "s_rec": {
+      "name": "rec",
+      "kind": "struct",
+      "size": 8,
+      "fields": [
+        {
+          "type": "type_int",
+          "offset": 0,
+          "name": "first"
+        },
+        {
+          "type": "type_int",
+          "offset": 4,
+          "name": "second"
+        }
+      ]
+    },
+    "p_rec": {
+      "kind": "pointer",
+      "size": 4,
+      "element_type": "s_rec"
+    }
+  }
+}

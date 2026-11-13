@@ -62,6 +62,19 @@ namespace patchestry::frontend {
             ci.getLangOpts().C99       = true;
             ci.getLangOpts().GNUMode   = !lifted;
             ci.getLangOpts().NoBuiltin = false;
+
+            // Lifted code describes what a binary does to memory, not what a C
+            // program is allowed to do.  The recovered types are guesses, two
+            // lifted objects may have been one in the original frame, and
+            // P-Code arithmetic wraps.  Keep every later stage (CIR lowering,
+            // LLVM, the patch compiler) from deriving facts the binary never
+            // promised: no type-based aliasing, no `inbounds` on pointer
+            // arithmetic, no `nsw` on signed arithmetic.
+            if (lifted) {
+                cg_opts.RelaxedAliasing               = true;
+                ci.getLangOpts().PointerOverflowDefined = true;
+                ci.getLangOpts().setSignedOverflowBehavior(clang::LangOptions::SOB_Defined);
+            }
         }
 
         // Source manager whose main file is a placeholder: the lifter builds the

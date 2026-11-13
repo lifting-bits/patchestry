@@ -216,6 +216,17 @@ namespace patchestry::ghidra {
         // Absent for shadow (size-split) declarations and in JSON from a
         // serializer that does not record it.
         std::optional< Storage > storage;
+        // DECLARE_LOCAL only: byte size of a declaration that has no type of
+        // its own (a shadow, see below).
+        std::optional< uint32_t > size;
+        // DECLARE_LOCAL only: a shadow is a differently sized view of another
+        // declaration's storage.  `shadow_of` is that declaration's key,
+        // `shadow_size` the width of the view and `shadow_offset` its byte
+        // offset inside the original (absent when the serializer could not
+        // tell).
+        std::optional< std::string > shadow_of;
+        std::optional< uint32_t > shadow_size;
+        std::optional< uint32_t > shadow_offset;
 
         // Call Operation
         std::optional< OperationTarget > target;
@@ -292,6 +303,16 @@ namespace patchestry::ghidra {
         std::optional< std::string > condition_opcode;
     };
 
+    // The stack frame Ghidra recovered for a function; sizes in bytes.
+    struct StackFrame
+    {
+        int64_t size             = 0;
+        int64_t local_size       = 0;
+        int64_t parameter_size   = 0;
+        int64_t parameter_offset = 0;
+        bool grows_negative      = true;
+    };
+
     struct Function
     {
         std::string name;          // original (possibly mangled) symbol name
@@ -305,6 +326,8 @@ namespace patchestry::ghidra {
         // Optional schema fields; empty on older serializer outputs.
         std::string entry_point;
         std::vector< AddressRange > address_ranges;
+        // Absent in JSON from a serializer that does not record it.
+        std::optional< StackFrame > frame;
 
         // Interrupt-handler metadata from the Ghidra InterruptAnalysis pass.
         // When set, the function is emitted void(void) with an interrupt

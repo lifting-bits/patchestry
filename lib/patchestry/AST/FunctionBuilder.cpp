@@ -106,46 +106,79 @@ namespace patchestry::ast {
             std::string key;
             std::string name;
             int64_t offset     = 0;
-            int64_t size       = 0;
+            int64_t size       = 0; // bytes of storage
+            int64_t extent     = 0; // max(storage, lifted type) bytes
+            int64_t align      = 0; // lifted type alignment, 0 when unknown
+            clang::QualType type;
             bool address_taken = false;
             bool is_read       = false;
             bool is_written    = false;
+            int group          = -1;
         };
 
-        // Every local is lifted as an independent C object.  That loses the
-        // frame layout: when the binary passes the address of one stack slot
-        // to a callee that reads or writes past it (a record the decompiler
-        // split into scalars), the neighbouring slot is a different object in
-        // the lifted code and the access through the pointer no longer reaches
-        // it.  Report a local that
+        // Every local is lifted as an independent C object unless something
+        // says otherwise.  That loses the frame layout: when the binary passes
+        // the address of one stack slot to a callee that reads or writes past
+        // it (a record the decompiler split into scalars, a field of a stack
+        // structure tracked as its own variable), the neighbouring slot is a
+        // different object in the lifted code and the access through the
+        // pointer no longer reaches it.
+        //
+        // A local is at risk when it
         //
         //   - overlaps a local whose address is taken, or
         //   - starts where an address-taken local ends and is only written or
         //     only read by the function itself, so its other half can only
         //     happen through that pointer.
         //
+        // Such locals and the address-taken local they belong to are placed in
+        // one backing array (`regions`) and reached through views at their
+        // recovered offsets (`views`).  A local that cannot be viewed (no
+        // usable type, or an offset its type's alignment does not allow) stays
+        // a separate object and is reported as `stack-adjacent-escape`.
+        //
         // Needs the `storage` the serializer records on DECLARE_LOCAL; without
-        // it nothing is reported.
-        void report_stack_adjacent_escape(
-            const Function &function, const LossReporter &reporter,
-            clang::SourceManager &source_manager
+        // it nothing is merged or reported.
+        void plan_stack_regions(
+            const Function &function, clang::ASTContext &ctx, TypeBuilder &type_builder,
+            const LossReporter &reporter,
+            std::vector< StackRegion > &regions,
+            std::unordered_map< std::string, LocalView > &views
         ) {
-            std::map< std::string, StackLocal > locals;
+            std::vector< StackLocal > locals;
+            std::map< std::string, size_t > index_of;
+            // Sorted keys keep region numbering and report order stable.
+            std::map< std::string, const Operation * > declarations;
             for (const auto &[block_key, block] : function.basic_blocks) {
                 for (const auto &[op_key, op] : block.operations) {
-                    if (op.mnemonic != Mnemonic::OP_DECLARE_LOCAL || !op.storage
-                        || op.storage->size() != 1U || op.storage->front().kind != "stack"
-                        || op.storage->front().size == 0U)
+                    if (op.mnemonic == Mnemonic::OP_DECLARE_LOCAL && op.storage
+                        && op.storage->size() == 1U && op.storage->front().kind == "stack"
+                        && op.storage->front().size != 0U)
                     {
-                        continue;
+                        declarations.emplace(op_key, &op);
                     }
-                    StackLocal local;
-                    local.key    = op_key;
-                    local.name   = op.name.value_or(op_key);
-                    local.offset = op.storage->front().offset;
-                    local.size   = op.storage->front().size;
-                    locals.emplace(op_key, std::move(local));
                 }
+            }
+            for (const auto &[op_key, op] : declarations) {
+                StackLocal local;
+                local.key    = op_key;
+                local.name   = op->name.value_or(op_key);
+                local.offset = op->storage->front().offset;
+                local.size   = op->storage->front().size;
+                local.extent = local.size;
+                if (op->type) {
+                    local.type = type_builder.GetSerializedType(*op->type);
+                }
+                if (!local.type.isNull() && !local.type->isIncompleteType()
+                    && !local.type->isFunctionType())
+                {
+                    local.align  = ctx.getTypeAlignInChars(local.type).getQuantity();
+                    local.extent = std::max< int64_t >(
+                        local.size, ctx.getTypeSizeInChars(local.type).getQuantity()
+                    );
+                }
+                index_of.emplace(op_key, locals.size());
+                locals.push_back(std::move(local));
             }
             if (locals.size() < 2U) {
                 return;
@@ -155,8 +188,8 @@ namespace patchestry::ast {
                 if (vnode.kind != Varnode::VARNODE_LOCAL || !vnode.operation) {
                     return nullptr;
                 }
-                auto iter = locals.find(*vnode.operation);
-                return iter != locals.end() ? &iter->second : nullptr;
+                auto iter = index_of.find(*vnode.operation);
+                return iter != index_of.end() ? &locals[iter->second] : nullptr;
             };
 
             for (const auto &[block_key, block] : function.basic_blocks) {
@@ -178,37 +211,169 @@ namespace patchestry::ast {
                 }
             }
 
-            auto describe = [](const StackLocal &local) {
-                return "'" + local.name + "' (stack offset " + std::to_string(local.offset)
-                    + ", " + std::to_string(local.size) + " bytes)";
+            // Pairs (at-risk local, address-taken local, overlaps?).
+            struct Hazard
+            {
+                size_t local;
+                size_t escaped;
+                bool overlaps;
             };
-
-            for (const auto &[escaped_key, escaped] : locals) {
+            std::vector< Hazard > hazards;
+            for (size_t e = 0; e < locals.size(); ++e) {
+                const auto &escaped = locals[e];
                 if (!escaped.address_taken) {
                     continue;
                 }
                 const int64_t escaped_end = escaped.offset + escaped.size;
-                for (const auto &[key, local] : locals) {
-                    if (key == escaped_key || local.address_taken) {
+                for (size_t l = 0; l < locals.size(); ++l) {
+                    const auto &local = locals[l];
+                    if (l == e || local.address_taken) {
                         continue;
                     }
                     const bool overlaps =
                         local.offset < escaped_end && escaped.offset < local.offset + local.size;
                     const bool follows =
                         local.offset == escaped_end && !(local.is_read && local.is_written);
-                    if (!overlaps && !follows) {
+                    if (overlaps || follows) {
+                        hazards.push_back({ l, e, overlaps });
+                    }
+                }
+            }
+            if (hazards.empty()) {
+                return;
+            }
+
+            // Group the locals each hazard ties together, then pull in every
+            // other stack local that shares bytes with a group: it overlapped
+            // the group in the original frame too.
+            std::vector< size_t > parent(locals.size());
+            for (size_t i = 0; i < parent.size(); ++i) {
+                parent[i] = i;
+            }
+            auto root = [&](size_t i) {
+                while (parent[i] != i) {
+                    parent[i] = parent[parent[i]];
+                    i         = parent[i];
+                }
+                return i;
+            };
+            std::vector< bool > grouped(locals.size(), false);
+            for (const auto &hazard : hazards) {
+                parent[root(hazard.local)] = root(hazard.escaped);
+                grouped[hazard.local]      = true;
+                grouped[hazard.escaped]    = true;
+            }
+            for (bool changed = true; changed;) {
+                changed = false;
+                for (size_t a = 0; a < locals.size(); ++a) {
+                    if (!grouped[a]) {
                         continue;
                     }
-                    reporter.report(
-                        SourceLocation(source_manager, key), "stack-adjacent-escape",
-                        "local " + describe(local) + " in function '" + function.name + "' "
-                            + (overlaps ? "overlaps" : "follows") + " local "
-                            + describe(escaped)
-                            + " whose address is taken; they are lifted as separate objects,"
-                              " so an access through that address does not reach '"
-                            + local.name + "'"
-                    );
+                    for (size_t b = 0; b < locals.size(); ++b) {
+                        if (a == b || (grouped[b] && root(a) == root(b))) {
+                            continue;
+                        }
+                        const bool shares = locals[a].offset < locals[b].offset + locals[b].extent
+                            && locals[b].offset < locals[a].offset + locals[a].extent;
+                        if (shares) {
+                            parent[root(b)] = root(a);
+                            grouped[b]      = true;
+                            changed         = true;
+                        }
+                    }
                 }
+            }
+
+            // One region per group, covering every member that can be viewed.
+            std::map< size_t, int > region_of_root;
+            for (size_t i = 0; i < locals.size(); ++i) {
+                if (!grouped[i]) {
+                    continue;
+                }
+                const auto group = root(i);
+                if (region_of_root.contains(group)) {
+                    continue;
+                }
+                int64_t low      = std::numeric_limits< int64_t >::max();
+                int64_t high     = std::numeric_limits< int64_t >::min();
+                int64_t align    = 1;
+                size_t viewable  = 0;
+                for (size_t m = 0; m < locals.size(); ++m) {
+                    if (!grouped[m] || root(m) != group || locals[m].align == 0) {
+                        continue;
+                    }
+                    low   = std::min(low, locals[m].offset);
+                    high  = std::max(high, locals[m].offset + locals[m].extent);
+                    align = std::max(align, std::min< int64_t >(locals[m].align, 8));
+                    ++viewable;
+                }
+                // Offsets are relative to the stack pointer at entry, which the
+                // ABI keeps aligned; starting the region on an alignment
+                // boundary keeps each member's typed access aligned.
+                low = low >= 0 ? low / align * align : -((-low + align - 1) / align * align);
+                size_t aligned = 0;
+                for (size_t m = 0; m < locals.size(); ++m) {
+                    if (grouped[m] && root(m) == group && locals[m].align != 0
+                        && (locals[m].offset - low) % locals[m].align == 0)
+                    {
+                        ++aligned;
+                    }
+                }
+                if (viewable < 2U || aligned < 2U) {
+                    continue;
+                }
+                StackRegion region;
+                region.offset = low;
+                region.align  = static_cast< uint64_t >(align);
+                region.size   = static_cast< uint64_t >(
+                    (high - low + align - 1) / align * align
+                );
+                region.name = "__stack_" + std::string(low < 0 ? "m" : "p")
+                    + std::to_string(low < 0 ? -low : low);
+                region_of_root.emplace(group, static_cast< int >(regions.size()));
+                regions.push_back(std::move(region));
+            }
+
+            for (size_t i = 0; i < locals.size(); ++i) {
+                auto &local = locals[i];
+                if (!grouped[i] || local.align == 0) {
+                    continue;
+                }
+                auto iter = region_of_root.find(root(i));
+                if (iter == region_of_root.end()) {
+                    continue;
+                }
+                const auto relative = local.offset - regions[static_cast< size_t >(iter->second)].offset;
+                if (relative % local.align != 0) {
+                    continue; // a typed access here would be misaligned
+                }
+                local.group = iter->second;
+                LocalView view;
+                view.region = iter->second;
+                view.offset = static_cast< uint64_t >(relative);
+                view.type   = local.type;
+                views.emplace(local.key, std::move(view));
+            }
+
+            auto describe = [](const StackLocal &local) {
+                return "'" + local.name + "' (stack offset " + std::to_string(local.offset)
+                    + ", " + std::to_string(local.size) + " bytes)";
+            };
+            for (const auto &hazard : hazards) {
+                const auto &local   = locals[hazard.local];
+                const auto &escaped = locals[hazard.escaped];
+                if (local.group >= 0 && local.group == escaped.group) {
+                    continue; // both are views of one region: nothing lost
+                }
+                reporter.report(
+                    SourceLocation(ctx.getSourceManager(), local.key), "stack-adjacent-escape",
+                    "local " + describe(local) + " in function '" + function.name + "' "
+                        + (hazard.overlaps ? "overlaps" : "follows") + " local "
+                        + describe(escaped)
+                        + " whose address is taken; they are lifted as separate objects,"
+                          " so an access through that address does not reach '"
+                        + local.name + "'"
+                );
             }
         }
 
@@ -284,8 +449,9 @@ namespace patchestry::ast {
                 }
             }
 
-            report_stack_adjacent_escape(
-                function, loss_reporter, ci.getASTContext().getSourceManager()
+            plan_stack_regions(
+                function, ci.getASTContext(), type_builder, loss_reporter, stack_regions,
+                local_views
             );
 
             if (auto *function_decl = create_declaration(

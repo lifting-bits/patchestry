@@ -3802,17 +3802,20 @@ namespace patchestry::ast {
                 return nullptr;
             }
 
+            // Only a member that starts exactly at the offset names it.  A
+            // bit-field has no address and padding is not a recovered member;
+            // an offset inside a member falls back to byte arithmetic.
             const auto &layout = ctx.getASTRecordLayout(decl);
             for (auto *field : decl->fields()) {
-                auto offset =
-                    static_cast< unsigned int >(layout.getFieldOffset(field->getFieldIndex()));
-                if (offset >= static_cast< uint64_t >(target_offset) * 8U) {
+                if (field->isBitField() || field->getName().starts_with("__pad_")) {
+                    continue;
+                }
+                if (layout.getFieldOffset(field->getFieldIndex())
+                    == static_cast< uint64_t >(target_offset) * 8U)
+                {
                     return field;
                 }
             }
-
-            LOG(ERROR) << "Failed to find field decl at offset " << target_offset
-                       << " in record type\n";
             return nullptr;
         };
 
@@ -3833,27 +3836,9 @@ namespace patchestry::ast {
 
         auto *field = find_field_decl(ctx, definition, offset);
         if (field == nullptr) {
-            // Field not found — fall back to byte-offset pointer arithmetic:
-            //   *(pointee_type*)((char*)base + offset)
-            auto char_ptr_type = ctx.getPointerType(ctx.CharTy);
-            auto *char_ptr     = make_cast(ctx, base, char_ptr_type, loc);
-            if (!char_ptr) {
-                return make_reinterpret_cast(
-                    ctx, base, ctx.getPointerType(base_type->getPointeeType()), loc
-                );
-            }
-            auto *offset_lit = clang::IntegerLiteral::Create(
-                ctx, llvm::APInt(ctx.getIntWidth(ctx.IntTy), offset),
-                ctx.IntTy, loc
-            );
-            auto add_result = sema().CreateBuiltinBinOp(loc, clang::BO_Add, char_ptr, offset_lit);
-            if (add_result.isInvalid()) {
-                return make_reinterpret_cast(
-                    ctx, base, ctx.getPointerType(base_type->getPointeeType()), loc
-                );
-            }
-            auto result_ptr_type = ctx.getPointerType(base_type->getPointeeType());
-            return make_cast(ctx, add_result.getAs< clang::Expr >(), result_ptr_type, loc);
+            // No member starts at this offset; the caller does the access
+            // with byte arithmetic.
+            return nullptr;
         }
 
         clang::DeclarationNameInfo member_name_info(field->getDeclName(), loc);
@@ -3894,14 +3879,12 @@ namespace patchestry::ast {
         clang::Expr *ptr_expr = nullptr;
 
         auto input_type = input_expr->getType();
-        if (input_type->isPointerType() && input_type->getPointeeType()->isRecordType()) {
-            auto *mem_expr = make_member_expr(
-                ctx, input_expr, static_cast< unsigned >(*op.inputs[1].value)
-            );
-            if (mem_expr == nullptr) {
-                LOG(ERROR) << "PTRSUB failed to build member access. key: " << op.key << "\n";
-                return { nullptr, false };
-            }
+        auto *mem_expr =
+            input_type->isPointerType() && input_type->getPointeeType()->isRecordType()
+                && op.inputs[1].value
+            ? make_member_expr(ctx, input_expr, static_cast< unsigned >(*op.inputs[1].value))
+            : nullptr;
+        if (mem_expr != nullptr) {
             // Array-typed member: decay to pointer-to-element, not `&member`
             // (which yields T(*)[N] and prints a spurious extra `&`).
             clang::Expr *field_ptr = nullptr;
@@ -3918,7 +3901,11 @@ namespace patchestry::ast {
                         .get();
             }
             ptr_expr = make_cast(ctx, field_ptr, op_type, op_loc);
-        } else {
+        }
+
+        // No member starts at the offset (it points into a member, at
+        // padding, or the base is not a record pointer): byte arithmetic.
+        if (ptr_expr == nullptr) {
             auto *byte_offset = AS_EXPR_OR_NULL(
                 create_varnode(ctx, function, op.inputs[1], op_loc), op.key);
             if (!byte_offset) {
@@ -4216,8 +4203,151 @@ namespace patchestry::ast {
         return { create_assign_operation(ctx, cast, output_expr, op_loc), false };
     }
 
+    clang::Expr *OpBuilder::make_local_view(
+        clang::ASTContext &ctx, const std::string &key, clang::SourceLocation loc
+    ) {
+        auto &views = function_builder().local_views;
+        auto iter   = views.find(key);
+        if (iter == views.end() || iter->second.type.isNull()) {
+            return nullptr;
+        }
+        const auto &view = iter->second;
+        if (loc.isInvalid()) {
+            loc = VirtualLoc(ctx);
+        }
+
+        // Address of the first byte of the storage the view is over.
+        clang::Expr *base = nullptr;
+        if (view.region >= 0) {
+            auto *decl = function_builder().stack_regions[static_cast< size_t >(view.region)].decl;
+            if (decl == nullptr) {
+                return nullptr; // region not declared yet
+            }
+            base = clang::DeclRefExpr::Create(
+                ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(), decl, false, loc,
+                decl->getType(), clang::VK_LValue
+            );
+            base = make_implicit_cast(
+                ctx, base, ctx.getArrayDecayedType(decl->getType()),
+                clang::CastKind::CK_ArrayToPointerDecay
+            );
+        } else {
+            clang::Expr *origin = make_local_view(ctx, view.origin, loc);
+            if (origin == nullptr) {
+                auto local = function_builder().local_variables.find(view.origin);
+                if (local == function_builder().local_variables.end()) {
+                    return nullptr;
+                }
+                origin = clang::DeclRefExpr::Create(
+                    ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(),
+                    local->second, false, loc, local->second->getType(), clang::VK_LValue
+                );
+            }
+            auto address = sema().BuildUnaryOp(sema().getCurScope(), loc, clang::UO_AddrOf, origin);
+            if (address.isInvalid()) {
+                return nullptr;
+            }
+            base = address.getAs< clang::Expr >();
+        }
+
+        // Byte arithmetic, so the offset is not scaled by the base's type.
+        auto byte_pointer = ctx.getPointerType(ctx.UnsignedCharTy);
+        if (view.offset != 0 && !ctx.hasSameUnqualifiedType(base->getType(), byte_pointer)) {
+            base = make_explicit_cast(ctx, base, byte_pointer, loc);
+            if (base == nullptr) {
+                return nullptr;
+            }
+        }
+        if (view.offset != 0) {
+            auto *offset = clang::IntegerLiteral::Create(
+                ctx, llvm::APInt(ctx.getIntWidth(ctx.UnsignedIntTy), view.offset),
+                ctx.UnsignedIntTy, loc
+            );
+            auto sum = sema().CreateBuiltinBinOp(loc, clang::BO_Add, base, offset);
+            if (sum.isInvalid()) {
+                return nullptr;
+            }
+            base = new (ctx) clang::ParenExpr(loc, loc, sum.getAs< clang::Expr >());
+        }
+
+        auto *typed = make_explicit_cast(ctx, base, ctx.getPointerType(view.type), loc);
+        if (typed == nullptr) {
+            return nullptr;
+        }
+        auto deref = sema().BuildUnaryOp(sema().getCurScope(), loc, clang::UO_Deref, typed);
+        if (deref.isInvalid()) {
+            return nullptr;
+        }
+        return new (ctx) clang::ParenExpr(loc, loc, deref.getAs< clang::Expr >());
+    }
+
     std::pair< clang::Stmt *, bool >
     OpBuilder::create_declare_local(clang::ASTContext &ctx, const Operation &op) {
+        auto op_loc           = SourceLocation(ctx.getSourceManager(), op.key);
+        const auto &fn_name   = function_builder().function.get().name;
+
+        // A shadow is a view of another declaration's storage with a
+        // different width.  It has no type of its own, only a size.
+        const auto shadow_size = op.shadow_size ? op.shadow_size : (op.type ? std::nullopt : op.size);
+        if (op.name && shadow_size && *shadow_size > 0 && (op.shadow_of || !op.type)) {
+            clang::QualType view_type =
+                ctx.getIntTypeForBitwidth(*shadow_size * 8U, /*Signed=*/0);
+            if (view_type.isNull()) {
+                view_type = ctx.getConstantArrayType(
+                    ctx.UnsignedCharTy, llvm::APInt(32U, *shadow_size), nullptr,
+                    clang::ArraySizeModifier::Normal, 0
+                );
+            }
+
+            // Where the original lives decides whether the view fits in it.
+            auto &views       = function_builder().local_views;
+            auto &variables   = function_builder().local_variables;
+            uint64_t capacity = 0;
+            if (op.shadow_of && op.shadow_offset) {
+                if (auto origin_view = views.find(*op.shadow_of);
+                    origin_view != views.end() && !origin_view->second.type.isNull())
+                {
+                    capacity = static_cast< uint64_t >(
+                        ctx.getTypeSizeInChars(origin_view->second.type).getQuantity()
+                    );
+                } else if (auto origin_var = variables.find(*op.shadow_of);
+                           origin_var != variables.end()
+                           && !origin_var->second->getType()->isIncompleteType())
+                {
+                    capacity = static_cast< uint64_t >(
+                        ctx.getTypeSizeInChars(origin_var->second->getType()).getQuantity()
+                    );
+                }
+            }
+            if (capacity != 0
+                && static_cast< uint64_t >(*op.shadow_offset) + *shadow_size <= capacity)
+            {
+                LocalView view;
+                view.origin = *op.shadow_of;
+                view.offset = *op.shadow_offset;
+                view.type   = view_type;
+                views.insert_or_assign(op.key, std::move(view));
+                return std::make_pair(nullptr, true);
+            }
+
+            // The original is unknown, not declared yet, or too small for the
+            // view: the shadow becomes an object of its own, which no longer
+            // shares updates with the variable it was a view of.
+            function_builder().loss_reporter.get().report(
+                op_loc, "local-view-detached",
+                "local '" + *op.name + "' in function '" + fn_name + "' is a view ("
+                    + std::to_string(*shadow_size) + " bytes) of "
+                    + (op.shadow_of ? "local '" + *op.shadow_of + "'" : "another local")
+                    + " that cannot be tied to it; it is lifted as a separate object. key: "
+                    + op.key
+            );
+            auto *detached =
+                create_variable_decl(ctx, sema().CurContext, *op.name, view_type, op_loc);
+            detached->setIsUsed();
+            variables.emplace(op.key, detached);
+            return std::make_pair(create_decl_stmt(ctx, detached, op_loc), false);
+        }
+
         if (!op.name || !op.type) {
             LOG(ERROR) << "Local/temporary variable declaration has invalid name or types.\n";
             return {};
@@ -4229,7 +4359,6 @@ namespace patchestry::ast {
                        << op.key << "\n";
             return {};
         }
-        auto op_loc          = SourceLocation(ctx.getSourceManager(), op.key);
 
         std::string var_name = *op.name;
         auto &name_counts    = function_builder().declared_name_counts;
@@ -4274,6 +4403,33 @@ namespace patchestry::ast {
                       "uninitialized local. key: " + op.key
             );
         }
+        // A member of a shared stack region is not an object of its own; the
+        // region's backing array is declared with its first member.
+        if (auto view = function_builder().local_views.find(op.key);
+            view != function_builder().local_views.end() && view->second.region >= 0)
+        {
+            auto &region =
+                function_builder().stack_regions[static_cast< size_t >(view->second.region)];
+            if (region.decl != nullptr) {
+                return std::make_pair(nullptr, true);
+            }
+            auto element = ctx.getIntTypeForBitwidth(
+                static_cast< unsigned >(region.align * 8U), /*Signed=*/0
+            );
+            if (element.isNull()) {
+                element      = ctx.UnsignedCharTy;
+                region.align = 1;
+            }
+            auto region_type = ctx.getConstantArrayType(
+                element, llvm::APInt(32U, region.size / region.align), nullptr,
+                clang::ArraySizeModifier::Normal, 0
+            );
+            region.decl =
+                create_variable_decl(ctx, sema().CurContext, region.name, region_type, op_loc);
+            region.decl->setIsUsed();
+            return std::make_pair(create_decl_stmt(ctx, region.decl, op_loc), false);
+        }
+
         if (!inserted) {
             // Variable coalescing (structural): when multiple SSA
             // versions of the same register have the same type, reuse
