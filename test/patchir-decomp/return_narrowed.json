@@ -7,6 +7,8 @@
 //   ret_wide_declared   u64 f(u64 v) { return v; }   ret i64, no report
 //   ret_wide_narrowed   u32 f(u64 v) { return v; }   high word dropped
 //   ret_missing         u32 f(u32 a) { return; }     zero returned
+//   ret_promoted        u8 f(u32 a, u32 b) { return a == b; }   no report: the
+//                       P-Code value is 1 byte; only the C expression is an int
 //
 // RUN: bash %strip-json-comments %s > %t.json
 // RUN: %patchir-decomp -input %t.json -emit-llvm -print-tu -output %t > %t.log 2>&1
@@ -20,11 +22,13 @@
 // WARN-DAG: Diag Warning: {{.*}}lossy lift [return-narrowed]: 64-bit returned value truncated to the declared 32-bit return type 'unsigned int' in function 'ret_wide_narrowed'
 // WARN-DAG: Diag Warning: {{.*}}lossy lift [return-synthesized]: RETURN carries no value but the return type is 'unsigned int'; a zero value is returned in function 'ret_missing'
 // WARN-NOT: in function 'ret_wide_declared'
+// WARN-NOT: in function 'ret_promoted'
 // WARN-NOT: Diag Error
 //
 // C-DAG: return (unsigned int)v;
 // C-DAG: return v;
 // C-DAG: return (unsigned int)0;
+// C-DAG: return a == b;
 //
 // LL-DAG: define dso_local i64 @ret_wide_declared(i64
 // LL-DAG: define dso_local i32 @ret_wide_narrowed(i64
@@ -197,6 +201,93 @@
         }
       },
       "entry_block": "ram:10000200:entry"
+    },
+    "ram:10000300": {
+      "name": "ret_promoted",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_u8",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": [
+          "type_int",
+          "type_int"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000300:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "a",
+              "type": "type_int",
+              "kind": "parameter",
+              "index": 0
+            },
+            "p1": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "b",
+              "type": "type_int",
+              "kind": "parameter",
+              "index": 1
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000300:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "p1",
+            "br"
+          ]
+        },
+        "ram:10000300:0:basic": {
+          "operations": {
+            "eq": {
+              "mnemonic": "INT_EQUAL",
+              "type": "type_bool",
+              "size": 1,
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "p0"
+                },
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "p1"
+                }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "kind": "constant",
+                  "value": 0
+                },
+                {
+                  "type": "type_bool",
+                  "size": 1,
+                  "kind": "temporary",
+                  "operation": "eq"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "eq",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000300:entry"
     }
   },
   "globals": {},
@@ -215,6 +306,16 @@
       "name": "void",
       "size": 0,
       "kind": "void"
+    },
+    "type_u8": {
+      "name": "unsigned char",
+      "size": 1,
+      "kind": "integer"
+    },
+    "type_bool": {
+      "name": "bool",
+      "size": 1,
+      "kind": "boolean"
     }
   }
 }

@@ -2309,17 +2309,29 @@ namespace patchestry::ast {
                     // truncated by the cast below.  That is how a value Ghidra
                     // recovered across two registers (r0:r1) loses its high
                     // half when the prototype only names the low register.
-                    // A boolean return type is exempt: the cast is a `!= 0`
-                    // test, not a truncation.
-                    const auto value_type    = ret_expr->getType();
+                    //
+                    // The width that matters is the P-Code varnode's, not the
+                    // Clang expression's: C makes `a == b` an int and promotes
+                    // 8- and 16-bit arithmetic to int, so the expression is
+                    // routinely wider than the value the binary returns.  The
+                    // varnode's own size is used when present, else the size
+                    // of its serialized type; with neither, nothing is known
+                    // and nothing is reported.
                     const auto declared_type = ret_type_it->second;
-                    if (value_type->isScalarType() && declared_type->isScalarType()
-                        && !declared_type->isBooleanType()
-                        && ctx.getTypeSize(value_type) > ctx.getTypeSize(declared_type))
+                    uint64_t value_bits      = uint64_t{ op.inputs[idx].size } * 8U;
+                    if (value_bits == 0U && !op.inputs[idx].type_key.empty()) {
+                        auto varnode_type =
+                            type_builder().GetSerializedType(op.inputs[idx].type_key);
+                        if (!varnode_type.isNull() && varnode_type->isScalarType()) {
+                            value_bits = ctx.getTypeSize(varnode_type);
+                        }
+                    }
+                    if (declared_type->isScalarType()
+                        && value_bits > ctx.getTypeSize(declared_type))
                     {
                         report_lossy(
                             "return-narrowed",
-                            std::to_string(ctx.getTypeSize(value_type)) + "-bit returned value"
+                            std::to_string(value_bits) + "-bit returned value"
                                 " truncated to the declared "
                                 + std::to_string(ctx.getTypeSize(declared_type))
                                 + "-bit return type '" + declared_type.getAsString() + "'"
