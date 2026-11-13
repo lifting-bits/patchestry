@@ -1,0 +1,123 @@
+// A call argument the JSON parser cannot deserialize keeps its position.  The
+// Ghidra serializer writes `"kind": "unknown"` for a varnode it cannot
+// classify; the parser used to skip such an input, which moved every later
+// argument one parameter to the left before the lifter saw the call.
+//
+//   ext_fixed(a, <unknown>, b)   declared (int, int, int): was ext_fixed(a, b, 0U)
+//   ext_var(a, <unknown>, b)     declared (int, ...):      was ext_var(a, b), with
+//                                no diagnostic even under -strict
+//   ext_obj(a, 7, b)             the middle input is not a JSON object
+//
+// Each call is now dropped and reported, a warning by default and an error
+// under -strict.
+//
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-cir -print-tu -output %t > %t.log 2>&1
+// RUN: %file-check -vv -check-prefix=WARN %s --input-file %t.log
+// RUN: %file-check -vv -check-prefix=C %s --input-file %t.c
+// RUN: test -e %t.cir
+// RUN: not %patchir-decomp -input %t.json -emit-cir -strict -output %t.strict > %t.strict.log 2>&1
+// RUN: %file-check -vv -check-prefix=ERR %s --input-file %t.strict.log
+// RUN: test ! -e %t.strict.cir
+//
+// WARN-DAG: Diag Warning: {{.*}}lossy lift [op-dropped]: CALL operation 'call_fixed' in function 'call_arg_unparsed_input' produced no statement
+// WARN-DAG: Diag Warning: {{.*}}lossy lift [op-dropped]: CALL operation 'call_var' in function 'call_arg_unparsed_input' produced no statement
+// WARN-DAG: Diag Warning: {{.*}}lossy lift [op-dropped]: CALL operation 'call_obj' in function 'call_arg_unparsed_input' produced no statement
+// WARN-NOT: lossy lift [call-arg-synthesized]
+// WARN-NOT: Diag Error
+//
+// C-NOT: ext_fixed(a
+// C-NOT: ext_var(a
+// C-NOT: ext_obj(a
+//
+// ERR-DAG: Diag Error: {{.*}}lossy lift [op-dropped]: CALL operation 'call_fixed'
+// ERR-DAG: Diag Error: {{.*}}lossy lift [op-dropped]: CALL operation 'call_var'
+// ERR-DAG: Diag Error: {{.*}}lossy lift [op-dropped]: CALL operation 'call_obj'
+// ERR: Skipping code generation due to prior diagnostics errors
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "call_arg_unparsed_input",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["type_int", "type_int"]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "p0": { "mnemonic": "DECLARE_PARAMETER", "name": "a", "type": "type_int", "kind": "parameter", "index": 0 },
+            "p1": { "mnemonic": "DECLARE_PARAMETER", "name": "b", "type": "type_int", "kind": "parameter", "index": 1 },
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:10000000:0:basic" }
+          },
+          "ordered_operations": ["p0", "p1", "br"]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "call_fixed": {
+              "mnemonic": "CALL",
+              "has_return_value": false,
+              "target": { "kind": "function", "function": "EXTERNAL:00000001", "is_variadic": false, "is_noreturn": false },
+              "inputs": [
+                { "type": "type_int", "kind": "parameter", "operation": "p0" },
+                { "type": "type_int", "kind": "unknown" },
+                { "type": "type_int", "kind": "parameter", "operation": "p1" }
+              ]
+            },
+            "call_var": {
+              "mnemonic": "CALL",
+              "has_return_value": false,
+              "target": { "kind": "function", "function": "EXTERNAL:00000002", "is_variadic": true, "is_noreturn": false },
+              "inputs": [
+                { "type": "type_int", "kind": "parameter", "operation": "p0" },
+                { "type": "type_int", "kind": "unknown" },
+                { "type": "type_int", "kind": "parameter", "operation": "p1" }
+              ]
+            },
+            "call_obj": {
+              "mnemonic": "CALL",
+              "has_return_value": false,
+              "target": { "kind": "function", "function": "EXTERNAL:00000003", "is_variadic": false, "is_noreturn": false },
+              "inputs": [
+                { "type": "type_int", "kind": "parameter", "operation": "p0" },
+                7,
+                { "type": "type_int", "kind": "parameter", "operation": "p1" }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": []
+            }
+          },
+          "ordered_operations": ["call_fixed", "call_var", "call_obj", "ret"]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    },
+    "EXTERNAL:00000001": {
+      "name": "ext_fixed",
+      "is_intrinsic": false,
+      "type": { "return_type": "type_void", "is_variadic": false, "is_noreturn": false, "parameter_types": ["type_int", "type_int", "type_int"] }
+    },
+    "EXTERNAL:00000002": {
+      "name": "ext_var",
+      "is_intrinsic": false,
+      "type": { "return_type": "type_void", "is_variadic": true, "is_noreturn": false, "parameter_types": ["type_int"] }
+    },
+    "EXTERNAL:00000003": {
+      "name": "ext_obj",
+      "is_intrinsic": false,
+      "type": { "return_type": "type_void", "is_variadic": false, "is_noreturn": false, "parameter_types": ["type_int", "type_int", "type_int"] }
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": { "name": "unsigned int", "size": 4, "kind": "integer" },
+    "type_void": { "name": "void", "size": 0, "kind": "void" }
+  }
+}

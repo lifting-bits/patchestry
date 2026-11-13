@@ -994,23 +994,33 @@ namespace patchestry::ghidra {
             return std::nullopt;
         }
 
+        // A varnode that cannot be deserialized keeps its slot as a
+        // VARNODE_UNKNOWN placeholder.  Skipping it would shift every later
+        // input into the wrong position (a call argument into the wrong
+        // parameter) and make a lost output look like an operation that never
+        // had one.  The lifter cannot build a VARNODE_UNKNOWN, so the consuming
+        // operation fails and is reported instead of being lifted wrong.
+        auto unknown_varnode = []() { return Varnode(Varnode::VARNODE_UNKNOWN, 0U, ""); };
+
         Operation operation;
         operation.mnemonic = mnemonic;
         if (const auto *maybe_output = pcode_obj.getObject("output")) {
-            if (auto maybe_varnode = create_varnode(*maybe_output)) {
-                operation.output = std::move(*maybe_varnode);
-            }
+            auto maybe_varnode = create_varnode(*maybe_output);
+            operation.output   = maybe_varnode ? std::move(*maybe_varnode) : unknown_varnode();
         }
 
         if (const auto *input_array = pcode_obj.getArray("inputs")) {
             for (auto input : *input_array) {
                 const auto *input_obj = input.getAsObject();
                 if (!input_obj) {
+                    LOG(ERROR) << "Operation input is not an object.\n";
+                    operation.inputs.emplace_back(unknown_varnode());
                     continue;
                 }
-                if (auto maybe_varnode = create_varnode(*input_obj)) {
-                    operation.inputs.emplace_back(std::move(*maybe_varnode));
-                }
+                auto maybe_varnode = create_varnode(*input_obj);
+                operation.inputs.emplace_back(
+                    maybe_varnode ? std::move(*maybe_varnode) : unknown_varnode()
+                );
             }
         }
 
