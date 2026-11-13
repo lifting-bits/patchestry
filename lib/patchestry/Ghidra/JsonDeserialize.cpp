@@ -1037,6 +1037,10 @@ namespace patchestry::ghidra {
             operation.index = static_cast< uint32_t >(*index);
         }
 
+        if (auto live_in = pcode_obj.getBoolean("live_in")) {
+            operation.live_in = *live_in;
+        }
+
         // Deserialize operation specific fields
         switch (operation.mnemonic) {
             case Mnemonic::OP_CALL:

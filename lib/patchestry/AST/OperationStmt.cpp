@@ -4118,20 +4118,42 @@ namespace patchestry::ast {
         auto &name_counts    = function_builder().declared_name_counts;
         auto [it, inserted]  = name_counts.try_emplace(var_name, 0);
 
-        // Ghidra names a variable `unaff_<reg>` when the function reads a
-        // register it never wrote and that is not a parameter, and `in_<loc>`
-        // for any other input it could not bind to the prototype.  Both are
-        // lifted as ordinary uninitialized locals, so the value the binary
-        // read from the caller's state is not the value the lifted code reads.
-        if (inserted
-            && (llvm::StringRef(var_name).starts_with("unaff_")
-                || llvm::StringRef(var_name).starts_with("in_")))
-        {
+        // A local the function reads before defining it holds caller state
+        // the prototype does not cover (Ghidra typically names it
+        // `unaff_<reg>` or `in_<loc>`).  It is lifted as an ordinary
+        // uninitialized local, so the lifted code does not read the value the
+        // binary read.
+        //
+        // The serializer records this as `live_in`.  JSON without the field
+        // falls back to the naming convention, and because a name alone proves
+        // nothing (a symbol may be called `in_count`), also requires that no
+        // operation in the function writes the local.
+        auto is_live_in = [&]() {
+            if (op.live_in.has_value()) {
+                return *op.live_in;
+            }
+            if (!llvm::StringRef(var_name).starts_with("unaff_")
+                && !llvm::StringRef(var_name).starts_with("in_"))
+            {
+                return false;
+            }
+            for (const auto &[_, block] : function_builder().function.get().basic_blocks) {
+                for (const auto &[_, other] : block.operations) {
+                    if (other.output && other.output->operation
+                        && *other.output->operation == op.key)
+                    {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        };
+        if (inserted && is_live_in()) {
             function_builder().loss_reporter.get().report(
                 op_loc, "unaffected-register-use",
                 "local '" + var_name + "' in function '"
                     + function_builder().function.get().name
-                    + "' is an input the prototype does not cover; it is lifted as an "
+                    + "' is read before the function defines it; it is lifted as an "
                       "uninitialized local. key: " + op.key
             );
         }

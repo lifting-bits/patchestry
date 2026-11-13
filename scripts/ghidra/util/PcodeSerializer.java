@@ -4855,6 +4855,36 @@ public class PcodeSerializer {
 			HighSymbol highSymbol = highVariableOfPcodeOp.getSymbol();
 			writer.name("kind").value("local");  // So that it also looks like an input/output.
 
+			// A varnode with no defining op that is an input to the function
+			// is a value the function reads before writing it.  When that
+			// varnode is a register, or a stack slot in the caller's frame,
+			// the local holds caller state the prototype does not cover; the
+			// decompiler names most of these `unaff_*` or `in_*`, but the name
+			// is only a convention, so record the fact itself.
+			//
+			// An input varnode in the function's own frame is not counted: it
+			// is a local whose address escapes (written by a callee through a
+			// pointer) or a real uninitialized read, and an ordinary C local
+			// reproduces both.
+			boolean liveIn = false;
+			boolean stackGrowsNegative = currentProgram.getCompilerSpec().stackGrowsNegative();
+			Varnode[] instances = highVariableOfPcodeOp.getInstances();
+			if (instances != null) {
+				for (Varnode instance : instances) {
+					if (instance == null || !instance.isInput()) {
+						continue;
+					}
+					Address address = instance.getAddress();
+					boolean callerFrame = address != null && address.isStackAddress()
+						&& (stackGrowsNegative ? address.getOffset() >= 0 : address.getOffset() < 0);
+					if (instance.isRegister() || callerFrame) {
+						liveIn = true;
+						break;
+					}
+				}
+			}
+			writer.name("live_in").value(liveIn);
+
 			// Check if this is a shadow (size-split) declaration.
 			// Shadow ops are created by getOrCreateShadowVarKey and their
 			// output varnode size differs from the original HighVariable's size.

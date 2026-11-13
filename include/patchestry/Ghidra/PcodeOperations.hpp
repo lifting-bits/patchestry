@@ -190,6 +190,10 @@ namespace patchestry::ghidra {
         std::optional< std::string > name;
         std::optional< std::string > type;
         std::optional< uint32_t > index;
+        // DECLARE_LOCAL only: true when Ghidra found the variable read before
+        // the function defines it (one of its varnodes is a function input).
+        // Absent in JSON from a serializer that does not record it.
+        std::optional< bool > live_in;
 
         // Call Operation
         std::optional< OperationTarget > target;

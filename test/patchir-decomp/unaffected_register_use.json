@@ -1,8 +1,18 @@
-// Ghidra names a variable `unaff_<reg>` when a function reads a register it
-// never wrote and that is not a parameter, and `in_<location>` for any other
-// input the prototype does not cover.  The lifter declares both as ordinary
-// uninitialized locals, so the lifted function does not read the value the
-// binary read.  Each such local is reported; an ordinary local is not.
+// A local the function reads before defining it holds caller state the
+// prototype does not cover.  Ghidra usually names such a variable
+// `unaff_<reg>` or `in_<location>`.  The lifter declares it as an ordinary
+// uninitialized local, so the lifted function does not read the value the
+// binary read; each such local is reported.
+//
+// The serializer records the fact as `live_in` on DECLARE_LOCAL and the flag
+// decides when present, whatever the name.  JSON without the flag falls back
+// to the naming convention and also requires that no operation writes the
+// local, because a symbol can simply be called `in_count`.
+//
+//   legacy_unwritten  no flag; unaff_r4 and in_stack_00000004 never written   reported
+//   legacy_written    no flag; in_count = a; return in_count                  not reported
+//   flag_set          live_in true on a local named saved_state               reported
+//   flag_clear        live_in false on in_total and unaff_r5                  not reported
 //
 // RUN: bash %strip-json-comments %s > %t.json
 // RUN: %patchir-decomp -input %t.json -emit-cir -print-tu -output %t > %t.log 2>&1
@@ -12,16 +22,23 @@
 // RUN: %file-check -vv -check-prefix=ERR %s --input-file %t.strict.log
 // RUN: test ! -e %t.strict.cir
 //
-// WARN-DAG: Diag Warning: {{.*}}lossy lift [unaffected-register-use]: local 'unaff_r4' in function 'unaffected_register_use' is an input the prototype does not cover; it is lifted as an uninitialized local
-// WARN-DAG: Diag Warning: {{.*}}lossy lift [unaffected-register-use]: local 'in_stack_00000004' in function 'unaffected_register_use'
+// WARN-DAG: Diag Warning: {{.*}}lossy lift [unaffected-register-use]: local 'unaff_r4' in function 'legacy_unwritten' is read before the function defines it; it is lifted as an uninitialized local
+// WARN-DAG: Diag Warning: {{.*}}lossy lift [unaffected-register-use]: local 'in_stack_00000004' in function 'legacy_unwritten'
+// WARN-DAG: Diag Warning: {{.*}}lossy lift [unaffected-register-use]: local 'saved_state' in function 'flag_set'
 // WARN-NOT: local 'total'
+// WARN-NOT: local 'in_count'
+// WARN-NOT: local 'in_total'
+// WARN-NOT: local 'unaff_r5'
 // WARN-NOT: Diag Error
 //
-// C: unsigned int unaff_r4;
-// C: return unaff_r4;
+// C-DAG: unsigned int unaff_r4;
+// C-DAG: return unaff_r4;
+// C-DAG: in_count = a;
 //
 // ERR-DAG: Diag Error: {{.*}}lossy lift [unaffected-register-use]: local 'unaff_r4'
 // ERR-DAG: Diag Error: {{.*}}lossy lift [unaffected-register-use]: local 'in_stack_00000004'
+// ERR-DAG: Diag Error: {{.*}}lossy lift [unaffected-register-use]: local 'saved_state'
+// ERR-NOT: local 'in_count'
 // ERR: Skipping code generation due to prior diagnostics errors
 {
   "architecture": "ARM",
@@ -29,7 +46,7 @@
   "format": "Executable and Linking Format (ELF)",
   "functions": {
     "ram:10000000": {
-      "name": "unaffected_register_use",
+      "name": "legacy_unwritten",
       "is_intrinsic": false,
       "type": {
         "return_type": "type_int",
@@ -105,6 +122,242 @@
         }
       },
       "entry_block": "ram:10000000:entry"
+    },
+    "ram:10000100": {
+      "name": "legacy_written",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": [
+          "type_int"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000100:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "a",
+              "type": "type_int",
+              "kind": "parameter",
+              "index": 0
+            },
+            "l0": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "in_count",
+              "type": "type_int"
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000100:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "l0",
+            "br"
+          ]
+        },
+        "ram:10000100:0:basic": {
+          "operations": {
+            "cp": {
+              "mnemonic": "COPY",
+              "type": "type_int",
+              "output": {
+                "type": "type_int",
+                "kind": "local",
+                "operation": "l0"
+              },
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "kind": "parameter",
+                  "operation": "p0"
+                }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "kind": "constant",
+                  "value": 0
+                },
+                {
+                  "type": "type_int",
+                  "kind": "local",
+                  "operation": "l0"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "cp",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000100:entry"
+    },
+    "ram:10000200": {
+      "name": "flag_set",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": [
+          "type_int"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000200:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "a",
+              "type": "type_int",
+              "kind": "parameter",
+              "index": 0
+            },
+            "l0": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "saved_state",
+              "type": "type_int",
+              "live_in": true
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000200:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "l0",
+            "br"
+          ]
+        },
+        "ram:10000200:0:basic": {
+          "operations": {
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "kind": "constant",
+                  "value": 0
+                },
+                {
+                  "type": "type_int",
+                  "kind": "local",
+                  "operation": "l0"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000200:entry"
+    },
+    "ram:10000300": {
+      "name": "flag_clear",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": [
+          "type_int"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000300:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "a",
+              "type": "type_int",
+              "kind": "parameter",
+              "index": 0
+            },
+            "l0": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "in_total",
+              "type": "type_int",
+              "live_in": false
+            },
+            "l1": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "unaff_r5",
+              "type": "type_int",
+              "live_in": false
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000300:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "l0",
+            "l1",
+            "br"
+          ]
+        },
+        "ram:10000300:0:basic": {
+          "operations": {
+            "cp": {
+              "mnemonic": "COPY",
+              "type": "type_int",
+              "output": {
+                "type": "type_int",
+                "kind": "local",
+                "operation": "l0"
+              },
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "kind": "parameter",
+                  "operation": "p0"
+                }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "kind": "constant",
+                  "value": 0
+                },
+                {
+                  "type": "type_int",
+                  "kind": "local",
+                  "operation": "l0"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "cp",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000300:entry"
     }
   },
   "globals": {},
