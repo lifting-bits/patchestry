@@ -180,6 +180,21 @@ namespace patchestry::ghidra {
         bool is_default = false;
     };
 
+    // One varnode of a value's storage: a register, a stack slot, or another
+    // location Ghidra assigned.  `offset` is the register-space or memory
+    // offset, or the signed entry-SP-relative offset for a stack slot.
+    struct StoragePiece
+    {
+        std::string kind; // register, stack, memory, unique, constant, other
+        std::string register_name;
+        int64_t offset = 0;
+        uint32_t size  = 0;
+    };
+
+    // The pieces that together hold one value, in the order Ghidra's
+    // `VariableStorage.getVarnodes()` lists them.
+    using Storage = std::vector< StoragePiece >;
+
     struct Operation
     {
         Mnemonic mnemonic;
@@ -197,6 +212,10 @@ namespace patchestry::ghidra {
         // the function defines it (one of its varnodes is a function input).
         // Absent in JSON from a serializer that does not record it.
         std::optional< bool > live_in;
+        // DECLARE_LOCAL only: where the decompiler placed the variable.
+        // Absent for shadow (size-split) declarations and in JSON from a
+        // serializer that does not record it.
+        std::optional< Storage > storage;
 
         // Call Operation
         std::optional< OperationTarget > target;
@@ -233,21 +252,6 @@ namespace patchestry::ghidra {
         std::vector< std::string > ordered_operations;
         bool is_entry_block;
     };
-
-    // One varnode of a value's storage: a register, a stack slot, or another
-    // location Ghidra assigned.  `offset` is the register-space or memory
-    // offset, or the signed entry-SP-relative offset for a stack slot.
-    struct StoragePiece
-    {
-        std::string kind; // register, stack, memory, unique, constant, other
-        std::string register_name;
-        int64_t offset = 0;
-        uint32_t size  = 0;
-    };
-
-    // The pieces that together hold one value, in the order Ghidra's
-    // `VariableStorage.getVarnodes()` lists them.
-    using Storage = std::vector< StoragePiece >;
 
     struct FunctionPrototype
     {

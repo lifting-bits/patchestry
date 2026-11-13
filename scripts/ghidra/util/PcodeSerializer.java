@@ -4891,6 +4891,36 @@ public class PcodeSerializer {
 			int declSize = pcodeOp.getOutput().getSize();
 			boolean isShadow = (declSize != highVariableOfPcodeOp.getSize());
 
+			// Where the decompiler placed the variable.  The lifter turns
+			// every local into an independent C object; the storage lets it
+			// see when two locals were neighbours or overlapped in the
+			// original frame.  A shadow declaration covers only part of the
+			// symbol's storage, so it gets none.
+			//
+			// A variable that is one piece of a larger symbol (a field of a
+			// stack structure the decompiler tracks on its own) reports a
+			// non-negative offset into that symbol; its storage is that
+			// piece, not the whole symbol.  Only a stack symbol in a single
+			// varnode can be subdivided this way.
+			if (!isShadow && highSymbol != null) {
+				VariableStorage symbolStorage = highSymbol.getStorage();
+				int pieceOffset = highVariableOfPcodeOp.getOffset();
+				if (pieceOffset < 0) {
+					writer.name("storage");
+					serializeStorage(symbolStorage);
+				} else if (symbolStorage != null && symbolStorage.isStackStorage()
+						&& symbolStorage.getVarnodeCount() == 1) {
+					writer.name("storage");
+					writer.beginArray();
+					writer.beginObject();
+					writer.name("kind").value("stack");
+					writer.name("offset").value(symbolStorage.getStackOffset() + pieceOffset);
+					writer.name("size").value(highVariableOfPcodeOp.getSize());
+					writer.endObject();
+					writer.endArray();
+				}
+			}
+
 			if (highSymbol != null && highVariableOfPcodeOp.getOffset() == -1 && highVariableOfPcodeOp.getName().equals("UNNAMED")) {
 				String baseName = resolveVariableName(highSymbol.getName());
 				if (isShadow) {

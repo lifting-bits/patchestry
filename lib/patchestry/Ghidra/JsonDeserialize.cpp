@@ -36,6 +36,25 @@ namespace patchestry::ghidra {
         return std::nullopt;
     }
 
+    // Storage of a prototype return value, a parameter or a local: an array
+    // of `{kind, register?, offset, size}` pieces.
+    static Storage parse_storage(const llvm::json::Array &pieces) {
+        Storage storage;
+        for (const auto &piece : pieces) {
+            const auto *piece_obj = piece.getAsObject();
+            if (piece_obj == nullptr) {
+                continue;
+            }
+            StoragePiece entry;
+            entry.kind          = piece_obj->getString("kind").value_or("other").str();
+            entry.register_name = piece_obj->getString("register").value_or("").str();
+            entry.offset        = piece_obj->getInteger("offset").value_or(0);
+            entry.size = static_cast< uint32_t >(piece_obj->getInteger("size").value_or(0));
+            storage.push_back(std::move(entry));
+        }
+        return storage;
+    }
+
     template< typename ObjectType >
     constexpr std::optional< std::string >
     get_string_if_valid(const ObjectType &obj, const char *field) {
@@ -1042,6 +1061,9 @@ namespace patchestry::ghidra {
         if (auto live_in = pcode_obj.getBoolean("live_in")) {
             operation.live_in = *live_in;
         }
+        if (const auto *storage = pcode_obj.getArray("storage")) {
+            operation.storage = parse_storage(*storage);
+        }
 
         // Deserialize operation specific fields
         switch (operation.mnemonic) {
@@ -1127,24 +1149,6 @@ namespace patchestry::ghidra {
                 }
             }
         }
-
-        auto parse_storage = [](const llvm::json::Array &pieces) {
-            Storage storage;
-            for (const auto &piece : pieces) {
-                const auto *piece_obj = piece.getAsObject();
-                if (piece_obj == nullptr) {
-                    continue;
-                }
-                StoragePiece entry;
-                entry.kind          = piece_obj->getString("kind").value_or("other").str();
-                entry.register_name = piece_obj->getString("register").value_or("").str();
-                entry.offset        = piece_obj->getInteger("offset").value_or(0);
-                entry.size =
-                    static_cast< uint32_t >(piece_obj->getInteger("size").value_or(0));
-                storage.push_back(std::move(entry));
-            }
-            return storage;
-        };
 
         if (const auto *return_storage = proto_obj.getArray("return_storage")) {
             proto.return_storage = parse_storage(*return_storage);

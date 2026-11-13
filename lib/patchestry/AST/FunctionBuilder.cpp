@@ -100,6 +100,118 @@ namespace patchestry::ast {
             return operation_vec;
         }
 
+        // A local the decompiler placed in the function's own stack frame.
+        struct StackLocal
+        {
+            std::string key;
+            std::string name;
+            int64_t offset     = 0;
+            int64_t size       = 0;
+            bool address_taken = false;
+            bool is_read       = false;
+            bool is_written    = false;
+        };
+
+        // Every local is lifted as an independent C object.  That loses the
+        // frame layout: when the binary passes the address of one stack slot
+        // to a callee that reads or writes past it (a record the decompiler
+        // split into scalars), the neighbouring slot is a different object in
+        // the lifted code and the access through the pointer no longer reaches
+        // it.  Report a local that
+        //
+        //   - overlaps a local whose address is taken, or
+        //   - starts where an address-taken local ends and is only written or
+        //     only read by the function itself, so its other half can only
+        //     happen through that pointer.
+        //
+        // Needs the `storage` the serializer records on DECLARE_LOCAL; without
+        // it nothing is reported.
+        void report_stack_adjacent_escape(
+            const Function &function, const LossReporter &reporter,
+            clang::SourceManager &source_manager
+        ) {
+            std::map< std::string, StackLocal > locals;
+            for (const auto &[block_key, block] : function.basic_blocks) {
+                for (const auto &[op_key, op] : block.operations) {
+                    if (op.mnemonic != Mnemonic::OP_DECLARE_LOCAL || !op.storage
+                        || op.storage->size() != 1U || op.storage->front().kind != "stack"
+                        || op.storage->front().size == 0U)
+                    {
+                        continue;
+                    }
+                    StackLocal local;
+                    local.key    = op_key;
+                    local.name   = op.name.value_or(op_key);
+                    local.offset = op.storage->front().offset;
+                    local.size   = op.storage->front().size;
+                    locals.emplace(op_key, std::move(local));
+                }
+            }
+            if (locals.size() < 2U) {
+                return;
+            }
+
+            auto find_local = [&](const Varnode &vnode) -> StackLocal * {
+                if (vnode.kind != Varnode::VARNODE_LOCAL || !vnode.operation) {
+                    return nullptr;
+                }
+                auto iter = locals.find(*vnode.operation);
+                return iter != locals.end() ? &iter->second : nullptr;
+            };
+
+            for (const auto &[block_key, block] : function.basic_blocks) {
+                for (const auto &[op_key, op] : block.operations) {
+                    if (op.output) {
+                        if (auto *local = find_local(*op.output)) {
+                            local->is_written = true;
+                        }
+                    }
+                    for (const auto &input : op.inputs) {
+                        if (auto *local = find_local(input)) {
+                            if (op.mnemonic == Mnemonic::OP_ADDRESS_OF) {
+                                local->address_taken = true;
+                            } else {
+                                local->is_read = true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            auto describe = [](const StackLocal &local) {
+                return "'" + local.name + "' (stack offset " + std::to_string(local.offset)
+                    + ", " + std::to_string(local.size) + " bytes)";
+            };
+
+            for (const auto &[escaped_key, escaped] : locals) {
+                if (!escaped.address_taken) {
+                    continue;
+                }
+                const int64_t escaped_end = escaped.offset + escaped.size;
+                for (const auto &[key, local] : locals) {
+                    if (key == escaped_key || local.address_taken) {
+                        continue;
+                    }
+                    const bool overlaps =
+                        local.offset < escaped_end && escaped.offset < local.offset + local.size;
+                    const bool follows =
+                        local.offset == escaped_end && !(local.is_read && local.is_written);
+                    if (!overlaps && !follows) {
+                        continue;
+                    }
+                    reporter.report(
+                        SourceLocation(source_manager, key), "stack-adjacent-escape",
+                        "local " + describe(local) + " in function '" + function.name + "' "
+                            + (overlaps ? "overlaps" : "follows") + " local "
+                            + describe(escaped)
+                            + " whose address is taken; they are lifted as separate objects,"
+                              " so an access through that address does not reach '"
+                            + local.name + "'"
+                    );
+                }
+            }
+        }
+
     } // namespace
 
     FunctionBuilder::FunctionBuilder(
@@ -171,6 +283,10 @@ namespace patchestry::ast {
                     );
                 }
             }
+
+            report_stack_adjacent_escape(
+                function, loss_reporter, ci.getASTContext().getSourceManager()
+            );
 
             if (auto *function_decl = create_declaration(
                     ci.getASTContext(),
