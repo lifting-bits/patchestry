@@ -302,7 +302,7 @@ namespace patchestry::ast {
                 auto underlying =
                     vnode_type->castAs< clang::EnumType >()->getDecl()->getIntegerType();
                 auto *literal = new (ctx)
-                    clang::IntegerLiteral(ctx, llvm::APInt(bit_width, *vnode.value), underlying, location);
+                    clang::IntegerLiteral(ctx, llvm::APInt(bit_width, *vnode.value, false, true), underlying, location);
                 auto result = sema().BuildCStyleCastExpr(
                     location, ctx.getTrivialTypeSourceInfo(vnode_type), location, literal
                 );
@@ -315,7 +315,8 @@ namespace patchestry::ast {
             // constant values from normalization-pass pattern matchers and silently
             // truncated constants narrower than 32 bits (e.g. uint8_t) or zero-
             // extended constants wider than 32 bits (e.g. uint64_t on 64-bit targets).
-            auto apint = llvm::APInt(bit_width, *vnode.value);
+            // The value is a 64-bit pattern; keep the low `bit_width` bits.
+            auto apint = llvm::APInt(bit_width, *vnode.value, false, true);
 
             // Represent unsigned all-ones constants with the signed equivalent type
             // so they print as -1 rather than the large unsigned decimal (e.g.
@@ -357,7 +358,7 @@ namespace patchestry::ast {
             // Void-typed constants are unusual; keep them as a cast from int so the
             // resulting expression is at least well-formed.
             auto *literal = new (ctx)
-                clang::IntegerLiteral(ctx, llvm::APInt(32U, *vnode.value), ctx.IntTy, location);
+                clang::IntegerLiteral(ctx, llvm::APInt(32U, *vnode.value, false, true), ctx.IntTy, location);
             auto result = sema().BuildCStyleCastExpr(
                 location, ctx.getTrivialTypeSourceInfo(vnode_type), location, literal
             );
@@ -393,7 +394,7 @@ namespace patchestry::ast {
             // Non-null pointer constant: use target's pointer-integer width
             // so values are not truncated on 64-bit targets.
             auto *literal = new (ctx) clang::IntegerLiteral(
-                ctx, llvm::APInt(ptr_bits, *vnode.value), ctx.getUIntPtrType(), location
+                ctx, llvm::APInt(ptr_bits, *vnode.value, false, true), ctx.getUIntPtrType(), location
             );
             auto result = sema().BuildCStyleCastExpr(
                 location, ctx.getTrivialTypeSourceInfo(vnode_type), location, literal
@@ -407,7 +408,7 @@ namespace patchestry::ast {
             // so that the bit pattern stored in vnode.value is interpreted correctly.
             const llvm::fltSemantics &sem = ctx.getFloatTypeSemantics(vnode_type);
             unsigned float_bits           = static_cast<unsigned>(ctx.getTypeSize(vnode_type));
-            llvm::APFloat float_value(sem, llvm::APInt(float_bits, *vnode.value));
+            llvm::APFloat float_value(sem, llvm::APInt(float_bits, *vnode.value, false, true));
             return clang::FloatingLiteral::Create(ctx, float_value, true, vnode_type, location);
         }
 
@@ -453,7 +454,7 @@ namespace patchestry::ast {
                              << vnode.type_key << "\n";
             }
             return new (ctx) clang::IntegerLiteral(
-                ctx, llvm::APInt(bit_width, value), int_type, location
+                ctx, llvm::APInt(bit_width, value, false, true), int_type, location
             );
         }
 

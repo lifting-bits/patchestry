@@ -2666,7 +2666,7 @@ namespace patchestry::ast {
         auto op_location    = SourceLocation(ctx.getSourceManager(), op.key);
 
         // input[1] is the byte offset; the bit-shift amount is byte_offset * 8.
-        uint32_t byte_offset = op.inputs[1].value.value_or(0);
+        uint32_t byte_offset = static_cast< uint32_t >(op.inputs[1].value.value_or(0));
         unsigned shift_bits  = byte_offset * 8;
 
         auto *input_stmt = create_varnode(ctx, function, op.inputs[0]);
@@ -3853,7 +3853,9 @@ namespace patchestry::ast {
 
         auto input_type = input_expr->getType();
         if (input_type->isPointerType() && input_type->getPointeeType()->isRecordType()) {
-            auto *mem_expr = make_member_expr(ctx, input_expr, *op.inputs[1].value);
+            auto *mem_expr = make_member_expr(
+                ctx, input_expr, static_cast< unsigned >(*op.inputs[1].value)
+            );
             if (mem_expr == nullptr) {
                 LOG(ERROR) << "PTRSUB failed to build member access. key: " << op.key << "\n";
                 return { nullptr, false };

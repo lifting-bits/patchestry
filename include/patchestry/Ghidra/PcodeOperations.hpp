@@ -132,7 +132,10 @@ namespace patchestry::ghidra {
 
         std::optional< std::string > operation;
         std::optional< std::string > function;
-        std::optional< uint32_t > value;
+        // Constant value as a 64-bit pattern.  The serializer writes a
+        // signed 64-bit integer, so an 8-byte constant with the top bit set
+        // arrives negative; consumers truncate to the width they build.
+        std::optional< uint64_t > value;
         std::optional< std::string > string_value;
         std::optional< std::string > global;
     };
