@@ -465,8 +465,15 @@ namespace patchestry::ast {
         std::vector<clang::Stmt *> stmt_vec;
         for (const auto &operation_key : block.ordered_operations) {
             if (!block.operations.contains(operation_key)) {
-                LOG(ERROR) << "Skipping, invalid operations key in the block. key "
-                           << operation_key << "\n";
+                // The key is listed in the block's order but has no operation:
+                // the parser rejected it (unknown or missing mnemonic,
+                // malformed entry) and only logged.  The operation is absent
+                // from the lifted function, so report it like a failed build.
+                loss_reporter.get().report(
+                    SourceLocation(ctx.getSourceManager(), operation_key), "op-dropped",
+                    "operation '" + operation_key + "' in function '" + function.get().name
+                        + "' is listed in ordered_operations but was not deserialized"
+                );
                 continue;
             }
 
