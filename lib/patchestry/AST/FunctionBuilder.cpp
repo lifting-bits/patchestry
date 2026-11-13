@@ -349,7 +349,15 @@ namespace patchestry::ast {
         for (const auto &param : proto.parameters) {
             auto param_type = type_builder.get().GetSerializedType(param);
             if (param_type.isNull()) {
-                LOG(ERROR) << "Skipping, invalid parameter key in function.\n";
+                // The prototype is now one parameter short, so every later
+                // argument binds to the wrong position.
+                loss_reporter.get().report(
+                    VirtualLoc(ctx), "prototype-param-dropped",
+                    "parameter type '" + param + "' is not serialized; parameter "
+                        + std::to_string(args_vector.size()) + " of "
+                        + std::to_string(proto.parameters.size())
+                        + " dropped from the function type"
+                );
                 continue;
             }
 

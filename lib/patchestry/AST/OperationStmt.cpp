@@ -1481,6 +1481,16 @@ namespace patchestry::ast {
         const auto *proto_type = callee->getType()->getAs< clang::FunctionProtoType >();
         auto num_params        = proto_type->getNumParams();
 
+        // Every path below that changes the callee's prototype or the argument
+        // list away from what the JSON states goes through here, so the change
+        // is visible (and fatal under -strict) instead of only logged.
+        auto report_lossy = [&](llvm::StringRef category, const std::string &message) {
+            function_builder().loss_reporter.get().report(
+                op_loc, category,
+                message + " in call to '" + callee->getNameAsString() + "'. key: " + op.key
+            );
+        };
+
         // The callee return type may be missing or incorrect during representing high pcode
         // into JSON format. Double check the function return type with operation type and fix
         // if there is any mismatch.
@@ -1494,6 +1504,11 @@ namespace patchestry::ast {
                 auto param_types    = proto_type->getParamTypes();
                 auto epi            = proto_type->getExtProtoInfo();
                 auto new_proto_type = ctx.getFunctionType(op_type, param_types, epi);
+                report_lossy(
+                    "call-prototype-rebuilt",
+                    "declared return type void replaced by call-site type '"
+                        + op_type.getAsString() + "'"
+                );
                 callee->setType(new_proto_type);
                 for (auto *decl : callee->redecls()) {
                     decl->setType(new_proto_type);
@@ -1566,10 +1581,12 @@ namespace patchestry::ast {
                     }
                     callee->setParams(new_params);
 
-                    LOG(INFO)
-                        << "Rebuilt declaration for '" << callee->getNameAsString()
-                        << "' from call-site with " << new_param_types.size()
-                        << " params (was " << num_params << "). key: " << op.key << "\n";
+                    report_lossy(
+                        "call-prototype-rebuilt",
+                        "declaration rebuilt from the call site with "
+                            + std::to_string(new_param_types.size()) + " params (was "
+                            + std::to_string(num_params) + ")"
+                    );
                 } else {
                     // Declaration already has ParmVarDecls — we can't call
                     // setParams again.  Keep existing fixed params and promote
@@ -1582,20 +1599,23 @@ namespace patchestry::ast {
                     for (auto *decl : callee->redecls()) {
                         decl->setType(new_type);
                     }
-                    LOG(WARNING)
-                        << "Call to '" << callee->getNameAsString()
-                        << "' has " << op.inputs.size()
-                        << " args but declaration has " << num_params
-                        << " params; promoting to variadic. key: " << op.key << "\n";
+                    report_lossy(
+                        "call-variadic-promoted",
+                        std::to_string(op.inputs.size()) + " args but the declaration has "
+                            + std::to_string(num_params)
+                            + " params; declaration promoted to variadic"
+                    );
                 }
 
                 proto_type = callee->getType()->getAs< clang::FunctionProtoType >();
                 num_params = proto_type->getNumParams();
             } else {
-                LOG(WARNING)
-                    << "Skipping declaration rebuild for '"
-                    << callee->getNameAsString()
-                    << "'; extra call-site args will be dropped. key: " << op.key << "\n";
+                report_lossy(
+                    "call-arg-dropped",
+                    std::to_string(op.inputs.size() - num_params)
+                        + " call-site args beyond the " + std::to_string(num_params)
+                        + " declared params dropped (declaration could not be rebuilt)"
+                );
             }
         }
 
@@ -1611,8 +1631,9 @@ namespace patchestry::ast {
                     << "Failed to create varnode for call argument " << index
                     << " of '" << callee->getNameAsString()
                     << "'. key: " << op.key << "\n";
-                index++;
-                continue;
+                // Bail rather than skip: dropping one argument would shift
+                // every later one into the wrong parameter.
+                return nullptr;
             }
             auto *vnode_expr = clang::dyn_cast< clang::Expr >(vnode_stmt);
             if (!vnode_expr) {
@@ -1620,8 +1641,7 @@ namespace patchestry::ast {
                     << "Varnode for call argument " << index
                     << " of '" << callee->getNameAsString()
                     << "' is not an expression. key: " << op.key << "\n";
-                index++;
-                continue;
+                return nullptr;
             }
             auto arg_type = get_argument_type(callee, vnode_expr, index++);
             // Route through make_cast which handles L/R-value conversion,
@@ -1629,9 +1649,11 @@ namespace patchestry::ast {
             // and reinterpret-cast fallback for exotic pairs.
             auto *arg = make_cast(ctx, vnode_expr, arg_type, op_loc);
             if (!arg) {
-                LOG(ERROR) << "Failed to cast call argument " << (index - 1)
-                           << " of '" << callee->getNameAsString()
-                           << "'. key: " << op.key << "\n";
+                report_lossy(
+                    "call-arg-uncast",
+                    "argument " + std::to_string(index - 1) + " could not be cast to '"
+                        + arg_type.getAsString() + "' and is passed as recovered"
+                );
                 arg = vnode_expr; // use uncast expr as fallback
             }
             arguments.push_back(arg);
@@ -1641,11 +1663,18 @@ namespace patchestry::ast {
         // extend it with the default value.
         unsigned min_args = callee->getMinRequiredArguments();
         if (arguments.size() < min_args) {
+            const auto supplied = arguments.size();
             if (!extend_callexpr_arguments(ctx, callee, arguments)) {
                 LOG(ERROR) << "Dropping under-applied call to '"
                            << callee->getNameAsString() << "'. key: " << op.key << "\n";
                 return nullptr;
             }
+            report_lossy(
+                "call-arg-synthesized",
+                std::to_string(arguments.size() - supplied) + " of "
+                    + std::to_string(min_args)
+                    + " required args missing at the call site and filled with zero values"
+            );
         }
 
         // A null Expr* in the argument list dereferences to a crash inside
@@ -1701,6 +1730,14 @@ namespace patchestry::ast {
                            << "' not in function_list — emitting "
                               "__patchestry_error(\""
                            << reason << "\"). key: " << op.key << "\n";
+
+                function_builder().loss_reporter.get().report(
+                    op_loc, "call-callee-missing",
+                    "callee '" + *op.target->function
+                        + "' is not a known function; call replaced by __patchestry_error "
+                          "and its " + std::to_string(op.inputs.size())
+                        + " args discarded. key: " + op.key
+                );
 
                 auto *err_expr = emit_patchestry_error(ctx, reason, op_loc);
                 if (!err_expr) {
@@ -1772,10 +1809,18 @@ namespace patchestry::ast {
                 return {};
             }
             auto [stmt, _] = function_builder().create_operation(ctx, *operation);
-            auto result    = sema().BuildCallExpr(
-                nullptr, clang::dyn_cast< clang::Expr >(stmt), op_loc, arguments, op_loc
-            );
-            assert(!result.isInvalid());
+            auto *callee_expr = clang::dyn_cast_or_null< clang::Expr >(stmt);
+            if (!callee_expr) {
+                LOG(ERROR) << "CALL target operation did not produce an expression. key: "
+                           << op.key << "\n";
+                return {};
+            }
+            auto result = sema().BuildCallExpr(nullptr, callee_expr, op_loc, arguments, op_loc);
+            if (result.isInvalid()) {
+                LOG(ERROR) << "Failed to build call through target operation. key: "
+                           << op.key << "\n";
+                return {};
+            }
             call_expr = result.getAs< clang::Expr >();
             if (!operation->output || call_expr->getType()->isVoidType()) {
                 return std::make_pair(clang::dyn_cast< clang::Expr >(call_expr), false);
