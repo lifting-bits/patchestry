@@ -182,6 +182,50 @@ namespace patchestry::ast {
             }
         }
 
+        // The lifter builds a hard-float target for every 32-bit ARM program.
+        // On the language variants Ghidra analyses with a soft-float model, a
+        // floating-point parameter or return value is in a core register in
+        // the binary and in a VFP register in the lifted code.
+        const std::string language = get_program().lang.value_or("");
+        if (IsSoftFloatArmLanguage(language)) {
+            auto is_float = [&](const std::string &type_key) {
+                if (type_key.empty()) {
+                    return false;
+                }
+                auto type = type_builder->GetSerializedType(type_key);
+                return !type.isNull() && type->isRealFloatingType();
+            };
+            auto passes_float = [&](const std::string &return_key,
+                                    const std::vector< std::string > &param_keys) {
+                return is_float(return_key) || std::ranges::any_of(param_keys, is_float);
+            };
+            auto report = [&](const std::string &key, const std::string &what) {
+                loss_reporter.report(
+                    SourceLocation(ctx.getSourceManager(), key), "float-abi-mismatch",
+                    what + " passes or returns a floating-point value; language '" + language
+                        + "' uses core registers for it but the lifted target is hard-float"
+                );
+            };
+
+            for (const auto &[key, function] : get_program().serialized_functions) {
+                if (passes_float(function.prototype.rttype_key, function.prototype.parameters))
+                {
+                    report(key, "function '" + function.name + "'");
+                }
+            }
+            for (const auto &[key, type] : get_program().serialized_types) {
+                if (!type || type->kind != VarnodeType::Kind::VT_FUNCTION) {
+                    continue;
+                }
+                const auto *fn_type = dynamic_cast< const FunctionType * >(type.get());
+                if (fn_type != nullptr
+                    && passes_float(fn_type->return_type_key, fn_type->param_type_keys))
+                {
+                    report(key, "function type '" + fn_type->name + "'");
+                }
+            }
+        }
+
         if (!get_program().serialized_globals.empty()) {
             create_globals(ctx, get_program().serialized_globals);
         }

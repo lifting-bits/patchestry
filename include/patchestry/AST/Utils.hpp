@@ -62,6 +62,13 @@ namespace patchestry::ast {
     /// lifted prototype does not place arguments where the binary does.
     bool IsTargetDefaultConvention(const llvm::Triple &triple, llvm::StringRef name);
 
+    /// True when `language_id` (Ghidra `arch:endian:size:variant`) is a 32-bit
+    /// ARM variant whose default prototype model passes floating-point
+    /// arguments in core registers.  The lifter always builds a hard-float
+    /// target for 32-bit ARM, so a floating-point parameter or return value
+    /// in such a program is lifted into the wrong register.
+    bool IsSoftFloatArmLanguage(llvm::StringRef language_id);
+
     /// Returns a valid SourceLocation backed by a virtual "<patchestry-virtual>"
     /// buffer in the given context's SourceManager.  Idempotent: subsequent
     /// calls with the same SourceManager reuse the same FileID via
