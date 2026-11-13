@@ -138,6 +138,34 @@ namespace patchestry::ast {
                 );
             }
 
+            // The decompiler's return storage says how many bytes the binary
+            // returns.  When that is more than the declared return type holds
+            // (a 64-bit value in r0:r1 declared as a 32-bit int), the lifted
+            // function cannot return the upper part.
+            if (const auto &storage = function.prototype.return_storage) {
+                auto &ctx        = ci.getASTContext();
+                auto return_type = type_builder.GetSerializedType(function.prototype.rttype_key);
+                uint64_t storage_bytes = 0;
+                std::string places;
+                for (const auto &piece : *storage) {
+                    storage_bytes += piece.size;
+                    places += (places.empty() ? "" : ", ")
+                        + (piece.register_name.empty() ? piece.kind : piece.register_name);
+                }
+                if (!return_type.isNull() && !return_type->isVoidType()
+                    && !return_type->isIncompleteType()
+                    && storage_bytes * 8U > ctx.getTypeSize(return_type))
+                {
+                    loss_reporter.report(
+                        SourceLocation(ctx.getSourceManager(), function.key), "return-narrowed",
+                        "function '" + function.name + "' returns " + std::to_string(storage_bytes)
+                            + " bytes in " + places + " but its declared return type '"
+                            + return_type.getAsString() + "' holds "
+                            + std::to_string(ctx.getTypeSize(return_type) / 8U) + " bytes"
+                    );
+                }
+            }
+
             if (auto *function_decl = create_declaration(
                     ci.getASTContext(),
                     create_function_type(ci.getASTContext(), function.prototype)

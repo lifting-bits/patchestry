@@ -1509,7 +1509,70 @@ public class PcodeSerializer {
 				writer.value(label(proto.getParam(i).getDataType()));
 			}
 			writer.endArray();  // End of `parameter_types`.
+
+			// Where the decompiler placed the return value and each parameter.
+			// The types above say what a value is; these say which registers
+			// or stack slots carry it, which is what a consumer needs to tell
+			// a 64-bit value in r0:r1 from a 32-bit value in r0, or a float in
+			// s0 from a float in r0.  `parameter_storage` is parallel to
+			// `parameter_types`.
+			writer.name("return_storage");
+			serializeStorage(proto.getReturnStorage());
+
+			writer.name("parameter_storage").beginArray();
+			for (int i = 0; i < numberOfParams; i++) {
+				HighSymbol param = proto.getParam(i);
+				serializeStorage(param != null ? param.getStorage() : null);
+			}
+			writer.endArray();  // End of `parameter_storage`.
 			return numberOfParams;
+		}
+
+		// Serialize a `VariableStorage` as an array of pieces, in the order
+		// `VariableStorage.getVarnodes()` returns them.  Each piece is one
+		// varnode: `{kind, size, offset}` plus `register` when the varnode
+		// names a register.  Missing, void, unassigned or bad storage is an
+		// empty array.
+		void serializeStorage(VariableStorage storage) throws Exception {
+			writer.beginArray();
+			if (storage != null && !storage.isVoidStorage()
+					&& !storage.isUnassignedStorage() && !storage.isBadStorage()) {
+				for (Varnode piece : storage.getVarnodes()) {
+					if (piece == null) {
+						continue;
+					}
+					Address address = piece.getAddress();
+					writer.beginObject();
+					if (piece.isRegister()) {
+						writer.name("kind").value("register");
+						Register register = language.getRegister(address, piece.getSize());
+						if (register == null) {
+							register = language.getRegister(address, 0);
+						}
+						if (register != null) {
+							writer.name("register").value(register.getName());
+						}
+					} else if (address != null && address.isStackAddress()) {
+						writer.name("kind").value("stack");
+					} else if (piece.isUnique()) {
+						writer.name("kind").value("unique");
+					} else if (piece.isConstant()) {
+						writer.name("kind").value("constant");
+					} else if (address != null && address.isMemoryAddress()) {
+						writer.name("kind").value("memory");
+					} else {
+						writer.name("kind").value("other");
+					}
+					// Stack offsets are signed and relative to the stack
+					// pointer at function entry; `Address.getOffset()` keeps
+					// the sign for the stack space.
+					writer.name("offset").value(
+						address != null ? address.getOffset() : piece.getOffset());
+					writer.name("size").value(piece.getSize());
+					writer.endObject();
+				}
+			}
+			writer.endArray();
 		}
 		
 		int serializePrototype(FunctionSignature proto) throws Exception {
@@ -6221,6 +6284,10 @@ public class PcodeSerializer {
 			writer.name("architecture").value(this.architecture);
 			writer.name("id").value(this.languageID);
 			writer.name("format").value(currentProgram.getExecutableFormat());
+			// The compiler spec decides what a prototype-model name such as
+			// `__stdcall` or `__thiscall` means for this program.
+			writer.name("compiler_spec").value(
+				currentProgram.getCompilerSpec().getCompilerSpecID().getIdAsString());
 
 			writer.name("functions").beginObject();
 			serializeFunctions();
