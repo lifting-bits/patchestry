@@ -23,6 +23,7 @@
 #include <llvm/Support/raw_ostream.h>
 
 #include <patchestry/AST/LiftOptions.hpp>
+#include <patchestry/AST/LossReport.hpp>
 #include <patchestry/AST/TypeBuilder.hpp>
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
 #include <patchestry/Ghidra/PcodeOperations.hpp>
@@ -41,7 +42,11 @@ namespace patchestry::ast {
     {
       public:
         explicit PcodeASTConsumer(clang::CompilerInstance &ci, Program &prog, LiftOptions opts)
-            : program(prog), ci(ci), options(opts), type_builder(nullptr) {}
+            : program(prog)
+            , ci(ci)
+            , options(opts)
+            , loss_reporter(ci.getDiagnostics(), opts.strict)
+            , type_builder(nullptr) {}
 
         void HandleTranslationUnit(clang::ASTContext &ctx) override;
 
@@ -54,6 +59,7 @@ namespace patchestry::ast {
         clang::CompilerInstance &ci;
 
         LiftOptions options;
+        LossReporter loss_reporter;
         std::unique_ptr< TypeBuilder > type_builder;
 
         std::unordered_map< std::string, clang::FunctionDecl * > function_declarations;

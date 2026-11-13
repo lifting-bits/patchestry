@@ -18,6 +18,7 @@
 #include <clang/Frontend/CompilerInstance.h>
 #include <clang/Sema/Sema.h>
 
+#include <patchestry/AST/LossReport.hpp>
 #include <patchestry/AST/TypeBuilder.hpp>
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
 
@@ -40,6 +41,7 @@ namespace patchestry::ast {
             std::unordered_map< std::string, clang::FunctionDecl * > &intrinsics,
             const std::unordered_map< std::string, clang::QualType > &canonical_returns,
             const std::unordered_set< std::string > &suffix_names,
+            const LossReporter &loss_reporter,
             std::string program_arch = {}
         );
 
@@ -191,6 +193,9 @@ namespace patchestry::ast {
         // Shared names whose variants differ in size: kept distinct via a
         // return-type suffix on the C identifier.
         std::reference_wrapper< const std::unordered_set< std::string > > suffix_names;
+
+        // Sink for facts the lifter could not reproduce; owned by the consumer.
+        std::reference_wrapper< const LossReporter > loss_reporter;
 
         std::unordered_map< std::string, clang::VarDecl * > local_variables;
         std::unordered_map< std::string, clang::LabelDecl * > labels_declaration;

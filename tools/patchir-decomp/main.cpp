@@ -90,6 +90,15 @@ namespace {
         llvm::cl::init(true)
     );
 
+    const llvm::cl::opt< bool > strict( // NOLINT(cert-err58-cpp)
+        "strict",
+        llvm::cl::desc(
+            "Fail when the lifter cannot reproduce a P-Code fact faithfully "
+            "(dropped operation, synthesized argument, fallback type).  "
+            "Default off: such cases are reported as warnings."),
+        llvm::cl::init(false)
+    );
+
     patchestry::Options parseCommandLineOptions(int argc, char **argv) {
         llvm::cl::ParseCommandLineOptions(
             argc, argv, "patche-lifter to represent high pcode into mlir representations\n"
@@ -109,6 +118,7 @@ namespace {
             .input_file                 = input_filename.getValue(),
             .print_tu                   = print_tu.getValue(),
             .emit_dot_cfg               = emit_dot_cfg.getValue(),
+            .strict                     = strict.getValue(),
         };
     }
 
@@ -156,6 +166,7 @@ namespace {
             .emit_flat_baseline = options.emit_flat_baseline,
             .clang_ast_cleanup  = options.clang_ast_cleanup,
             .emit_dot_cfg       = options.emit_dot_cfg,
+            .strict             = options.strict,
         };
     }
 

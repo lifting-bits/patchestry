@@ -283,7 +283,7 @@ namespace patchestry::ast {
                 auto builder = std::make_shared<FunctionBuilder>(
                     ci, function, *type_builder, function_declarations,
                     global_variable_declarations, intrinsic_declarations,
-                    canonical_returns, suffix_names, program_arch
+                    canonical_returns, suffix_names, loss_reporter, program_arch
                 );
                 builder->InitializeOpBuilder();
                 func_builders.emplace_back(std::move(builder));

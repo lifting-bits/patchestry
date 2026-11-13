@@ -108,6 +108,7 @@ namespace patchestry::ast {
         std::unordered_map< std::string, clang::FunctionDecl * > &intrinsics,
         const std::unordered_map< std::string, clang::QualType > &canonical_returns,
         const std::unordered_set< std::string > &suffix_names,
+        const LossReporter &loss_reporter,
         std::string program_arch
     )
         : prev_decl(nullptr)
@@ -121,6 +122,7 @@ namespace patchestry::ast {
         , intrinsic_list(intrinsics)
         , canonical_returns(canonical_returns)
         , suffix_names(suffix_names)
+        , loss_reporter(loss_reporter)
         , local_variables({}) {
         if (!function.key.empty()) {
             if (auto *function_decl = create_declaration(
@@ -484,7 +486,8 @@ namespace patchestry::ast {
             auto saved_pending = std::move(pending_materialized);
             pending_materialized.clear();
 
-            if (auto [stmt, should_merge_to_next] = create_operation(ctx, operation); stmt) {
+            auto [stmt, should_merge_to_next] = create_operation(ctx, operation);
+            if (stmt) {
                 for (auto *pending : pending_materialized) {
                     stmt_vec.push_back(pending);
                 }
@@ -494,6 +497,19 @@ namespace patchestry::ast {
                     stmt_vec.push_back(stmt);
                 }
             } else {
+                // `(nullptr, true)` means the builder had nothing to emit on
+                // purpose (a parameter declaration, a local that reuses an
+                // earlier decl).  `(nullptr, false)` is a failed build: the
+                // operation is absent from the lifted function, and the
+                // builders only log, so report it here.
+                if (!should_merge_to_next) {
+                    loss_reporter.get().report(
+                        SourceLocation(ctx.getSourceManager(), operation.key), "op-dropped",
+                        std::string(to_string(operation.mnemonic)) + " operation '"
+                            + operation.key + "' in function '" + function.get().name
+                            + "' produced no statement"
+                    );
+                }
                 pending_materialized.clear();
             }
 
