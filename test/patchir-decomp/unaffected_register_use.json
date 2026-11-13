@@ -1,0 +1,123 @@
+// Ghidra names a variable `unaff_<reg>` when a function reads a register it
+// never wrote and that is not a parameter, and `in_<location>` for any other
+// input the prototype does not cover.  The lifter declares both as ordinary
+// uninitialized locals, so the lifted function does not read the value the
+// binary read.  Each such local is reported; an ordinary local is not.
+//
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-cir -print-tu -output %t > %t.log 2>&1
+// RUN: %file-check -vv -check-prefix=WARN %s --input-file %t.log
+// RUN: %file-check -vv -check-prefix=C %s --input-file %t.c
+// RUN: not %patchir-decomp -input %t.json -emit-cir -strict -output %t.strict > %t.strict.log 2>&1
+// RUN: %file-check -vv -check-prefix=ERR %s --input-file %t.strict.log
+// RUN: test ! -e %t.strict.cir
+//
+// WARN-DAG: Diag Warning: {{.*}}lossy lift [unaffected-register-use]: local 'unaff_r4' in function 'unaffected_register_use' is an input the prototype does not cover; it is lifted as an uninitialized local
+// WARN-DAG: Diag Warning: {{.*}}lossy lift [unaffected-register-use]: local 'in_stack_00000004' in function 'unaffected_register_use'
+// WARN-NOT: local 'total'
+// WARN-NOT: Diag Error
+//
+// C: unsigned int unaff_r4;
+// C: return unaff_r4;
+//
+// ERR-DAG: Diag Error: {{.*}}lossy lift [unaffected-register-use]: local 'unaff_r4'
+// ERR-DAG: Diag Error: {{.*}}lossy lift [unaffected-register-use]: local 'in_stack_00000004'
+// ERR: Skipping code generation due to prior diagnostics errors
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "unaffected_register_use",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": [
+          "type_int"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "a",
+              "type": "type_int",
+              "kind": "parameter",
+              "index": 0
+            },
+            "l0": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "unaff_r4",
+              "type": "type_int"
+            },
+            "l1": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "in_stack_00000004",
+              "type": "type_int"
+            },
+            "l2": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "total",
+              "type": "type_int"
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "l0",
+            "l1",
+            "l2",
+            "br"
+          ]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "kind": "constant",
+                  "value": 0
+                },
+                {
+                  "type": "type_int",
+                  "kind": "local",
+                  "operation": "l0"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": {
+      "name": "unsigned int",
+      "size": 4,
+      "kind": "integer"
+    },
+    "type_void": {
+      "name": "void",
+      "size": 0,
+      "kind": "void"
+    }
+  }
+}

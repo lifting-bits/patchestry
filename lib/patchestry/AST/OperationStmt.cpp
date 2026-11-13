@@ -2266,12 +2266,25 @@ namespace patchestry::ast {
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
         auto location = SourceLocation(ctx.getSourceManager(), op.key);
+        auto report_lossy = [&](llvm::StringRef category, const std::string &message) {
+            function_builder().loss_reporter.get().report(
+                location, category,
+                message + " in function '" + function.name + "'. key: " + op.key
+            );
+        };
+
         if (!op.inputs.empty()) {
             // For multi-input RETURN, input[0] is the address-space constant; use input[1].
             // For single-input RETURN, use input[0] directly.
             size_t idx     = op.inputs.size() > 1 ? 1 : 0;
             auto *ret_stmt = create_varnode(ctx, function, op.inputs[idx]);
             auto *ret_expr = llvm::dyn_cast_or_null< clang::Expr >(ret_stmt);
+            if (ret_expr == nullptr) {
+                report_lossy(
+                    "return-synthesized",
+                    "returned value could not be built; a bare return is emitted"
+                );
+            }
 
             // Match the return expression's type to the function's declared
             // return type. Ghidra high-pcode operators like INT_EQUAL emit a
@@ -2292,6 +2305,27 @@ namespace patchestry::ast {
                     && !ctx.hasSameUnqualifiedType(
                         ret_expr->getType(), ret_type_it->second))
                 {
+                    // A returned value wider than the declared return type is
+                    // truncated by the cast below.  That is how a value Ghidra
+                    // recovered across two registers (r0:r1) loses its high
+                    // half when the prototype only names the low register.
+                    // A boolean return type is exempt: the cast is a `!= 0`
+                    // test, not a truncation.
+                    const auto value_type    = ret_expr->getType();
+                    const auto declared_type = ret_type_it->second;
+                    if (value_type->isScalarType() && declared_type->isScalarType()
+                        && !declared_type->isBooleanType()
+                        && ctx.getTypeSize(value_type) > ctx.getTypeSize(declared_type))
+                    {
+                        report_lossy(
+                            "return-narrowed",
+                            std::to_string(ctx.getTypeSize(value_type)) + "-bit returned value"
+                                " truncated to the declared "
+                                + std::to_string(ctx.getTypeSize(declared_type))
+                                + "-bit return type '" + declared_type.getAsString() + "'"
+                        );
+                    }
+
                     auto *cast_expr =
                         make_cast(ctx, ret_expr, ret_type_it->second, location);
                     if (cast_expr != nullptr) {
@@ -2313,6 +2347,11 @@ namespace patchestry::ast {
         auto type_it      = types.find(function.prototype.rttype_key);
         if (type_it != types.end() && !type_it->second->isVoidType()) {
             auto ret_type = type_it->second;
+            report_lossy(
+                "return-synthesized",
+                "RETURN carries no value but the return type is '" + ret_type.getAsString()
+                    + "'; a zero value is returned"
+            );
             auto *zero    = clang::IntegerLiteral::Create(
                 ctx, llvm::APInt(32, 0), ctx.IntTy, location
             );
@@ -4078,6 +4117,24 @@ namespace patchestry::ast {
         std::string var_name = *op.name;
         auto &name_counts    = function_builder().declared_name_counts;
         auto [it, inserted]  = name_counts.try_emplace(var_name, 0);
+
+        // Ghidra names a variable `unaff_<reg>` when the function reads a
+        // register it never wrote and that is not a parameter, and `in_<loc>`
+        // for any other input it could not bind to the prototype.  Both are
+        // lifted as ordinary uninitialized locals, so the value the binary
+        // read from the caller's state is not the value the lifted code reads.
+        if (inserted
+            && (llvm::StringRef(var_name).starts_with("unaff_")
+                || llvm::StringRef(var_name).starts_with("in_")))
+        {
+            function_builder().loss_reporter.get().report(
+                op_loc, "unaffected-register-use",
+                "local '" + var_name + "' in function '"
+                    + function_builder().function.get().name
+                    + "' is an input the prototype does not cover; it is lifted as an "
+                      "uninitialized local. key: " + op.key
+            );
+        }
         if (!inserted) {
             // Variable coalescing (structural): when multiple SSA
             // versions of the same register have the same type, reuse

@@ -1,0 +1,220 @@
+// A 64-bit value returned from a 32-bit ARM function travels in r0:r1.  When
+// the prototype names a 64-bit return type the whole value survives.  When the
+// prototype only names the low register, the lifter truncates the returned
+// value to the declared type and the high word is gone; that is now reported.
+// A RETURN with no value in a function that returns one is reported too.
+//
+//   ret_wide_declared   u64 f(u64 v) { return v; }   ret i64, no report
+//   ret_wide_narrowed   u32 f(u64 v) { return v; }   high word dropped
+//   ret_missing         u32 f(u32 a) { return; }     zero returned
+//
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-llvm -print-tu -output %t > %t.log 2>&1
+// RUN: %file-check -vv -check-prefix=WARN %s --input-file %t.log
+// RUN: %file-check -vv -check-prefix=C %s --input-file %t.c
+// RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
+// RUN: not %patchir-decomp -input %t.json -emit-llvm -strict -output %t.strict > %t.strict.log 2>&1
+// RUN: %file-check -vv -check-prefix=ERR %s --input-file %t.strict.log
+// RUN: test ! -e %t.strict.ll
+//
+// WARN-DAG: Diag Warning: {{.*}}lossy lift [return-narrowed]: 64-bit returned value truncated to the declared 32-bit return type 'unsigned int' in function 'ret_wide_narrowed'
+// WARN-DAG: Diag Warning: {{.*}}lossy lift [return-synthesized]: RETURN carries no value but the return type is 'unsigned int'; a zero value is returned in function 'ret_missing'
+// WARN-NOT: in function 'ret_wide_declared'
+// WARN-NOT: Diag Error
+//
+// C-DAG: return (unsigned int)v;
+// C-DAG: return v;
+// C-DAG: return (unsigned int)0;
+//
+// LL-DAG: define dso_local i64 @ret_wide_declared(i64
+// LL-DAG: define dso_local i32 @ret_wide_narrowed(i64
+// LL-DAG: trunc i64 %{{.*}} to i32
+//
+// ERR-DAG: Diag Error: {{.*}}lossy lift [return-narrowed]
+// ERR-DAG: Diag Error: {{.*}}lossy lift [return-synthesized]
+// ERR: Skipping code generation due to prior diagnostics errors
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "ret_wide_declared",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_u64",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": [
+          "type_u64"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "v",
+              "type": "type_u64",
+              "kind": "parameter",
+              "index": 0
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "br"
+          ]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "kind": "constant",
+                  "value": 0
+                },
+                {
+                  "type": "type_u64",
+                  "kind": "parameter",
+                  "operation": "p0"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    },
+    "ram:10000100": {
+      "name": "ret_wide_narrowed",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": [
+          "type_u64"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000100:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "v",
+              "type": "type_u64",
+              "kind": "parameter",
+              "index": 0
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000100:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "br"
+          ]
+        },
+        "ram:10000100:0:basic": {
+          "operations": {
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "kind": "constant",
+                  "value": 0
+                },
+                {
+                  "type": "type_u64",
+                  "kind": "parameter",
+                  "operation": "p0"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000100:entry"
+    },
+    "ram:10000200": {
+      "name": "ret_missing",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": [
+          "type_int"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000200:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "a",
+              "type": "type_int",
+              "kind": "parameter",
+              "index": 0
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000200:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "br"
+          ]
+        },
+        "ram:10000200:0:basic": {
+          "operations": {
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": []
+            }
+          },
+          "ordered_operations": [
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000200:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": {
+      "name": "unsigned int",
+      "size": 4,
+      "kind": "integer"
+    },
+    "type_u64": {
+      "name": "unsigned long long",
+      "size": 8,
+      "kind": "integer"
+    },
+    "type_void": {
+      "name": "void",
+      "size": 0,
+      "kind": "void"
+    }
+  }
+}
