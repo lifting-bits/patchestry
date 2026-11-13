@@ -32,6 +32,34 @@ namespace patchestry::ast {
      * `serialized_types` map.
      */
 
+    namespace {
+
+        // `natural` when its storage matches the recovered byte size, otherwise
+        // an integer of the recovered width with `natural`'s signedness.  A
+        // recovered `bool`/`char`/`wchar_t` names how the value is read, not how
+        // many bytes the object occupies: lifting a four-byte boolean as C
+        // `bool` would shrink the object and normalize its values.  Size 0
+        // means the width is unknown, so `natural` stands.
+        clang::QualType storage_faithful(
+            clang::ASTContext &ctx, clang::QualType natural, uint32_t size_in_bytes
+        ) {
+            const auto bit_size = size_in_bytes * TypeBuilder::kNumBitsInByte;
+            if (bit_size == 0 || ctx.getTypeSize(natural) == bit_size) { return natural; }
+
+            const bool is_signed = !natural->isBooleanType() && natural->isSignedIntegerType();
+            auto sized = ctx.getIntTypeForBitwidth(
+                bit_size, static_cast< unsigned int >(is_signed)
+            );
+            if (sized.isNull()) {
+                LOG(ERROR) << "No integer type of " << bit_size << " bits for recovered '"
+                           << natural.getAsString() << "'; keeping its natural width\n";
+                return natural;
+            }
+            return sized;
+        }
+
+    } // namespace
+
     void TypeBuilder::create_types(clang::ASTContext &ctx, TypeMap &lifted_types) {
         lifted_types_ = &lifted_types;
         for (auto &[key, vnode_type] : lifted_types) {
@@ -83,7 +111,7 @@ namespace patchestry::ast {
                 return create_invalid(ctx, vnode_type);
 
             case VarnodeType::VT_BOOLEAN:
-                return ctx.BoolTy;
+                return storage_faithful(ctx, ctx.BoolTy, vnode_type->size);
 
             case VarnodeType::VT_INTEGER: {
                 auto &builtin = dynamic_cast< const BuiltinType & >(*vnode_type);
@@ -94,10 +122,10 @@ namespace patchestry::ast {
             }
 
             case VarnodeType::VT_CHAR:
-                return ctx.CharTy;
+                return storage_faithful(ctx, ctx.CharTy, vnode_type->size);
 
             case VarnodeType::VT_WIDECHAR:
-                return ctx.WideCharTy;
+                return storage_faithful(ctx, ctx.WideCharTy, vnode_type->size);
 
             case VarnodeType::VT_FLOAT:
                 return GetTypeFromSize(
