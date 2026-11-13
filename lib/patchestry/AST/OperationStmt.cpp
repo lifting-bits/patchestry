@@ -2326,15 +2326,57 @@ namespace patchestry::ast {
                             value_bits = ctx.getTypeSize(varnode_type);
                         }
                     }
+
+                    // A constant whose value survives the conversion loses
+                    // nothing, whatever the widths: 1 in an 8-byte varnode
+                    // returned as a 32-bit int is still 1.  For a boolean
+                    // return type that means 0 or 1; otherwise the value must
+                    // come back unchanged when the narrowed result is extended
+                    // again the way the declared type extends.
+                    auto constant_is_preserved = [&]() {
+                        const auto &returned = op.inputs[idx];
+                        if (returned.kind != Varnode::VARNODE_CONSTANT || !returned.value
+                            || value_bits == 0U || value_bits > 64U)
+                        {
+                            return false;
+                        }
+                        const llvm::APInt original(
+                            static_cast< unsigned >(value_bits), *returned.value, false, true
+                        );
+                        if (declared_type->isBooleanType()) {
+                            return original.ule(1U);
+                        }
+                        if (!declared_type->isIntegralOrEnumerationType()) {
+                            return false;
+                        }
+                        const auto narrowed =
+                            original.trunc(static_cast< unsigned >(ctx.getTypeSize(declared_type)));
+                        const auto restored = declared_type->isSignedIntegerOrEnumerationType()
+                            ? narrowed.sext(static_cast< unsigned >(value_bits))
+                            : narrowed.zext(static_cast< unsigned >(value_bits));
+                        return restored == original;
+                    };
+
                     if (declared_type->isScalarType()
-                        && value_bits > ctx.getTypeSize(declared_type))
+                        && value_bits > ctx.getTypeSize(declared_type)
+                        && !constant_is_preserved())
                     {
+                        // Converting to a boolean is a `!= 0` test, not a
+                        // truncation, but the binary still returned a wider
+                        // value than one truth bit, so it is reported with
+                        // wording that says what happens.
                         report_lossy(
                             "return-narrowed",
-                            std::to_string(value_bits) + "-bit returned value"
-                                " truncated to the declared "
-                                + std::to_string(ctx.getTypeSize(declared_type))
-                                + "-bit return type '" + declared_type.getAsString() + "'"
+                            declared_type->isBooleanType()
+                                ? std::to_string(value_bits)
+                                      + "-bit returned value reduced to a truth value by the "
+                                        "declared return type '"
+                                      + declared_type.getAsString() + "'"
+                                : std::to_string(value_bits) + "-bit returned value"
+                                      " truncated to the declared "
+                                      + std::to_string(ctx.getTypeSize(declared_type))
+                                      + "-bit return type '" + declared_type.getAsString()
+                                      + "'"
                         );
                     }
 
