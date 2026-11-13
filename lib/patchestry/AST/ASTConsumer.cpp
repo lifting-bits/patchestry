@@ -157,6 +157,29 @@ namespace patchestry::ast {
         type_builder = std::make_unique< TypeBuilder >(ci.getASTContext());
         if (!get_program().serialized_types.empty()) {
             type_builder->create_types(ctx, get_program().serialized_types);
+
+            // A function type is lifted with the target default convention,
+            // the same as a named function, so an indirect call through a
+            // pointer to it gets the same check the FunctionBuilder applies.
+            const auto &triple = ctx.getTargetInfo().getTriple();
+            for (const auto &[key, type] : get_program().serialized_types) {
+                if (!type || type->kind != VarnodeType::Kind::VT_FUNCTION) {
+                    continue;
+                }
+                const auto *fn_type = dynamic_cast< const FunctionType * >(type.get());
+                if (fn_type == nullptr
+                    || IsTargetDefaultConvention(triple, fn_type->calling_convention))
+                {
+                    continue;
+                }
+                loss_reporter.report(
+                    SourceLocation(ctx.getSourceManager(), key), "callconv-unsupported",
+                    "calling convention '" + fn_type->calling_convention
+                        + "' of function type '" + fn_type->name + "' is not the default for "
+                        + triple.getArchName().str()
+                        + "; lifted with the target default convention"
+                );
+            }
         }
 
         if (!get_program().serialized_globals.empty()) {

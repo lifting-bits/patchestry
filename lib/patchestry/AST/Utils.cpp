@@ -23,6 +23,58 @@
 
 namespace patchestry::ast {
 
+    // The names come from the Ghidra compiler specs for each processor.
+    // `__thiscall` is listed where the spec either does not define it (Ghidra
+    // then falls back to the default model) or the target ABI passes `this`
+    // as an ordinary first argument.  The JSON does not say which compiler
+    // spec was used, so the table is keyed on the Clang triple alone.
+    bool IsTargetDefaultConvention(const llvm::Triple &triple, llvm::StringRef name) {
+        // No model recorded, or Ghidra could not name one: nothing to
+        // contradict the default.
+        if (name.empty() || name == "unknown" || name == "default") {
+            return true;
+        }
+
+        switch (triple.getArch()) {
+            case llvm::Triple::arm:
+            case llvm::Triple::armeb:
+            case llvm::Triple::thumb:
+            case llvm::Triple::thumbeb:
+                // ARM.cspec, ARM_v45.cspec: default model is `__stdcall` (AAPCS).
+                return name == "__stdcall" || name == "__thiscall";
+            case llvm::Triple::aarch64:
+            case llvm::Triple::aarch64_be:
+                // AARCH64.cspec: default model is `__cdecl` (AAPCS64).
+                return name == "__cdecl" || name == "__thiscall";
+            case llvm::Triple::x86_64:
+                // x86-64-win.cspec: default is `__fastcall` (Microsoft x64).
+                // x86-64-gcc.cspec: default is `__stdcall` (System V).
+                if (triple.isOSWindows()) {
+                    return name == "__fastcall" || name == "__thiscall";
+                }
+                return name == "__stdcall" || name == "__thiscall";
+            case llvm::Triple::x86:
+                // x86 32-bit: only `__cdecl` matches the default; `__stdcall`,
+                // `__fastcall` and `__thiscall` differ in stack cleanup or
+                // register use.
+                return name == "__cdecl";
+            case llvm::Triple::ppc:
+            case llvm::Triple::ppcle:
+            case llvm::Triple::ppc64:
+            case llvm::Triple::ppc64le:
+            case llvm::Triple::mips:
+            case llvm::Triple::mipsel:
+            case llvm::Triple::mips64:
+            case llvm::Triple::mips64el:
+                // Every PowerPC and MIPS compiler spec names its default
+                // model `__stdcall` and defines no `__thiscall`.
+                return name == "__stdcall" || name == "__thiscall";
+            default:
+                // The lifter builds no target for any other architecture.
+                return false;
+        }
+    }
+
     clang::SourceLocation SourceLocation(clang::SourceManager &sm, std::string key) {
         auto &fm = sm.getFileManager();
         auto fe  = fm.getVirtualFileRef(key, static_cast< int >(key.size()), 0);

@@ -484,6 +484,9 @@ namespace patchestry::ghidra {
 
         varnode.is_variadic = func_obj.getBoolean("is_variadic").value_or(false);
         varnode.is_noreturn = func_obj.getBoolean("is_noreturn").value_or(false);
+        if (auto convention = get_string_if_valid(func_obj, "calling_convention")) {
+            varnode.calling_convention = *convention;
+        }
 
         const auto *params = func_obj.getArray("parameter_types");
         if (params != nullptr) {

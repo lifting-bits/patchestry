@@ -15,6 +15,8 @@
 #include <clang/AST/OperationKinds.h>
 #include <clang/AST/Type.h>
 #include <clang/Basic/SourceLocation.h>
+#include <llvm/ADT/StringRef.h>
+#include <llvm/TargetParser/Triple.h>
 
 namespace patchestry::ast {
 
@@ -52,6 +54,13 @@ namespace patchestry::ast {
     );
 
     clang::SourceLocation SourceLocation(clang::SourceManager &sm, std::string key);
+
+    /// True when the Ghidra prototype-model name `name` selects the same
+    /// argument and return placement as the default C convention of `triple`.
+    /// The lifter emits every function and function type with that default
+    /// (ClangIR lowers no other convention), so any other name means the
+    /// lifted prototype does not place arguments where the binary does.
+    bool IsTargetDefaultConvention(const llvm::Triple &triple, llvm::StringRef name);
 
     /// Returns a valid SourceLocation backed by a virtual "<patchestry-virtual>"
     /// buffer in the given context's SourceManager.  Idempotent: subsequent
