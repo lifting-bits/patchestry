@@ -3925,16 +3925,21 @@ namespace patchestry::ast {
                 return { nullptr, false };
             }
 
-            // Function/void* arithmetic is invalid in C / NYI in CIRGen (and
-            // crashes); do the byte arithmetic in char* when op_type is one.
-            auto arith_type = op_type;
-            if (op_type->isPointerType()
-                && (op_type->getPointeeType()->isFunctionType()
-                    || op_type->getPointeeType()->isVoidType()))
-            {
-                arith_type = ctx.getPointerType(ctx.CharTy);
-            }
-            auto *arith_base = make_cast(ctx, input_expr, arith_type, op_loc);
+            // The PTRSUB offset is in bytes.  C pointer arithmetic scales by
+            // the pointee size, so adding it to an `int *` would move four
+            // times too far; do the arithmetic in `char *` and convert the
+            // result to the output type.  This also covers function and void
+            // pointees, whose arithmetic is invalid in C and NYI in CIRGen.
+            // An integer-typed PTRSUB already adds bytes.
+            auto arith_type =
+                op_type->isPointerType() ? ctx.getPointerType(ctx.CharTy) : op_type;
+            // Explicit when the base is a pointer, so the printed C shows the
+            // `char *` the arithmetic is done in.
+            auto *arith_base = input_expr->getType()->isPointerType()
+                    && arith_type->isPointerType()
+                    && !ctx.hasSameUnqualifiedType(input_expr->getType(), arith_type)
+                ? make_explicit_cast(ctx, input_expr, arith_type, op_loc)
+                : make_cast(ctx, input_expr, arith_type, op_loc);
             if (!arith_base) {
                 LOG(ERROR) << "PTRSUB: failed to cast base for arithmetic. key: "
                            << op.key << "\n";
@@ -3947,6 +3952,18 @@ namespace patchestry::ast {
                 return { nullptr, false };
             }
             ptr_expr = add_result.getAs< clang::Expr >();
+            if (op_type->isPointerType() && !ctx.hasSameUnqualifiedType(op_type, arith_type)) {
+                // Parenthesized and explicit so the printed C reads
+                // `(T *)((char *)base + n)`.
+                ptr_expr = make_explicit_cast(
+                    ctx, new (ctx) clang::ParenExpr(op_loc, op_loc, ptr_expr), op_type, op_loc
+                );
+                if (!ptr_expr) {
+                    LOG(ERROR) << "PTRSUB: failed to cast result to the output type. key: "
+                               << op.key << "\n";
+                    return { nullptr, false };
+                }
+            }
         }
 
         if (merge_to_next) {

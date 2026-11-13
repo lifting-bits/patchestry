@@ -1,0 +1,429 @@
+// The second input of PTRSUB is a byte offset.  For a base that does not point
+// to a structure the lifter used to cast the base to the output type and add
+// the offset with C pointer arithmetic, which scales by the pointee size:
+// PTRSUB(p, 4) with an `unsigned int *` output moved 16 bytes, not 4.  The
+// arithmetic is now done in `char *` and the result converted to the output
+// type.
+//
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-llvm -print-tu -output %t > %t.log 2>&1
+// RUN: %file-check -vv -check-prefix=C %s --input-file %t.c
+// RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
+//
+// C-DAG: return (unsigned int *)((char *)p + 4U);
+// C-DAG: return (unsigned int *)((char *)p + 6U);
+// C-DAG: return (unsigned int **)((char *)p + 4U);
+// C-DAG: return (signed char *)((char *)p + 4U);
+// C-DAG: return (void *)((char *)p + 4U);
+// C-NOT: return p + 4U;
+//
+// LL-NOT: getelementptr i32
+// LL-NOT: getelementptr ptr
+// LL: define {{.*}}@ptrsub_
+// LL: getelementptr i8, ptr %{{[0-9]+}}, i32 {{4|6}}
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "ptrsub_int",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_intp",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "type_intp"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "p",
+              "type": "type_intp",
+              "kind": "parameter",
+              "index": 0
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "br"
+          ]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "sub": {
+              "mnemonic": "PTRSUB",
+              "type": "type_intp",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "type_intp",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "p0"
+                },
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 4
+                }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "type_intp",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "sub"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "sub",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    },
+    "ram:10001000": {
+      "name": "ptrsub_byte",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_charp",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "type_intp"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10001000:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "p",
+              "type": "type_intp",
+              "kind": "parameter",
+              "index": 0
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10001000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "br"
+          ]
+        },
+        "ram:10001000:0:basic": {
+          "operations": {
+            "sub": {
+              "mnemonic": "PTRSUB",
+              "type": "type_charp",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "type_intp",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "p0"
+                },
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 4
+                }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "type_charp",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "sub"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "sub",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10001000:entry"
+    },
+    "ram:10002000": {
+      "name": "ptrsub_void",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_voidp",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "type_intp"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10002000:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "p",
+              "type": "type_intp",
+              "kind": "parameter",
+              "index": 0
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10002000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "br"
+          ]
+        },
+        "ram:10002000:0:basic": {
+          "operations": {
+            "sub": {
+              "mnemonic": "PTRSUB",
+              "type": "type_voidp",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "type_intp",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "p0"
+                },
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 4
+                }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "type_voidp",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "sub"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "sub",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10002000:entry"
+    },
+    "ram:10003000": {
+      "name": "ptrsub_odd",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_intp",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "type_intp"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10003000:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "p",
+              "type": "type_intp",
+              "kind": "parameter",
+              "index": 0
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10003000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "br"
+          ]
+        },
+        "ram:10003000:0:basic": {
+          "operations": {
+            "sub": {
+              "mnemonic": "PTRSUB",
+              "type": "type_intp",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "type_intp",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "p0"
+                },
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 6
+                }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "type_intp",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "sub"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "sub",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10003000:entry"
+    },
+    "ram:10004000": {
+      "name": "ptrsub_ptrptr",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_intpp",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "type_intp"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10004000:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "p",
+              "type": "type_intp",
+              "kind": "parameter",
+              "index": 0
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10004000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "br"
+          ]
+        },
+        "ram:10004000:0:basic": {
+          "operations": {
+            "sub": {
+              "mnemonic": "PTRSUB",
+              "type": "type_intpp",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "type_intp",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "p0"
+                },
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 4
+                }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "type_intpp",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "sub"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "sub",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10004000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": {
+      "name": "unsigned int",
+      "size": 4,
+      "kind": "integer"
+    },
+    "type_char": {
+      "name": "char",
+      "size": 1,
+      "kind": "integer",
+      "is_signed": true
+    },
+    "type_void": {
+      "name": "void",
+      "size": 0,
+      "kind": "void"
+    },
+    "type_intp": {
+      "kind": "pointer",
+      "size": 4,
+      "element_type": "type_int"
+    },
+    "type_intpp": {
+      "kind": "pointer",
+      "size": 4,
+      "element_type": "type_intp"
+    },
+    "type_charp": {
+      "kind": "pointer",
+      "size": 4,
+      "element_type": "type_char"
+    },
+    "type_voidp": {
+      "kind": "pointer",
+      "size": 4,
+      "element_type": "type_void"
+    }
+  }
+}
