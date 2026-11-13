@@ -138,10 +138,16 @@ namespace patchestry::ast {
                 );
             }
 
-            // The decompiler's return storage says how many bytes the binary
-            // returns.  When that is more than the declared return type holds
-            // (a 64-bit value in r0:r1 declared as a 32-bit int), the lifted
-            // function cannot return the upper part.
+            // The decompiler's return storage says where the binary returns
+            // its value.  When the value is split across several pieces that
+            // together hold more than the declared return type (a 64-bit value
+            // in r0:r1 declared as a 32-bit int), the lifted function cannot
+            // return the upper part.
+            //
+            // A single piece larger than the type is not reported: the ABI
+            // extends the value to fill the register (a float or double
+            // returned in the 10-byte x87 ST0, a float in a 64-bit PowerPC FP
+            // register), and the JSON does not say which case applies.
             if (const auto &storage = function.prototype.return_storage) {
                 auto &ctx        = ci.getASTContext();
                 auto return_type = type_builder.GetSerializedType(function.prototype.rttype_key);
@@ -152,8 +158,8 @@ namespace patchestry::ast {
                     places += (places.empty() ? "" : ", ")
                         + (piece.register_name.empty() ? piece.kind : piece.register_name);
                 }
-                if (!return_type.isNull() && !return_type->isVoidType()
-                    && !return_type->isIncompleteType()
+                if (storage->size() > 1U && !return_type.isNull()
+                    && !return_type->isVoidType() && !return_type->isIncompleteType()
                     && storage_bytes * 8U > ctx.getTypeSize(return_type))
                 {
                     loss_reporter.report(
