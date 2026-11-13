@@ -20,6 +20,9 @@ namespace patchestry::ast {
         bool clang_ast_cleanup  = true;
         /// Dump DOT graphs at phase boundaries.  Set via `--emit-dot-cfg`.
         bool emit_dot_cfg       = false;
+        /// Turn lossy-lift reports (see `LossReporter`) into errors.  Set via
+        /// `--strict`.
+        bool strict             = false;
     };
 
 } // namespace patchestry::ast

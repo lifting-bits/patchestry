@@ -1,0 +1,58 @@
+// An operation whose builder fails is absent from the lifted function.  The
+// default lift reports it as a warning and still lowers; `-strict` turns the
+// report into an error and stops before lowering.  The dropped operation here
+// is a DECLARE_LOCAL that carries a size but no type.
+//
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-cir -output %t > %t.log 2>&1
+// RUN: %file-check -vv -check-prefix=WARN %s --input-file %t.log
+// RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
+// RUN: not %patchir-decomp -input %t.json -emit-cir -strict -output %t.strict > %t.strict.log 2>&1
+// RUN: %file-check -vv -check-prefix=ERR %s --input-file %t.strict.log
+// RUN: test ! -e %t.strict.cir
+//
+// WARN: Diag Warning: {{.*}}lossy lift [op-dropped]: DECLARE_LOCAL operation 'shadow' in function 'strict_op_dropped' produced no statement
+// WARN-NOT: Diag Error
+// CIR: cir.func{{.*}}@strict_op_dropped
+// ERR: Diag Error: {{.*}}lossy lift [op-dropped]: DECLARE_LOCAL operation 'shadow' in function 'strict_op_dropped' produced no statement
+// ERR: Skipping code generation due to prior diagnostics errors
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:1a000000": {
+      "name": "strict_op_dropped",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": []
+      },
+      "basic_blocks": {
+        "ram:1a000000:entry": {
+          "operations": {
+            "shadow": { "mnemonic": "DECLARE_LOCAL", "kind": "local", "name": "shadow", "size": 4 },
+            "entry.exit": { "mnemonic": "BRANCH", "target_block": "ram:1a000000:0:basic" }
+          },
+          "ordered_operations": ["shadow", "entry.exit"]
+        },
+        "ram:1a000000:0:basic": {
+          "operations": {
+            "ret0": {
+              "mnemonic": "RETURN",
+              "inputs": [{ "type": "type_int", "kind": "constant", "value": 0 }]
+            }
+          },
+          "ordered_operations": ["ret0"]
+        }
+      },
+      "entry_block": "ram:1a000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": { "name": "int", "size": 4, "kind": "integer" }
+  }
+}

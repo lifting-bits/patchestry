@@ -29,6 +29,10 @@ namespace patchestry {
         bool print_tu = false;
 
         bool emit_dot_cfg = false;
+
+        // Fail the lift when a P-Code fact cannot be reproduced faithfully
+        // instead of warning about it. Set via --strict.
+        bool strict = false;
     };
 
 } // namespace patchestry
