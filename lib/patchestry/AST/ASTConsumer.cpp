@@ -628,6 +628,124 @@ namespace patchestry::ast {
         }
     }
 
+    std::vector< Binding > PcodeASTConsumer::collect_bindings(clang::ASTContext &ctx) const {
+        // `<space>:<hex offset>` -> (space, offset).
+        auto split_key = [](const std::string &key, Binding &binding) {
+            binding.key      = key;
+            const auto colon = key.find(':');
+            if (colon == std::string::npos) {
+                return;
+            }
+            uint64_t offset = 0;
+            if (llvm::StringRef(key).substr(colon + 1).getAsInteger(16, offset)) {
+                return;
+            }
+            binding.address_space = key.substr(0, colon);
+            binding.address       = offset;
+        };
+        auto origin_of = [](const Binding &binding) -> std::string {
+            if (!binding.address) {
+                return "unknown";
+            }
+            return binding.address_space == "EXTERNAL" ? "imported" : "original";
+        };
+        auto symbol_of = [](const clang::NamedDecl *decl) {
+            if (const auto *label = decl->getAttr< clang::AsmLabelAttr >()) {
+                return label->getLabel().str();
+            }
+            return decl->getNameAsString();
+        };
+
+        // Declaration -> key, for every declaration the program model explains.
+        std::unordered_map< const clang::Decl *, std::string > function_keys;
+        std::unordered_map< const clang::Decl *, std::string > global_keys;
+        std::unordered_set< const clang::Decl * > intrinsics;
+        for (const auto &[key, decl] : function_declarations) {
+            if (decl != nullptr) {
+                function_keys.emplace(decl->getCanonicalDecl(), key);
+            }
+        }
+        for (const auto &[key, decl] : global_variable_declarations) {
+            if (decl != nullptr) {
+                global_keys.emplace(decl->getCanonicalDecl(), key);
+            }
+        }
+        for (const auto &[name, decl] : intrinsic_declarations) {
+            if (decl != nullptr) {
+                intrinsics.insert(decl->getCanonicalDecl());
+            }
+        }
+
+        std::vector< Binding > bindings;
+        std::unordered_set< const clang::Decl * > seen;
+        for (const auto *decl : ctx.getTranslationUnitDecl()->decls()) {
+            if (const auto *var = llvm::dyn_cast< clang::VarDecl >(decl)) {
+                if (!seen.insert(var->getCanonicalDecl()).second) {
+                    continue;
+                }
+                Binding binding;
+                binding.name   = var->getNameAsString();
+                binding.symbol = symbol_of(var);
+                binding.kind   = "object";
+                if (!var->getType()->isIncompleteType()) {
+                    binding.lifted_size = static_cast< uint64_t >(
+                        ctx.getTypeSizeInChars(var->getType()).getQuantity()
+                    );
+                }
+                if (auto key = global_keys.find(var->getCanonicalDecl());
+                    key != global_keys.end())
+                {
+                    split_key(key->second, binding);
+                    const auto &globals = get_program().serialized_globals;
+                    if (auto global = globals.find(key->second); global != globals.end()) {
+                        binding.size = global->second.size;
+                    }
+                }
+                binding.origin = origin_of(binding);
+                bindings.push_back(std::move(binding));
+                continue;
+            }
+
+            const auto *function = llvm::dyn_cast< clang::FunctionDecl >(decl);
+            if (function == nullptr || !seen.insert(function->getCanonicalDecl()).second) {
+                continue;
+            }
+            Binding binding;
+            binding.name    = function->getNameAsString();
+            binding.symbol  = symbol_of(function);
+            binding.kind    = "function";
+            binding.defined = function->hasBody();
+            if (auto key = function_keys.find(function->getCanonicalDecl());
+                key != function_keys.end())
+            {
+                split_key(key->second, binding);
+                binding.origin         = origin_of(binding);
+                const auto &functions = get_program().serialized_functions;
+                if (auto model = functions.find(key->second); model != functions.end()) {
+                    if (model->second.is_intrinsic) {
+                        binding.origin = "patch-owned";
+                    }
+                    // Address ranges are inclusive at both ends.
+                    for (const auto &range : model->second.address_ranges) {
+                        Binding start;
+                        Binding end;
+                        split_key(range.start, start);
+                        split_key(range.end, end);
+                        if (start.address && end.address && *end.address >= *start.address) {
+                            binding.size += *end.address - *start.address + 1;
+                        }
+                    }
+                }
+            } else {
+                binding.origin = intrinsics.contains(function->getCanonicalDecl())
+                    ? "patch-owned"
+                    : "unknown";
+            }
+            bindings.push_back(std::move(binding));
+        }
+        return bindings;
+    }
+
     void PcodeASTConsumer::create_globals(
         clang::ASTContext &ctx, VariableMap &serialized_variables
     ) {

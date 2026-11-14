@@ -1272,8 +1272,15 @@ namespace patchestry::ghidra {
             if (auto maybe_type = get_string_if_valid(*global_obj, "type")) {
                 variable.type = *maybe_type;
             }
+            // The serializer writes the size as a decimal string; accept a
+            // number too.  Anything else leaves the size unknown (0).
             if (auto maybe_size = global_obj->getInteger("size")) {
-                variable.size = static_cast< uint32_t >(*maybe_size);
+                variable.size = *maybe_size > 0 ? static_cast< uint32_t >(*maybe_size) : 0U;
+            } else if (auto size_text = global_obj->getString("size")) {
+                uint32_t parsed = 0;
+                if (!size_text->getAsInteger(10, parsed)) {
+                    variable.size = parsed;
+                }
             }
 
             serialized_globals.emplace(variable.key, std::move(variable));

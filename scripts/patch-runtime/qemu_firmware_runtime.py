@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import shutil
 import subprocess
@@ -15,6 +16,8 @@ from elftools.elf.elffile import ELFFile
 from patcherex2 import InsertFunctionPatch, ModifyFunctionPatch, Patcherex
 from patcherex2.components.compilers import clang_arm as _patcherex_clang_arm
 from patcherex2.targets.elf_arm_bare import ElfArmBare
+
+import check_bindings
 
 
 # Patcherex2's ClangArm.compile() post-processes the assembled Thumb bytes and
@@ -484,6 +487,22 @@ def patch_function_in_elf(
     p.save_binary(str(rewritten_elf))
 
 
+def verify_bindings(
+    bindings_path: Path, original_elf: Path, rewritten_elf: Path | None, report_path: Path
+) -> None:
+    """Fail the case when a lifted name does not resolve to the original entity."""
+    manifest = json.loads(bindings_path.read_text(encoding="utf-8"))
+    report = check_bindings.check_bindings(manifest, original_elf, rewritten_elf)
+    report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    failed = check_bindings.failures(report, strict=False)
+    if failed:
+        details = ", ".join(
+            f"{row['verdict']} {row['kind']} '{row['name']}' at {row.get('address', '?')}"
+            for row in failed
+        )
+        raise RuntimeError(f"Binding check failed against {original_elf}: {details}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo-root", type=Path, required=True)
@@ -542,6 +561,8 @@ def main() -> int:
         patched_ll_path = case_dir / f"{case.function_name}.patched.ll"
         rewritten_elf_path = case_dir / "rewritten.elf"
         transcript_path = case_dir / "qemu.log"
+        bindings_path = case_dir / "bindings.manifest.json"
+        bindings_report_path = case_dir / "bindings.json"
 
         fixture_json_path = fixture_dir / f"{case.function_name}.json"
         if args.refresh_ghidra_fixtures:
@@ -568,7 +589,19 @@ def main() -> int:
                 )
             shutil.copyfile(fixture_json_path, json_path)
 
-        run([str(patchir_decomp), "-input", str(json_path), "-emit-cir", "-output", str(cir_stem)])
+        run(
+            [
+                str(patchir_decomp),
+                "-input",
+                str(json_path),
+                "-emit-cir",
+                "-emit-bindings",
+                str(bindings_path),
+                "-output",
+                str(cir_stem),
+            ]
+        )
+        verify_bindings(bindings_path, firmware_elf, None, bindings_report_path)
 
         transform_dir = repo_root / "test" / "patchir-transform"
         run(
@@ -605,6 +638,7 @@ def main() -> int:
             rewritten_elf_path,
             compiler_flags,
         )
+        verify_bindings(bindings_path, firmware_elf, rewritten_elf_path, bindings_report_path)
 
         transcript_lines = run_qemu(args.qemu_system_arm, rewritten_elf_path)
         write_lines(transcript_path, transcript_lines)

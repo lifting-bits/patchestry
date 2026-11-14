@@ -144,7 +144,7 @@ namespace patchestry::ghidra {
     {
         std::string name;
         std::string type;
-        uint32_t size;
+        uint32_t size = 0; // bytes; 0 when the JSON does not say
         std::string key;
     };
 

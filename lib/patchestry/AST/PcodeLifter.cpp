@@ -34,7 +34,12 @@ namespace patchestry::ast {
         if (!ci) { return nullptr; }
 
         ci->getASTConsumer().HandleTranslationUnit(ci->getASTContext());
-        return std::make_unique< TranslationUnit >(TranslationUnit{ std::move(ci) });
+        // The consumer is the one created above, so the cast is exact.
+        auto bindings = static_cast< PcodeASTConsumer & >(ci->getASTConsumer())
+                            .collect_bindings(ci->getASTContext());
+        return std::make_unique< TranslationUnit >(
+            TranslationUnit{ std::move(ci), std::move(bindings) }
+        );
     }
 
 } // namespace patchestry::ast
