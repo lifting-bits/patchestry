@@ -102,3 +102,35 @@ void patch__replace__initialized(void) {
     }
     patch_retry_limit = patch_retry_limit - 1;
 }
+
+/* Validation corpus.  Each patch below only restricts the inputs its target
+   accepts, and each rejects in a different way. */
+
+extern volatile unsigned qemu_length_last;
+extern void forward_second(unsigned value);
+extern void qemu_reject(void) __attribute__((noreturn));
+
+/* Reject by early return: the replacement body returns the error value for a
+   length over the limit and is the original body otherwise. */
+unsigned patch__definition__qemu_target_length(const unsigned char *buf, unsigned len) {
+    if (len > 16) {
+        return 0xffffffffu;
+    }
+    qemu_length_last = len;
+    return buf[0] + len;
+}
+
+/* Reject by skipping the operation: the call is made only for a value within
+   the limit. */
+void patch__replace__forward_second(unsigned value) {
+    if (value <= 32) {
+        forward_second(value);
+    }
+}
+
+/* Reject by calling a handler that does not return. */
+void patch__entry__qemu_target_send(unsigned byte) {
+    if (byte >= 'a') {
+        qemu_reject();
+    }
+}

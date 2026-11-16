@@ -72,3 +72,18 @@ patch_definitions:
   category: serial-qemu
   function_name: patch::replace::initialized
   code_file: serial_qemu_patch.c
+- name: serial_qemu_length_patch
+  description: Replacement body for qemu_target_length that rejects a length over 16 by early return
+  category: serial-qemu
+  function_name: patch::definition::qemu_target_length
+  code_file: serial_qemu_patch.c
+- name: serial_qemu_forward_patch
+  description: Guarded forward_second call that is skipped for a value over 32
+  category: serial-qemu
+  function_name: patch::replace::forward_second
+  code_file: serial_qemu_patch.c
+- name: serial_qemu_send_patch
+  description: Entry check for qemu_target_send that calls the reject handler
+  category: serial-qemu
+  function_name: patch::entry::qemu_target_send
+  code_file: serial_qemu_patch.c

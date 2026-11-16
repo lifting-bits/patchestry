@@ -541,6 +541,10 @@ namespace patchestry {
 
             // cloneInto creates fresh block args; the signature gate above
             // guarantees their types match the target's declared parameters.
+            // Blocks are destroyed in order, and a later block can still use a
+            // value defined in an earlier one (the return block reads the
+            // slot allocated at entry).  Drop every operand first.
+            target.getBody().dropAllReferences();
             target.getBody().getBlocks().clear();
             mlir::IRMapping mapper;
             patch_func.getBody().cloneInto(&target.getBody(), mapper);
