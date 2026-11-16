@@ -78,7 +78,11 @@ namespace patchestry::codegen {
             cirdriver->HandleTopLevelDecl(clang::DeclGroupRef(decl));
         }
 
-        cirdriver->emitDeferredDecls();
+        // Definitions that are not externally visible (a `static` helper or
+        // variable in patch code) are deferred until something uses them, and
+        // CIRGen only emits that queue when the translation unit ends.
+        // Without this the module kept bare declarations of them.
+        cirdriver->HandleTranslationUnit(ctx);
 
         reconcile_variadic_decls(cirdriver->getModule());
 

@@ -1,0 +1,26 @@
+apiVersion: patchestry.io/v1
+metadata:
+  name: serial-qemu-switch-patch
+  description: Replace the body of qemu_target_replace with a switch over new string constants
+  version: 1.0.0
+  author: Patchestry
+  created: '2026-11-16'
+  kind: PatchSpec
+target:
+  binary: serial.elf
+  arch: ARM:LE:32
+libraries:
+- patches/serial_qemu_patch_library.yaml
+patches:
+- name: serial_qemu_switch_patch
+  id: QEMU-SERIAL-SWITCH-001
+  description: Replace emit_replace_base inside qemu_target_replace
+  match:
+    name: emit_replace_base
+    kind: function
+    context:
+    - qemu_target_replace
+  action:
+    mode: replace
+    patch: serial_qemu_switch_patch
+    arguments: []

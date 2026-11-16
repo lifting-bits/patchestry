@@ -52,3 +52,18 @@ patch_definitions:
   category: serial-qemu
   function_name: patch::before::qemu_target_dispatch
   code_file: serial_qemu_patch.c
+- name: serial_qemu_switch_patch
+  description: Replace qemu_target_replace with a switch over new string constants
+  category: serial-qemu
+  function_name: patch::replace::switch
+  code_file: serial_qemu_patch.c
+- name: serial_qemu_divide_patch
+  description: Replace qemu_target_replace with a 64-bit division, which needs a compiler runtime helper
+  category: serial-qemu
+  function_name: patch::replace::divide
+  code_file: serial_qemu_patch.c
+- name: serial_qemu_state_patch
+  description: Replace qemu_target_replace with code that keeps a writable variable of its own
+  category: serial-qemu
+  function_name: patch::replace::state
+  code_file: serial_qemu_patch.c
