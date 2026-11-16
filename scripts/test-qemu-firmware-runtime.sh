@@ -158,6 +158,10 @@ make -C "$repo_root/firmwares/serial-qemu" clean all \
   LLVM_PREFIX="$llvm_prefix" \
   LD_LLD="$ld_lld"
 
+PATCHESTRY_LLVM_PREFIX="$llvm_prefix" PATCHESTRY_LD_LLD="$ld_lld" \
+  uv run --python "$python_bin" "${patcherex_env[@]}" \
+  python "$repo_root/scripts/patch-runtime/test_check_trampoline.py"
+
 runtime_args=(
   "$repo_root/scripts/patch-runtime/qemu_firmware_runtime.py"
   --repo-root "$repo_root"

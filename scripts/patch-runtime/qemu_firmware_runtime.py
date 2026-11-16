@@ -18,6 +18,7 @@ from patcherex2.components.compilers import clang_arm as _patcherex_clang_arm
 from patcherex2.targets.elf_arm_bare import ElfArmBare
 
 import check_bindings
+import check_trampoline
 
 
 # Patcherex2's ClangArm.compile() post-processes the assembled Thumb bytes and
@@ -53,6 +54,9 @@ class Case:
     function_name: str
     spec_name: str
     expected_lines: tuple[str, ...]
+    # A problem check_trampoline must report for this case.  The case passes
+    # when the rewritten ELF is rejected for that reason; it is not run.
+    expect_reject: str | None = None
 
 
 @dataclass(frozen=True)
@@ -503,6 +507,23 @@ def verify_bindings(
         raise RuntimeError(f"Binding check failed against {original_elf}: {details}")
 
 
+def verify_trampoline(
+    original_elf: Path,
+    rewritten_elf: Path,
+    function: str,
+    function_json: Path,
+    report_path: Path,
+) -> list[str]:
+    """Check how the function was reinserted; return the problems found."""
+    record = json.loads(function_json.read_text(encoding="utf-8"))
+    try:
+        report = check_trampoline.check_trampoline(original_elf, rewritten_elf, function, record)
+    except LookupError as error:
+        raise RuntimeError(str(error)) from error
+    report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    return check_trampoline.failures(report)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo-root", type=Path, required=True)
@@ -549,6 +570,7 @@ def main() -> int:
         )
 
     summary_rows = ["case\tstatus\tartifact"]
+    statuses: dict[str, str] = {}
 
     for case in CASES:
         case_dir = output_dir / case.name
@@ -563,6 +585,7 @@ def main() -> int:
         transcript_path = case_dir / "qemu.log"
         bindings_path = case_dir / "bindings.manifest.json"
         bindings_report_path = case_dir / "bindings.json"
+        trampoline_report_path = case_dir / "trampoline.json"
 
         fixture_json_path = fixture_dir / f"{case.function_name}.json"
         if args.refresh_ghidra_fixtures:
@@ -640,6 +663,25 @@ def main() -> int:
         )
         verify_bindings(bindings_path, firmware_elf, rewritten_elf_path, bindings_report_path)
 
+        problems = verify_trampoline(
+            firmware_elf, rewritten_elf_path, case.function_name, json_path, trampoline_report_path
+        )
+        if case.expect_reject is not None:
+            if case.expect_reject not in problems:
+                raise RuntimeError(
+                    f"Case {case.name} should have been rejected for {case.expect_reject}; "
+                    f"the reinsertion check reported {problems or 'no problem'} "
+                    f"(see {trampoline_report_path})."
+                )
+            statuses[case.name] = f"rejected:{case.expect_reject}"
+            summary_rows.append(f"{case.name}\t{statuses[case.name]}\t{rewritten_elf_path}")
+            continue
+        if problems:
+            raise RuntimeError(
+                f"Reinsertion check failed for {case.name}: {', '.join(problems)} "
+                f"(see {trampoline_report_path})."
+            )
+
         transcript_lines = run_qemu(args.qemu_system_arm, rewritten_elf_path)
         write_lines(transcript_path, transcript_lines)
         if transcript_lines != case.expected_lines:
@@ -647,6 +689,7 @@ def main() -> int:
                 f"Transcript mismatch for {case.name}.\nExpected: {case.expected_lines}\nObserved: {transcript_lines}"
             )
 
+        statuses[case.name] = "pass"
         summary_rows.append(f"{case.name}\tpass\t{rewritten_elf_path}")
 
     write_lines(output_dir / "patch-compiler-flags.txt", compiler_flags)
@@ -660,7 +703,7 @@ def main() -> int:
             "",
             f"Baseline: {output_dir / 'baseline.log'}",
             "",
-            *[f"- `{case.name}`: pass" for case in CASES],
+            *[f"- `{case.name}`: {statuses[case.name]}" for case in CASES],
         ],
     )
 

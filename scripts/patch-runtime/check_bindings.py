@@ -86,6 +86,7 @@ class ElfSymbol:
     addr: int
     size: int
     kind: str  # STT_FUNC, STT_OBJECT, STT_NOTYPE, ...
+    thumb: bool = False  # ARM only: the function symbol had bit 0 set
 
 
 @dataclass(frozen=True)
@@ -165,10 +166,11 @@ def load_image(path: Path) -> Image:
                     continue
                 addr = int(symbol["st_value"])
                 # ARM marks a Thumb function by setting bit 0 of its address.
+                thumb = is_arm and kind == "STT_FUNC" and bool(addr & 1)
                 if is_arm and kind == "STT_FUNC":
                     addr &= ~1
                 symbols.setdefault(symbol.name, []).append(
-                    ElfSymbol(symbol.name, addr, int(symbol["st_size"]), kind)
+                    ElfSymbol(symbol.name, addr, int(symbol["st_size"]), kind, thumb)
                 )
         # ARM mapping symbols ($t, $d, $a) mark code and data runs, not objects.
         by_address = sorted(
