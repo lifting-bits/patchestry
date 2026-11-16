@@ -125,6 +125,10 @@ The script writes results under `builds/qemu-firmware-runtime/`:
 - `<case>/trampoline.json`
 - `<case>/patch_record.json`
 - `<case>/applied_bytes.json`
+- `<case>/static.json`
+- `<case>/patch_record_check.json`
+- `<case>/case.json`
+- `<case>/validation.json`
 - `<case>/qemu.log`
 - `summary.tsv`
 - `summary.md`
@@ -149,6 +153,24 @@ The current runtime cases are:
 - `send`: `qemu_target_send(byte)` gets an entry check that calls `qemu_reject` for a lower-case letter or above
 
 Each case rewrites the original firmware ELF and validates the serial output from QEMU.
+
+## Static Checks
+
+`scripts/patch-runtime/check_static.py` reads the machine code the reinsertion added, from the rewritten image, and checks what it does to the state a function shares with its caller. It follows each inserted function from its entry along every direct branch and tracks the stack pointer, the callee-saved registers and the slots they are saved in. It does not trust the compiler that produced the code.
+
+| Problem | Meaning |
+| --- | --- |
+| `callee-saved-clobbered` | at a return or tail call, one of r4-r11 or d8-d15 does not hold the value it had at entry |
+| `unbalanced-stack` | at a return or tail call, the stack pointer is not where it was at entry |
+| `return-address-lost` | the function returns to something other than the lr it was entered with |
+| `code-size-over-budget` | the inserted functions together are larger than the code budget |
+| `stack-over-budget` | their frames together are deeper than the stack budget |
+
+A function the analysis cannot follow is `not-run` with a reason (`indirect-jump`, `untracked-stack-pointer`, `conditional-stack-change`, `inconsistent-stack`, `runs-past-end`, `undecodable`). It has not passed. A case names the reason it expects in `static_not_run`; the `switch` case does, because its helper's `switch` is compiled to a jump through a table. Any other outcome fails the case.
+
+The report (`static.json`) also has the code size and the frame size of each inserted function, the same analysis of the function that was replaced, the growth of the frame, and `inlined_copies`: places in the original image that repeat at least half of the replaced function's body, which a reinsertion at the function's entry does not reach.
+
+Budgets are compared only when given (`--max-code-bytes`, `--max-stack-bytes`). The patch specification has no place to declare them yet, so the runtime reports the measured sizes and the budget verdicts read `not-judged`. The stack figure is the sum of the inserted functions' own frames; frames of the image's functions that the new code calls are not included.
 
 ## Validation Corpus Targets
 
@@ -283,6 +305,40 @@ PATCHESTRY_LLVM_PREFIX=<llvm bin dir> python3 scripts/patch-runtime/check_applie
 ```
 
 Its unit tests (`scripts/patch-runtime/test_check_applied_bytes.py`) run at the start of `scripts/test-qemu-firmware-runtime.sh`.
+
+## Evidence
+
+`scripts/patch-runtime/evidence.py CASE_DIR` writes `<case>/validation.json` from the reports in the case directory and nothing else. The suite runs it for every case, including one that stopped early.
+
+It gives every check of the validation plan one of four verdicts:
+
+| Verdict | Meaning |
+| --- | --- |
+| `proven` | the check decided its claim for everything the claim covers (every byte compared, every path analyzed), under the listed assumptions |
+| `tested` | the claim held on the inputs that were run |
+| `failed` | the check found a problem |
+| `not-run` | the check did not run, could not decide, or does not exist yet |
+
+A check whose report is absent is `not-run`. The verdict of a group and of the case is the weakest one in it (`failed`, then `not-run`, `tested`, `proven`). P1 and P3 come from `check_equivalence.py` (`equivalence.json`, see `identity_reinsertion.md`); this suite does not run it yet. P2, P4, the firmware checks and the re-lift do not exist yet, so no case has an overall verdict better than `not-run`. `groups` says what the implemented checks established: `integrity` (bindings, dependencies, ABI, reinsertion, patch record, link addresses, applied bytes, rewritten bindings), `static` (calling convention, the two budgets), `runtime` (the transcript).
+
+The file also has the bounds (the budgets and what was measured against them, the compiler and flags), every assumption with its name, source and statement, warnings (inlined copies), and each report it read with its SHA-256.
+
+| Assumption | When it appears |
+| --- | --- |
+| `lift-faithful` | lifted code was used |
+| `compiler-faithful` | bytes were compared against a second compilation |
+| `extent-from-lifter`, `mode-declared` | the image has no symbol to confirm the function's extent or instruction set |
+| `plt-stubs-from-fixture` | imports are reached through stub addresses the fixture names |
+| `addresses-outside-image` | a name is an address no segment maps |
+| `fixtures-hand-written` | the function JSON was written by hand |
+| `fixtures-not-regenerated` | the function JSON is a checked-in file, not lifted in this run |
+| `validation-block-absent` | the patch specification declares no intent |
+
+The suite writes `case.json` beside the reports with what no report holds: the image and its digest, the patch, the fixture's origin, and the outcome of the run. It can call a run `tested`, `failed` or `not-run`, never `proven`. After each case the suite compares its own status with the evidence and fails on a disagreement.
+
+`scripts/patch-runtime/collect_reports.py RUN_DIR... --output DIR` gathers the evidence and reports of whole runs into CSV tables (`cases`, `functions`, `checks`, `problems`, `assumptions`) and one JSON file.
+
+In this suite the `abi` check does not run, so `integrity` is `not-run` for every case: the patch compiler targets `arm-linux-gnueabihf` while the firmware is a soft-float Cortex-M3 image, and nothing compares the two yet.
 
 ## Failure Inspection
 

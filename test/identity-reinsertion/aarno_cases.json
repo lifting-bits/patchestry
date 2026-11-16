@@ -5,7 +5,100 @@
     "sha256": "69961109c2afabca1c858b0415afd8cf622a2ac9b52197b5fa1a7e99d32f75b4",
     "fixture": "test/patchir-decomp/cve_2018_18732_fun_0007ae8c.json",
     "function": "FUN_0007ae8c",
-    "expect": "pass"
+    "expect": "pass",
+    "equivalence": {
+      "pointer_size": 128,
+      "arg_buffers": {
+        "1": 64
+      },
+      "arg_ranges": {
+        "2": [
+          0,
+          16
+        ]
+      },
+      "inputs": 300,
+      "variants": [
+        {
+          "name": "rewritten",
+          "description": "none: the lifted C written out by hand, no patch",
+          "source": "test/identity-reinsertion/patches/httpd_fun_0007ae8c.c",
+          "expect": {
+            "P1": "tested",
+            "P3": "tested"
+          }
+        },
+        {
+          "name": "limit-8",
+          "description": "reject a path token of 8 bytes or more by returning a null pointer",
+          "source": "test/identity-reinsertion/patches/httpd_fun_0007ae8c.c",
+          "defines": [
+            "LIMIT=8"
+          ],
+          "reject_returns": [
+            0
+          ],
+          "expect": {
+            "P1": "tested",
+            "P3": "tested"
+          }
+        },
+        {
+          "name": "limit-8-undeclared",
+          "description": "the same patch with no reject value declared (seeded harm)",
+          "source": "test/identity-reinsertion/patches/httpd_fun_0007ae8c.c",
+          "defines": [
+            "LIMIT=8"
+          ],
+          "expect": {
+            "P1": "tested",
+            "P3": "failed"
+          }
+        },
+        {
+          "name": "widened",
+          "description": "limit raised from 8 to 24: accepts inputs the version it replaces rejects (seeded harm)",
+          "source": "test/identity-reinsertion/patches/httpd_fun_0007ae8c.c",
+          "original_defines": [
+            "LIMIT=8"
+          ],
+          "defines": [
+            "LIMIT=24"
+          ],
+          "reject_returns": [
+            0
+          ],
+          "expect": {
+            "P1": "failed",
+            "P3": "tested"
+          }
+        },
+        {
+          "name": "changed-return",
+          "description": "returns the buffer address plus one (seeded harm)",
+          "source": "test/identity-reinsertion/patches/httpd_fun_0007ae8c.c",
+          "defines": [
+            "RETURN_OFFSET=1"
+          ],
+          "reject_returns": [
+            0
+          ],
+          "expect": {
+            "P1": "tested",
+            "P3": "failed"
+          }
+        },
+        {
+          "name": "printed-c",
+          "description": "none: the C that -print-tu printed for the function, compiled as is (known printer defect)",
+          "source": "@printed",
+          "expect": {
+            "P1": "tested",
+            "P3": "failed"
+          }
+        }
+      ]
+    }
   },
   {
     "name": "httpd-fun-00067c0c",

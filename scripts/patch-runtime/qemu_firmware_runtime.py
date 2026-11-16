@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 import subprocess
@@ -18,7 +19,9 @@ from patcherex2.targets.elf_arm_bare import ElfArmBare
 
 import check_applied_bytes
 import check_bindings
+import check_static
 import check_trampoline
+import evidence
 import patch_dependencies
 import patch_record
 
@@ -50,6 +53,12 @@ def _thumb_only_compile(self, code, base=0, symbols=None, extension=".c",
 _patcherex_clang_arm.ClangArm.compile = _thumb_only_compile
 
 
+# Fixtures written by hand in the lifter's format, not produced by it.
+HAND_WRITTEN_FIXTURES = frozenset(
+    {"qemu_target_length", "qemu_target_forward", "qemu_target_send"}
+)
+
+
 @dataclass(frozen=True)
 class Case:
     name: str
@@ -59,6 +68,10 @@ class Case:
     # A problem check_trampoline must report for this case.  The case passes
     # when the rewritten ELF is rejected for that reason; it is not run.
     expect_reject: str | None = None
+    # Reasons the static checks cannot analyze some inserted function of this
+    # case.  Such a function has not passed them; the case says so in advance,
+    # and any other outcome of the static checks fails it.
+    static_not_run: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -319,6 +332,8 @@ CASES: tuple[Case, ...] = (
     # transcript shows every arm.
     Case(
         name="switch",
+        # The helper's switch is compiled to a jump through a table.
+        static_not_run=("indirect-jump",),
         function_name="qemu_target_replace",
         spec_name="serial_qemu_switch_patch.yaml",
         expected_lines=(
@@ -835,6 +850,7 @@ def verify_patch_record(
     dependencies_report_path: Path,
     trampoline_report_path: Path,
     record_path: Path,
+    bindings_report_path: Path,
 ) -> dict[str, str]:
     """Write the record of what the rewriter did and check it against the image."""
     dependencies = json.loads(dependencies_report_path.read_text(encoding="utf-8"))
@@ -850,7 +866,23 @@ def verify_patch_record(
     )
     record_path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
     trampoline = json.loads(trampoline_report_path.read_text(encoding="utf-8"))
-    return patch_record.check_record(record, rewritten_elf, trampoline)
+    problems = patch_record.check_record(record, rewritten_elf, trampoline)
+    # Where the binding check found each entity, against where it was linked.
+    bindings = json.loads(bindings_report_path.read_text(encoding="utf-8"))
+    addresses = {name: int(value, 16) for name, value in bindings["absolute_symbols"].items()}
+    addresses.update({
+        row.get("symbol", row["name"]): int(row["address"], 16)
+        for row in bindings["bindings"]
+        if row["verdict"] == "match" and row.get("address")
+    })
+    mismatched = patch_record.link_address_problems(record, addresses)
+    record_path.with_name("patch_record_check.json").write_text(
+        json.dumps({"problems": problems, "link_addresses": mismatched}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    if mismatched:
+        problems = {**problems, "link-address-mismatch": "; ".join(mismatched)}
+    return problems
 
 
 def original_object_addresses(bindings_path: Path) -> dict[str, int]:
@@ -945,6 +977,21 @@ def verify_applied_bytes(
     return check_applied_bytes.failures(report)
 
 
+def verify_static(
+    record_path: Path, original_elf: Path, rewritten_elf: Path, report_path: Path
+) -> tuple[list[str], list[str]]:
+    """Check what the inserted machine code does to state shared with its caller.
+
+    Returns the problems and the reasons a function could not be analyzed.  A
+    function that was not analyzed has not passed.
+    """
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    functions, target = check_static.functions_from_record(record)
+    report = check_static.check_static(original_elf, rewritten_elf, functions, target)
+    report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    return check_static.failures(report), check_static.not_run(report)
+
+
 def verify_trampoline(
     original_elf: Path,
     rewritten_elf: Path,
@@ -1010,7 +1057,7 @@ def main() -> int:
     summary_rows = ["case\tstatus\tartifact"]
     statuses: dict[str, str] = {}
 
-    for case in CASES:
+    def run_case(case: Case, context: dict) -> None:
         case_dir = output_dir / case.name
         case_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1027,6 +1074,7 @@ def main() -> int:
         dependencies_report_path = case_dir / "dependencies.json"
         patch_record_path = case_dir / "patch_record.json"
         applied_bytes_path = case_dir / "applied_bytes.json"
+        static_path = case_dir / "static.json"
 
         fixture_json_path = fixture_dir / f"{case.function_name}.json"
         if args.refresh_ghidra_fixtures:
@@ -1115,7 +1163,7 @@ def main() -> int:
                 )
             statuses[case.name] = f"rejected:{case.expect_reject}"
             summary_rows.append(f"{case.name}\t{statuses[case.name]}\t-")
-            continue
+            return
         if case.expect_reject in (UNRESOLVED_DEPENDENCY, WRITABLE_STATE):
             raise RuntimeError(
                 f"Case {case.name} should have been rejected for {case.expect_reject}; "
@@ -1145,6 +1193,7 @@ def main() -> int:
             dependencies_report_path,
             trampoline_report_path,
             patch_record_path,
+            bindings_report_path,
         )
         if record_problems:
             raise RuntimeError(
@@ -1162,6 +1211,17 @@ def main() -> int:
                 f"(see {applied_bytes_path})."
             )
 
+        static_problems, static_skipped = verify_static(
+            patch_record_path, firmware_elf, rewritten_elf_path, static_path
+        )
+        if static_problems or tuple(static_skipped) != case.static_not_run:
+            raise RuntimeError(
+                f"Static checks failed for {case.name}: "
+                f"{', '.join(static_problems) or 'not run: ' + (', '.join(static_skipped) or 'nothing')} "
+                f"(expected not run: {', '.join(case.static_not_run) or 'nothing'}; "
+                f"see {static_path})."
+            )
+
         if case.expect_reject is not None:
             if case.expect_reject not in problems:
                 raise RuntimeError(
@@ -1171,7 +1231,7 @@ def main() -> int:
                 )
             statuses[case.name] = f"rejected:{case.expect_reject}"
             summary_rows.append(f"{case.name}\t{statuses[case.name]}\t{rewritten_elf_path}")
-            continue
+            return
         if problems:
             raise RuntimeError(
                 f"Reinsertion check failed for {case.name}: {', '.join(problems)} "
@@ -1180,6 +1240,13 @@ def main() -> int:
 
         transcript_lines = run_qemu(args.qemu_system_arm, rewritten_elf_path)
         write_lines(transcript_path, transcript_lines)
+        context["runtime"] = {
+            "verdict": "tested" if transcript_lines == case.expected_lines else "failed",
+            "report": transcript_path.name,
+            "detail": "the UART transcript under QEMU "
+            + ("is the expected one" if transcript_lines == case.expected_lines
+               else "differs from the expected one"),
+        }
         if transcript_lines != case.expected_lines:
             raise RuntimeError(
                 f"Transcript mismatch for {case.name}.\nExpected: {case.expected_lines}\nObserved: {transcript_lines}"
@@ -1187,6 +1254,53 @@ def main() -> int:
 
         statuses[case.name] = "pass"
         summary_rows.append(f"{case.name}\tpass\t{rewritten_elf_path}")
+
+    firmware_digest = hashlib.sha256(firmware_elf.read_bytes()).hexdigest()
+    for case in CASES:
+        case_dir = output_dir / case.name
+        case_dir.mkdir(parents=True, exist_ok=True)
+        fixture = fixture_dir / f"{case.function_name}.json"
+        # What the suite knows about the case and no report holds.
+        context = {
+            "suite": "qemu-firmware-runtime",
+            "case": case.name,
+            "function": case.function_name,
+            "binary": str(firmware_elf),
+            "binary_sha256": firmware_digest,
+            "patch": case.spec_name,
+            "fixture": {
+                "path": str(fixture),
+                "hand_written": case.function_name in HAND_WRITTEN_FIXTURES,
+                "regenerated": bool(args.refresh_ghidra_fixtures),
+            },
+            "runtime": {"verdict": "not-run",
+                        "detail": "the case stopped before the image was run"},
+            "expected": f"rejected:{case.expect_reject}" if case.expect_reject else "pass",
+        }
+        for stale in ("case.json", "validation.json", *evidence.REPORT_FILES):
+            (case_dir / stale).unlink(missing_ok=True)
+        try:
+            run_case(case, context)
+        finally:
+            # Written whatever happened, from the reports the case got to.
+            context["status"] = statuses.get(case.name, "error")
+            (case_dir / "case.json").write_text(
+                json.dumps(context, indent=2) + "\n", encoding="utf-8"
+            )
+            built = evidence.write_evidence(case_dir)
+        failed = [name for name, row in built["checks"].items() if row["verdict"] == "failed"]
+        if statuses[case.name] == "pass" and (
+            failed or built["checks"]["runtime-transcript"]["verdict"] != "tested"
+        ):
+            raise RuntimeError(
+                f"Case {case.name} passed but its evidence does not say so: "
+                f"failed {failed or 'nothing'} (see {case_dir / 'validation.json'})."
+            )
+        if statuses[case.name].startswith("rejected:") and not failed:
+            raise RuntimeError(
+                f"Case {case.name} was rejected but no check in its evidence failed "
+                f"(see {case_dir / 'validation.json'})."
+            )
 
     write_lines(output_dir / "patch-compiler-flags.txt", compiler_flags)
     summary_tsv = output_dir / "summary.tsv"

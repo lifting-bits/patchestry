@@ -26,6 +26,7 @@ it may be stripped and its code may be ARM-mode.  Per case, in order:
 | `patch-record` | the record of what was written agrees with the image; entry point and original segments are unchanged |
 | `applied-bytes` | the new code equals a fresh compile and link of the same IR; no other loaded byte differs |
 | `rewritten-bindings` | in the rewritten binary every binding still gets the verdict it had |
+| `static` | the new code returns with the stack pointer and the callee-saved registers as it found them, to the address it was called from; its size and frame are measured |
 
 A case ends at the first check that fails, with the status
 `rejected:<problem>`.  A case can declare the rejection it expects.  Two
@@ -33,7 +34,11 @@ rejections come from before any check of the result: `unsupported-image` (a
 shared object or position-independent executable) and `rewriter-no-function`
 (the rewriter's own analysis has no function at the address).
 
-What this does not establish, and says so in `validation.json`:
+Each case ends with `validation.json`, the evidence built by evidence.py from
+the reports the case wrote: a verdict per check, the assumptions, the reports.
+The driver's status and the evidence must agree, or the case is unexpected.
+
+What this does not establish, and the evidence says so as `not-run`:
 
 - That the reinserted function behaves like the original.  The checks above
   cover where the bytes are and what they link to, not what they compute.
@@ -64,7 +69,10 @@ from patcherex2.targets.elf_arm_linux import ElfArmLinux
 import check_abi
 import check_applied_bytes
 import check_bindings
+import check_equivalence
+import check_static
 import check_trampoline
+import evidence
 import patch_dependencies
 import patch_record
 import qemu_firmware_runtime as runtime
@@ -78,19 +86,11 @@ CHECKS = (
     "patch-record",
     "applied-bytes",
     "rewritten-bindings",
+    "static",
 )
 
-NOT_ESTABLISHED = (
-    "behavioural equivalence of the reinserted function with the original",
-    "behaviour at run time: the binary was not executed",
-)
-
-VALIDATION_BLOCK = {
-    "status": "todo",
-    "note": "The patch specification has no validation block yet.  Checks that need "
-            "declared intent were not run: reject paths, strict callees and their order, "
-            "device regions, stack and code-size budgets.",
-}
+# The driver's name for a check, where the evidence names it otherwise.
+EVIDENCE_CHECK = {"static": "calling-convention"}
 
 
 @dataclass(frozen=True)
@@ -101,6 +101,9 @@ class Case:
     fixture: str  # relative to the repository root
     function: str
     expect: str = "pass"
+    # Patched versions of the lifted function to compare with the original:
+    # {"pointer_size", "arg_buffers", "arg_ranges", "inputs", "variants": [...]}.
+    equivalence: dict | None = None
 
 
 class Rejected(Exception):
@@ -154,9 +157,6 @@ def new_summary(case: Case) -> dict:
         "function": case.function,
         "patch": "none: the lifted function is reinserted unchanged",
         "checks": {},
-        "assumptions": [],
-        "not_established": list(NOT_ESTABLISHED),
-        "validation_block": VALIDATION_BLOCK,
     }
 
 
@@ -266,13 +266,6 @@ def run_case(case: Case, args, repo_root: Path, summary: dict) -> None:
     applied, unattributed = reinsert(
         rewriter, snippets, case.function, target_address, addresses, flags, rewritten
     )
-    summary["assumptions"].append(
-        f"{case.function} is {mode}-mode code: taken from the rewriter's analysis; "
-        "a stripped image has no symbol to confirm it"
-    )
-    summary["assumptions"].append(
-        "function extents are Ghidra's address ranges; a stripped image has no symbol sizes"
-    )
     trampoline = check_trampoline.check_trampoline(
         binary, rewritten, case.function, document, mode=mode, allow_dynamic=True
     )
@@ -295,11 +288,13 @@ def run_case(case: Case, args, repo_root: Path, summary: dict) -> None:
     )
     write_json(out / "patch_record.json", record)
     mismatched = patch_record.link_address_problems(record, addresses)
+    record_problems = patch_record.check_record(record, rewritten, trampoline)
+    write_json(out / "patch_record_check.json",
+               {"problems": record_problems, "link_addresses": mismatched})
     if mismatched:
         reject("link-addresses", "link-address-mismatch", "; ".join(mismatched))
     passed("link-addresses",
            references=sum(len(row["symbols"]) for row in record["functions"]))
-    record_problems = patch_record.check_record(record, rewritten, trampoline)
     for problem, detail in record_problems.items():
         reject("patch-record", problem, detail)
     passed("patch-record", new_size=record["functions"][0]["size"])
@@ -311,9 +306,6 @@ def run_case(case: Case, args, repo_root: Path, summary: dict) -> None:
     if byte_problems:
         reject("applied-bytes", byte_problems[0], ", ".join(byte_problems))
     passed("applied-bytes")
-    summary["assumptions"].append(
-        "compiler-faithful: the comparison compiles the same IR with the same compiler"
-    )
 
     # 6. Nothing the lifted code is bound to moved.
     after = check_bindings.check_bindings(manifest, rewritten, None, True, stubs)
@@ -327,6 +319,106 @@ def run_case(case: Case, args, repo_root: Path, summary: dict) -> None:
     if moved:
         reject("rewritten-bindings", "moved", ", ".join(moved))
     passed("rewritten-bindings")
+
+    # 7. What the new machine code does to the state it shares with its caller.
+    functions, target = check_static.functions_from_record(record)
+    static = check_static.check_static(binary, rewritten, functions, target)
+    write_json(out / "static.json", static)
+    measured = {
+        "code_bytes": static["code_bytes"],
+        "original_code_bytes": target["size"],
+        "stack_bytes": static["stack_bytes"],
+        "original_stack_bytes": static["original"]["stack_depth"],
+        "inlined_copies": len(static["inlined_copies"]),
+    }
+    failed = check_static.failures(static)
+    if failed:
+        reject("static", failed[0], ", ".join(failed))
+    skipped = check_static.not_run(static)
+    if skipped:
+        # Not a pass and not a failure: the case ends with what stopped it.
+        summary["checks"]["static"] = {"verdict": "not-run", "reasons": skipped, **measured}
+        raise Rejected("static", f"not-run:{skipped[0]}", ", ".join(skipped))
+    passed("static", **measured)
+
+
+def run_variants(case: Case, args, repo_root: Path, digest: str | None) -> list[tuple]:
+    """Compare patched versions of the case's lifted function with the original.
+
+    A variant is C written from the lifted C, with a patch in it.  It is not
+    reinserted: its evidence has the equivalence checks and nothing else.
+    Returns summary rows (name, status, expected, detail).
+    """
+    settings = case.equivalence
+    case_dir = args.output_dir / case.name
+    lifted = case_dir / f"{case.function}.ll"
+    declared = check_abi.abi_attributes(args.binary_root / case.binary)
+    tools = check_equivalence.Tools.from_environment()
+    rows = []
+    for variant in settings["variants"]:
+        name = f"{case.name}--{variant['name']}"
+        out = args.output_dir / name
+        out.mkdir(parents=True, exist_ok=True)
+        for stale in ("case.json", "validation.json", *evidence.REPORT_FILES):
+            (out / stale).unlink(missing_ok=True)
+
+        def compiled(defines: list[str], stem: str) -> Path:
+            # "@printed" is the C the decompiler printed for the case.
+            source = (case_dir / f"{case.function}.c" if variant["source"] == "@printed"
+                      else repo_root / variant["source"])
+            module = out / f"{stem}.ll"
+            runtime.run(
+                [str(tools.clang), "--target=armv7a-none-eabi",
+                 *check_abi.compiler_flags(declared), "-O0", "-w", "-S", "-emit-llvm",
+                 *[f"-D{define}" for define in defines], str(source), "-o", str(module)],
+                capture_output=True,
+            )
+            return module
+
+        patched = compiled(variant.get("defines", []), "patched")
+        # The original is the lifted function, unless the variant compares
+        # two patched versions with each other.
+        original = (compiled(variant["original_defines"], "original")
+                    if "original_defines" in variant else lifted)
+        report = check_equivalence.check_equivalence(
+            original, patched, case.function, out, tools,
+            reject_handlers=variant.get("reject_handlers", []),
+            reject_returns=variant.get("reject_returns", []),
+            arg_buffers={int(k): v for k, v in settings.get("arg_buffers", {}).items()},
+            arg_ranges={int(k): tuple(v) for k, v in settings.get("arg_ranges", {}).items()},
+            inputs=settings.get("inputs", 200),
+            pointer_size=settings.get("pointer_size", 64),
+        )
+        write_json(out / "equivalence.json", report)
+        status = ",".join(
+            f"{key}={report['properties'][key]['verdict']}" for key in ("P1", "P3")
+        )
+        expected = ",".join(f"{key}={variant['expect'][key]}" for key in ("P1", "P3"))
+        write_json(out / "case.json", {
+            "suite": "identity-reinsertion",
+            "case": name,
+            "function": case.function,
+            "binary": case.binary,
+            "binary_sha256": digest,
+            "patch": variant["description"],
+            "fixture": {"path": case.fixture, "hand_written": False, "regenerated": False},
+            "runtime": {"verdict": "not-run",
+                        "detail": "the patched version was not reinserted or executed"},
+            "status": status,
+            "expected": expected,
+        })
+        built = evidence.write_evidence(out)
+        detail = "; ".join(sorted({
+            f"{row['property']} {row['kind']}" for row in report["violations"]
+        })) or (report["properties"]["P1"]["reason"] or "")
+        if [built["checks"][key]["verdict"] for key in ("P1", "P3")] != [
+            report["properties"][key]["verdict"] for key in ("P1", "P3")
+        ]:
+            status, detail = "error", "evidence disagrees with equivalence.json"
+        rows.append((name, status, expected, detail))
+        print(f"{name}: {status}" + ("" if status == expected else f" (expected {expected})"),
+              file=sys.stderr)
+    return rows
 
 
 def main() -> int:
@@ -352,21 +444,66 @@ def main() -> int:
         out.mkdir(parents=True, exist_ok=True)
         summary = new_summary(case)
         detail = ""
+        stopped = None
+        for stale in ("case.json", "validation.json", *evidence.REPORT_FILES):
+            (out / stale).unlink(missing_ok=True)
         try:
             run_case(case, args, repo_root, summary)
             status = "pass"
         except Rejected as rejected:
             status = f"rejected:{rejected.problem}"
             detail = rejected.detail
+            if not rejected.problem.startswith("not-run:"):
+                stopped = {"check": EVIDENCE_CHECK.get(rejected.check, rejected.check),
+                           "problem": rejected.problem, "detail": rejected.detail}
         except Exception as error:  # the case could not be run at all
             status = "error"
             detail = f"{type(error).__name__}: {error}"
             (out / "error.txt").write_text(traceback.format_exc(), encoding="utf-8")
+        # What the suite knows and no report holds; the evidence is built from
+        # this and the reports the case got to.
+        context = {
+            "suite": "identity-reinsertion",
+            "case": case.name,
+            "function": case.function,
+            "binary": case.binary,
+            "binary_sha256": summary.get("binary_sha256"),
+            "patch": summary["patch"],
+            "fixture": {"path": case.fixture, "hand_written": False, "regenerated": False},
+            "runtime": {"verdict": "not-run", "detail": "the binary was not executed"},
+            "status": status,
+            "expected": case.expect,
+        }
+        if stopped:
+            context["stopped"] = stopped
+        write_json(out / "case.json", context)
+        built = evidence.write_evidence(out)
+        failed = [name for name, row in built["checks"].items() if row["verdict"] == "failed"]
+        # A pass is every integrity check and the calling convention proven
+        # from the reports.  Undeclared budgets stay not-run and do not count.
+        established = (
+            built["groups"]["integrity"] == "proven"
+            and built["checks"]["calling-convention"]["verdict"] == "proven"
+        )
         ok = status == case.expect
+        if (status == "pass") != (not failed and established) or (
+            stopped and stopped["check"] not in failed
+        ):
+            # The driver and the reports disagree about the case.
+            ok = False
+            detail = (f"evidence disagrees: failed {failed or 'nothing'}, "
+                      f"groups {built['groups']}")
         unexpected += not ok
         rows.append((case.name, status, case.expect, detail))
-        summary["status"] = status
-        write_json(out / "validation.json", summary)
+        if case.equivalence and status == "pass":
+            try:
+                variants = run_variants(case, args, repo_root, summary.get("binary_sha256"))
+            except Exception as error:  # the comparison could not be run at all
+                variants = [(f"{case.name}--variants", "error", "",
+                             f"{type(error).__name__}: {error}")]
+                (out / "error.txt").write_text(traceback.format_exc(), encoding="utf-8")
+            rows.extend(variants)
+            unexpected += sum(1 for row in variants if row[1] != row[2])
         print(f"{case.name}: {status}" + ("" if ok else f" (expected {case.expect})"),
               file=sys.stderr)
 

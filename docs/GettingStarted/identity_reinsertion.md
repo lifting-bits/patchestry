@@ -29,6 +29,7 @@ Per case, in order. A case ends at the first check that fails, with the status `
 | `patch-record` | the record of what was written agrees with the image; entry point and original segments are unchanged | `patch_record.py` |
 | `applied-bytes` | the new code equals a fresh compile and link of the same IR; no other loaded byte differs | `check_applied_bytes.py` |
 | `rewritten-bindings` | in the rewritten binary every binding still gets the verdict it had | `check_bindings.py` |
+| `static` | the new code returns with the stack pointer and the callee-saved registers as it found them, to the address it was called from | `check_static.py` |
 
 ## What differs from the bare-metal checks
 
@@ -44,16 +45,65 @@ Per case, in order. A case ends at the first check that fails, with the status `
 
 **ABI.** Patcherex2 compiles for `arm-linux-gnueabihf`, which is ARMv6 with VFP and the hard-float calling convention. The `httpd` and `cgibin` binaries are ARMv7 soft-float. Code built with the default links and loads, and goes wrong the first time a `double` crosses a call. The run reads the binary's build attributes, derives `-march` and `-mfloat-abi` from them, and the `abi` check compares the attributes of the compiled code with the binary's.
 
+## Static checks on these binaries
+
+The `static` check analyzes the new body in the rewritten binary and, for comparison, the original body the compiler of the firmware produced. Neither is trusted: both are read from the disassembly. On the four cases that reach it, both pass. A function it cannot follow ends the case as `rejected:not-run:<reason>`, which is not a pass.
+
+| Function | Original code / frame | New code / frame |
+| --- | --- | --- |
+| `httpd` `FUN_0007ae8c` | 676 / 32 bytes | 764 / 24 bytes |
+| `httpd` `FUN_00067c0c` | 1064 / 504 | 2118 / 696 |
+| `httpd` `formGetUpnpLists` | 688 / 15432 | 878 / 15512 |
+| `cgibin` `FUN_00026534` | 1156 / 72 | 3562 / 152 |
+
+The sizes are measured, not judged: no budget is declared for these binaries. No copy of half a body or more was found elsewhere in either image.
+
+## Equivalence of a patched version
+
+`scripts/patch-runtime/check_equivalence.py` compares a patched version of a lifted function with the lifted original. `patchir-klee-verifier --compare-original` builds a product harness: one module with both versions, each with its own copy of every global, and a `main` that runs them on the same input. The runner compiles that harness for ARM and runs it under `qemu-system-arm` (machine `virt`, bare metal) on inputs derived from seeds. The modules keep their 32-bit ARM layout.
+
+| Property | Holds when | Violations |
+| --- | --- | --- |
+| P1 | an input the patched version accepts is one the original accepts | `original-rejects`, `original-faults`, `original-aborts` |
+| P3 | when both accept, they return the same value | `return-differs`, `patched-faults`, `patched-aborts` |
+
+A version rejects an input when it calls a declared reject handler (`--reject-handler`) or returns a declared reject value (`--reject-return`). `--arg-buffer INDEX:SIZE` says an argument points at a buffer, which lifted code often passes as an integer; `--arg-range INDEX:LOW:HIGH` bounds an integer argument. These stand in for the patch specification's validation block, which is not designed yet.
+
+A property is `failed` when a violation was seen, `tested` when none was seen and at least one input reached the comparison, and `not-run` otherwise. `tested` covers the inputs that were run. `proven` needs the same harness under KLEE.
+
+The cases file gives `httpd` `FUN_0007ae8c` six patched versions, each its own row in `summary.tsv` and its own evidence. They are C written from the lifted C (`test/identity-reinsertion/patches/httpd_fun_0007ae8c.c`); none is reinserted, so their integrity checks are `not-run`.
+
+| Variant | What it is | P1 | P3 |
+| --- | --- | --- | --- |
+| `rewritten` | the lifted C written out by hand, no patch | tested | tested |
+| `limit-8` | rejects a path token of 8 bytes or more with a null pointer, declared | tested | tested |
+| `limit-8-undeclared` | the same patch, reject value not declared | tested | failed |
+| `widened` | limit 24 replacing limit 8 | failed | tested |
+| `changed-return` | returns the buffer address plus one | tested | failed |
+| `printed-c` | the C `-print-tu` printed, compiled as is | tested | failed |
+
+`printed-c` pins a known defect: the printer writes `*(signed char *)param_2 + local_c` where the IR loads from `param_2 + local_c`, so the printed C is not the lifted function. The expectation changes when the printer is fixed.
+
+Limits: memory writes (P2) and calls (P4) are not compared. An external function is a stub that returns the same value at the same call index on both sides; one that returns a pointer ends the path as inconclusive. An input on which a version never returns costs a 5-second timeout, and the run stops after 8 of them.
+
+## Known rejection: `builtin_strncpy`
+
+`cgibin` `FUN_00011708` is rejected with `unresolved-dependency`, and the cases file expects that. The function fills a local buffer with a string constant using inline instructions. Ghidra represents the idiom as a pseudo-call to an intrinsic named `builtin_strncpy`, and `patchir-decomp` emits it as a call to an external function of that name. Nothing in the image provides one, so the code to insert cannot be linked. The rejection is correct. The fix belongs in the lifter: lower Ghidra's `builtin_*` intrinsics to an inline copy. When that lands, the expected status of the case becomes `pass`.
+
+## Known rejection: shared objects
+
+`libwolfssl.so` `FUN_000c4214` is rejected with `unsupported-image` at the first check, and the cases file expects that. The file is a shared object (ELF type `ET_DYN`). Its load base is chosen at run time, while every check here compares absolute addresses and the inserted code is compiled `-fno-pic` against absolute addresses. Relocations the loader applies are not modelled either. The same holds for a position-independent executable. Supporting these images needs position-independent inserted code and relocation-aware checks; whether Patcherex2 can rewrite a shared object is not yet checked. A dynamically linked executable at a fixed address (`httpd`, `cgibin`) is supported.
+
 ## Outputs
 
-Per case under the output directory: `function.json`, the lifted `.c`, `.cir` and `.ll`, `bindings.json`, `dependencies.json`, `abi.json`, `trampoline.json`, `patch_record.json`, `applied_bytes.json`, `bindings.rewritten.json`, `rewritten.elf`, and `validation.json`. `summary.tsv` has one row per case.
+Per case under the output directory: `function.json`, the lifted `.c`, `.cir` and `.ll`, `bindings.json`, `dependencies.json`, `abi.json`, `trampoline.json`, `patch_record.json`, `applied_bytes.json`, `bindings.rewritten.json`, `static.json`, `rewritten.elf`, and `validation.json`. `summary.tsv` has one row per case.
 
-`validation.json` lists each check's verdict, the assumptions the verdicts rest on, and what the run does not establish.
+`validation.json` is the evidence `evidence.py` builds from those reports (see the Evidence section of `qemu_firmware_runtime.md`): a verdict per check (`proven`, `tested`, `failed`, `not-run`), the bounds, the assumptions by name, and the reports with their digests. `case.json` holds what the driver knows and no report does. On the four passing cases `integrity` is `proven` and the calling convention is `proven`; the budgets, the run, P1 to P4, the firmware checks and the re-lift are `not-run`, so the overall verdict is `not-run`. The driver fails a case whose status and evidence disagree.
 
 ## What a pass does not mean
 
 - The reinserted function is not shown to behave like the original. The checks cover where the bytes are and what they link to, not what they compute. The lifted code is larger than the original in every case, and no equivalence check is run.
 - The binary is not executed.
-- Nothing that needs the patch specification's `validation` block is checked. That block is not designed yet, and `validation.json` records it as `todo`.
+- Nothing that needs the patch specification's `validation` block is checked. That block is not designed yet; the evidence carries the assumption `validation-block-absent` and those checks are `not-run`.
 - The instruction mode and the function extents are taken from the rewriter's analysis and from Ghidra. A stripped image has no symbol to confirm either.
 - An object bound to an address outside every segment gets the verdict `outside-image` and is not judged. `cgibin` `FUN_00026534` has three (`DAT_00000004` to `DAT_00000006`): small integers Ghidra typed as addresses.
