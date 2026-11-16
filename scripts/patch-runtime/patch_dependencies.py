@@ -29,12 +29,17 @@ patch linker would otherwise give it an invented address.
 one at a time against what is already placed, so a helper has to go in before
 its caller.  Functions that reference each other have no such order.
 
+`writable_state` lists the writable globals the module defines.  The patch
+link places code and read-only data only, so such a global has no storage in
+RAM and no startup initialization; a module that has any is refused.
+
 Not covered: whether a provided symbol has the type or size the snippet
 expects, and references the compiler resolves inside the object.
 
 CLI: patch_dependencies.py --module patched.ll --elf firmware.elf
      [--symbol name=0xaddr ...] [--output report.json]
-Exit 0 when nothing is unresolved, 1 when something is, 2 on usage errors.
+Exit 0 when nothing is unresolved and the module owns no writable state, 1
+otherwise, 2 on usage errors.
 """
 
 from __future__ import annotations
@@ -49,6 +54,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Mapping
 
+from elftools.elf.constants import SH_FLAGS
 from elftools.elf.elffile import ELFFile
 from elftools.elf.enums import ENUM_RELOC_TYPE_ARM
 from elftools.elf.relocation import RelocationSection
@@ -121,21 +127,6 @@ def _module_symbols(module: Path, tools: Tools) -> list[tuple[str, str]]:
 
 def defined_functions(module: Path, tools: Tools) -> list[str]:
     return sorted(name for kind, name in _module_symbols(module, tools) if kind in "tT")
-
-
-def writable_definitions(module: Path, tools: Tools) -> list[str]:
-    """Writable globals the module defines and its functions use.
-
-    This is state the inserted code needs placed somewhere.  llvm-nm does not
-    tell a constant from a variable in bitcode, so the list is taken from the
-    split: a global the module defines and a snippet only declares.
-    """
-    defined = {name for kind, name in _module_symbols(module, tools) if kind in "dDbBC"}
-    declared = set()
-    for snippet in split_module(module, tools).values():
-        bitcode = _run([str(tools.llvm_as), "-", "-o", "-"], stdin=snippet.encode("utf-8"))
-        declared |= {name for kind, name in _symbols(bitcode, tools) if kind == "U"}
-    return sorted(defined & declared)
 
 
 def split_module(module: Path, tools: Tools) -> dict[str, str]:
@@ -245,6 +236,59 @@ def check_snippets(
     return {"functions": rows}
 
 
+def writable_state(
+    module: Path, tools: Tools, compiler_flags: Iterable[str] = ()
+) -> list[dict]:
+    """Writable globals the module defines, as the compiled object lays them out.
+
+    Each row has the name, the size in bytes, the section (.data, .bss, ...)
+    and whether the object carries initial bytes for it.  The patch link
+    places `.text` and `.rodata*` only: such a global gets no address in RAM,
+    and an initialized one would also need its bytes copied from flash at
+    startup.  Compile with the reinsertion flags; under PIC a constant that
+    holds an address counts as writable.
+    """
+    rows = []
+    with tempfile.TemporaryDirectory(prefix="patch-dependencies-") as directory:
+        obj = Path(directory) / "module.o"
+        compile_snippet(module.read_text(encoding="utf-8"), obj, tools, compiler_flags)
+        with obj.open("rb") as stream:
+            elf = ELFFile(stream)
+            for section in elf.iter_sections():
+                if not isinstance(section, SymbolTableSection):
+                    continue
+                for symbol in section.iter_symbols():
+                    if not symbol.name or symbol["st_info"]["type"] != "STT_OBJECT":
+                        continue
+                    index = symbol["st_shndx"]
+                    if index == "SHN_COMMON":
+                        home, initialized = "COMMON", False
+                    elif isinstance(index, int):
+                        holder = elf.get_section(index)
+                        if not holder["sh_flags"] & SH_FLAGS.SHF_WRITE:
+                            continue
+                        home, initialized = holder.name, holder["sh_type"] != "SHT_NOBITS"
+                    else:
+                        continue
+                    rows.append(
+                        {
+                            "name": symbol.name,
+                            "size": int(symbol["st_size"]),
+                            "section": home,
+                            "initialized": initialized,
+                        }
+                    )
+    return sorted(rows, key=lambda row: row["name"])
+
+
+def describe_state(state: list[dict]) -> str:
+    return ", ".join(
+        f"{row['name']} ({row['size']} bytes, {row['section']}"
+        f"{', initialized' if row['initialized'] else ''})"
+        for row in state
+    )
+
+
 def insertion_order(report: dict, target: str) -> tuple[list[str], list[str]]:
     """Order in which to insert the functions other than `target`.
 
@@ -304,7 +348,7 @@ def main() -> int:
         report = check_snippets(
             split_module(args.module, tools), provided, tools, args.compiler_flag
         )
-        report["writable_definitions"] = writable_definitions(args.module, tools)
+        report["writable_state"] = writable_state(args.module, tools, args.compiler_flag)
     except (OSError, RuntimeError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
@@ -314,11 +358,14 @@ def main() -> int:
         args.output.write_text(text, encoding="utf-8")
     else:
         sys.stdout.write(text)
-    missing = failures(report)
+    state = report["writable_state"]
+    if state:
+        print(f"writable state with no storage: {describe_state(state)}", file=sys.stderr)
+    owned = {row["name"] for row in state}
+    missing = [name for name in failures(report) if name not in owned]
     if missing:
         print(f"unresolved: {', '.join(missing)}", file=sys.stderr)
-        return 1
-    return 0
+    return 1 if state or missing else 0
 
 
 if __name__ == "__main__":

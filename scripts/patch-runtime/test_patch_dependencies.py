@@ -199,12 +199,6 @@ class SplitModule(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_module_state_lists_the_writable_definitions(self):
-        self.assertEqual(
-            patch_dependencies.writable_definitions(self.module, self.tools),
-            ["counter", "limit"],
-        )
-
 
 class UnresolvedSymbols(unittest.TestCase):
     @classmethod
@@ -269,6 +263,87 @@ class UnresolvedSymbols(unittest.TestCase):
             ["counter"],
         )
 
+
+
+# One global of each kind the inserted code can own.
+STATE_MODULE = r"""
+target triple = "armv7-unknown-linux-gnueabihf"
+
+@.str = private unnamed_addr constant [4 x i8] c"one\00", align 1
+@names = internal constant [1 x ptr] [ptr @.str], align 4
+@retry_limit = internal global i32 3, align 4
+@call_count = internal global i32 0, align 4
+@buffer = dso_local global [16 x i8] zeroinitializer, align 1
+@cursor = internal global ptr @buffer, align 4
+@firmware_tick = external global i32, align 4
+
+define dso_local i32 @f() {
+  %a = load i32, ptr @retry_limit
+  %b = load i32, ptr @call_count
+  %c = load i32, ptr @firmware_tick
+  %p = load ptr, ptr @cursor
+  %n = load ptr, ptr @names
+  store i8 0, ptr %p
+  store i8 0, ptr %n
+  %s = add i32 %a, %b
+  %t = add i32 %s, %c
+  ret i32 %t
+}
+"""
+
+
+class WritableState(unittest.TestCase):
+    """Globals the inserted code would need in RAM.
+
+    The patch link places code and read-only data only, so each of these has
+    no storage and, if initialized, no startup copy.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tools = find_tools()
+        cls.directory = Path(tempfile.mkdtemp(prefix="patch-dependencies-"))
+        cls.module = cls.directory / "state.ll"
+        cls.module.write_text(STATE_MODULE, encoding="utf-8")
+        cls.state = patch_dependencies.writable_state(cls.module, cls.tools, ["-fno-pic", "-O0"])
+        cls.by_name = {row["name"]: row for row in cls.state}
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.directory, ignore_errors=True)
+
+    def test_lists_every_writable_definition_by_name(self):
+        self.assertEqual(
+            [row["name"] for row in self.state],
+            ["buffer", "call_count", "cursor", "retry_limit"],
+        )
+
+    def test_constants_and_declarations_are_not_state(self):
+        # @names holds a pointer; with -fno-pic it is still read-only.
+        self.assertNotIn("names", self.by_name)
+        self.assertNotIn(".str", self.by_name)
+        self.assertNotIn("firmware_tick", self.by_name)
+
+    def test_initialized_state_needs_a_startup_copy(self):
+        self.assertEqual(
+            self.by_name["retry_limit"],
+            {"name": "retry_limit", "size": 4, "section": ".data", "initialized": True},
+        )
+        # A pointer to another global is an initializer too.
+        self.assertTrue(self.by_name["cursor"]["initialized"])
+
+    def test_zero_state_needs_clearing_only(self):
+        self.assertEqual(
+            self.by_name["call_count"],
+            {"name": "call_count", "size": 4, "section": ".bss", "initialized": False},
+        )
+        self.assertEqual(self.by_name["buffer"]["size"], 16)
+        self.assertFalse(self.by_name["buffer"]["initialized"])
+
+    def test_module_without_state(self):
+        module = self.directory / "needs_helper.ll"
+        module.write_text(NEEDS_HELPER, encoding="utf-8")
+        self.assertEqual(patch_dependencies.writable_state(module, self.tools, ["-fno-pic"]), [])
 
 
 def report_of(references: dict[str, list[str]]) -> dict:
