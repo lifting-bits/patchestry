@@ -140,7 +140,8 @@ The current runtime cases are:
 - `dispatch`: the caller, whose reinserted body reads `qemu_callback` and calls through it
 - `switch`: inserted code with a `static` helper, a switch and six new string literals; the transcript shows every arm
 - `divide`: inserted code that needs `__aeabi_uldivmod`, which is expected to be rejected
-- `state`: inserted code with a writable variable of its own, which is expected to be rejected
+- `state`: inserted code with a zero-initialized writable variable of its own, which is expected to be rejected
+- `initialized`: the same with an initial value of 3, which is expected to be rejected
 
 Each case rewrites the original firmware ELF and validates the serial output from QEMU.
 
@@ -160,10 +161,12 @@ It splits the module with `llvm-extract` and `opt` into one snippet per function
 
 It then compiles each snippet with the flags the reinsertion uses and lists the symbols the object leaves undefined. Each must be a function of the original image, a global passed by address from the bindings manifest, or a function inserted earlier. The functions are inserted in dependency order, helpers before their callers, because the patch linker only knows what is already placed. A case fails with `unresolved-dependency` when:
 
-- a symbol has no provider, for example a compiler runtime helper (`__aeabi_uldivmod` for 64-bit division) that the firmware was never linked with, or a writable global defined by the patch, which nothing places in RAM;
+- a symbol has no provider, for example a compiler runtime helper (`__aeabi_uldivmod` for 64-bit division) that the firmware was never linked with;
 - two inserted functions reference each other, so no insertion order exists.
 
-Without the check the patch linker gives such a symbol an invented address and the firmware fails at run time, if that path runs at all. `divide` and `state` are rejected this way and are not run in QEMU.
+Without the check the patch linker gives such a symbol an invented address and the firmware fails at run time, if that path runs at all. `divide` is rejected this way and is not run in QEMU.
+
+A case fails with `writable-state` when the patched module defines a writable global, for example `static unsigned patch_retry_limit = 3;` in patch code. The patch link places code and read-only data only, and the runtime gives the rewriter no startup hook (`insert_points` is empty), so the variable would have no address in RAM, and an initialized one no copy of its value after reset. `dependencies.json` lists each such global under `writable_state` with its size, its section (`.data` or `.bss`) and whether it carries initial bytes. `state` and `initialized` are rejected this way. Patch code that needs state has to use a global the firmware already has.
 
 Not checked: that a provided symbol has the type or size the snippet expects.
 

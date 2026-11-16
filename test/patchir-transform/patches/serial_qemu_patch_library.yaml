@@ -67,3 +67,8 @@ patch_definitions:
   category: serial-qemu
   function_name: patch::replace::state
   code_file: serial_qemu_patch.c
+- name: serial_qemu_initialized_patch
+  description: Replace qemu_target_replace with code that keeps an initialized writable variable of its own
+  category: serial-qemu
+  function_name: patch::replace::initialized
+  code_file: serial_qemu_patch.c

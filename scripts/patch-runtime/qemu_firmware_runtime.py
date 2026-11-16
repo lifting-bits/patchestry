@@ -287,7 +287,8 @@ CASES: tuple[Case, ...] = (
         ),
         expect_reject="unresolved-dependency",
     ),
-    # Inserted code with a writable variable of its own, which nothing places.
+    # Inserted code with a writable variable of its own.  The reinsertion places
+    # code and read-only data only, so the variable would have no storage.
     Case(
         name="state",
         function_name="qemu_target_replace",
@@ -305,7 +306,28 @@ CASES: tuple[Case, ...] = (
             "BASE:handler",
             "DONE",
         ),
-        expect_reject="unresolved-dependency",
+        expect_reject="writable-state",
+    ),
+    # The same with a non-zero initial value, which would also need a startup
+    # copy from flash.
+    Case(
+        name="initialized",
+        function_name="qemu_target_replace",
+        spec_name="serial_qemu_initialized_patch.yaml",
+        expected_lines=(
+            "BOOT",
+            "BASE:before",
+            "BASE:after",
+            "PATCH:initialized",
+            "BASE:contract",
+            "BASE:short",
+            "BASE:tiny",
+            "BASE:pointer",
+            "BASE:dispatch",
+            "BASE:handler",
+            "DONE",
+        ),
+        expect_reject="writable-state",
     ),
 )
 
@@ -499,9 +521,11 @@ def repo_tool(repo_root: Path, build_type: str, tool_name: str) -> Path:
 PATCH_COMPILER_FLAGS = ("-fno-strict-aliasing", "-fwrapv", "-fno-pic")
 
 
-# `Case.expect_reject` value for a case stopped before the image is rewritten,
-# because its inserted code references a symbol nothing provides.
+# `Case.expect_reject` values for a case stopped before the image is rewritten:
+# its inserted code references a symbol nothing provides, or owns a writable
+# global.
 UNRESOLVED_DEPENDENCY = "unresolved-dependency"
+WRITABLE_STATE = "writable-state"
 
 
 def patch_compiler_flags(opt_level: str) -> list[str]:
@@ -616,25 +640,48 @@ def verify_dependencies(
     compiler_flags: list[str],
     target_function: str,
     report_path: Path,
-) -> tuple[dict[str, str], list[str]]:
-    """Split the patched module per function and list what no one provides.
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Split the patched module per function and check what it depends on.
 
     Returns the snippets, in the order to insert them (helpers before their
-    callers, the target last), and the symbols they reference that neither the
-    original image nor an earlier snippet defines.
+    callers, the target last), and the problems found, keyed by verdict:
+
+    - `writable-state`: the module defines a writable global.  The patch link
+      places code and read-only data only, and the runtime passes no
+      `insert_points`, so the global would have no storage in RAM and no
+      startup copy or clearing.
+    - `unresolved-dependency`: a symbol neither the original image nor an
+      earlier snippet defines, or inserted functions that reference each other.
     """
     tools = patch_dependencies.Tools.from_environment()
     snippets = patch_dependencies.split_module(patched_ll, tools)
     report = patch_dependencies.check_snippets(snippets, provided, tools, compiler_flags)
-    report["writable_definitions"] = patch_dependencies.writable_definitions(patched_ll, tools)
+    state = patch_dependencies.writable_state(patched_ll, tools, compiler_flags)
+    report["writable_state"] = state
     order, stuck = patch_dependencies.insertion_order(report, target_function)
     report["insertion_order"] = order
     report["mutually_dependent"] = stuck
     report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+
     ordered = {name: snippets[name] for name in order}
     if target_function in snippets:
         ordered[target_function] = snippets[target_function]
-    return ordered, sorted({*patch_dependencies.failures(report), *stuck})
+
+    problems: dict[str, str] = {}
+    if state:
+        problems[WRITABLE_STATE] = (
+            "the inserted code owns writable globals with no storage in RAM: "
+            + patch_dependencies.describe_state(state)
+        )
+    owned = {row["name"] for row in state}
+    missing = sorted(
+        {name for name in patch_dependencies.failures(report) if name not in owned} | set(stuck)
+    )
+    if missing:
+        problems[UNRESOLVED_DEPENDENCY] = (
+            "the inserted code references symbols nothing provides: " + ", ".join(missing)
+        )
+    return ordered, problems
 
 
 def verify_trampoline(
@@ -786,7 +833,7 @@ def main() -> int:
             raise RuntimeError(f"Original ELF is missing function symbol {case.function_name}.")
 
         data_symbols = original_object_addresses(bindings_path)
-        snippets, unresolved = verify_dependencies(
+        snippets, dependency_problems = verify_dependencies(
             patched_ll_path,
             # What the patch linker defines: the image's functions, and the
             # globals passed to it by address.  Other objects of the image are
@@ -797,19 +844,19 @@ def main() -> int:
             case.function_name,
             dependencies_report_path,
         )
-        if unresolved:
-            if case.expect_reject != UNRESOLVED_DEPENDENCY:
+        if dependency_problems:
+            if case.expect_reject not in dependency_problems:
                 raise RuntimeError(
-                    f"Inserted code for {case.name} references symbols nothing provides: "
-                    f"{', '.join(unresolved)} (see {dependencies_report_path})."
+                    f"Dependency check failed for {case.name}: "
+                    f"{'; '.join(dependency_problems.values())} (see {dependencies_report_path})."
                 )
-            statuses[case.name] = f"rejected:{UNRESOLVED_DEPENDENCY}"
+            statuses[case.name] = f"rejected:{case.expect_reject}"
             summary_rows.append(f"{case.name}\t{statuses[case.name]}\t-")
             continue
-        if case.expect_reject == UNRESOLVED_DEPENDENCY:
+        if case.expect_reject in (UNRESOLVED_DEPENDENCY, WRITABLE_STATE):
             raise RuntimeError(
-                f"Case {case.name} should have been rejected for {UNRESOLVED_DEPENDENCY}; "
-                f"every reference resolved (see {dependencies_report_path})."
+                f"Case {case.name} should have been rejected for {case.expect_reject}; "
+                f"the dependency check found no problem (see {dependencies_report_path})."
             )
 
         patch_function_in_elf(

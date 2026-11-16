@@ -91,3 +91,14 @@ void patch__replace__state(void) {
         uart_write_line("PATCH:state");
     }
 }
+
+/* The same, with a value that has to be there before the first call: the
+   variable needs a startup copy from flash, not only cleared RAM. */
+static unsigned patch_retry_limit = 3;
+
+void patch__replace__initialized(void) {
+    if (patch_retry_limit == 3) {
+        uart_write_line("PATCH:initialized");
+    }
+    patch_retry_limit = patch_retry_limit - 1;
+}
