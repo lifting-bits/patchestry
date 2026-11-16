@@ -22,6 +22,7 @@
 
 #include <patchestry/Util/Log.hpp>
 
+#include "Compare.hpp"
 #include "HarnessGen.hpp"
 #include "Options.hpp"
 
@@ -98,6 +99,113 @@ namespace patchestry::klee_verifier {
         llvm::cl::init(true)
     );
 
+
+    // Compare mode: the positional input is the patched module, this is the
+    // lifted original.  See Compare.cpp.
+    llvm::cl::opt< std::string > compare_original(
+        "compare-original",
+        llvm::cl::desc("Lifted original module; build a product harness of it and the input"),
+        llvm::cl::value_desc("file"), llvm::cl::init("")
+    );
+
+    llvm::cl::list< std::string > reject_handlers(
+        "reject-handler",
+        llvm::cl::desc("Function whose call means the input was rejected (compare mode)"),
+        llvm::cl::value_desc("name")
+    );
+
+    llvm::cl::list< long long > reject_returns(
+        "reject-return",
+        llvm::cl::desc("Return value that means the input was rejected (compare mode)"),
+        llvm::cl::value_desc("value")
+    );
+
+    llvm::cl::list< std::string > arg_buffers(
+        "arg-buffer",
+        llvm::cl::desc("Argument INDEX points at a buffer of SIZE bytes (compare mode)"),
+        llvm::cl::value_desc("index:size")
+    );
+
+    llvm::cl::list< std::string > arg_ranges(
+        "arg-range",
+        llvm::cl::desc("Integer argument INDEX takes values LOW to HIGH inclusive (compare mode)"),
+        llvm::cl::value_desc("index:low:high")
+    );
+
+    llvm::cl::opt< unsigned > stub_values(
+        "stub-values",
+        llvm::cl::desc("Distinct values an external function returns (compare mode)"),
+        llvm::cl::value_desc("count"), llvm::cl::init(8)
+    );
+
+    llvm::cl::opt< bool > keep_target(
+        "keep-target",
+        llvm::cl::desc("Do not retarget to x86_64; keep the modules' triple and layout"),
+        llvm::cl::init(false)
+    );
+
+    llvm::cl::opt< std::string > harness_info(
+        "harness-info",
+        llvm::cl::desc("Write what the product harness assumes and bounds, as JSON"),
+        llvm::cl::value_desc("file"), llvm::cl::init("")
+    );
+
+    static int compareMain(
+        const char *program, std::unique_ptr< llvm::Module > patched, llvm::LLVMContext &context
+    ) {
+        llvm::SMDiagnostic err;
+        auto original = llvm::parseIRFile(compare_original, err, context);
+        if (!original) {
+            err.print(program, llvm::errs());
+            return EXIT_FAILURE;
+        }
+        CompareOptions options;
+        options.reject_handlers.assign(reject_handlers.begin(), reject_handlers.end());
+        options.reject_returns.assign(reject_returns.begin(), reject_returns.end());
+        options.pointer_size = symbolic_ptr_size;
+        options.stub_values  = stub_values == 0 ? 1 : stub_values;
+        for (const auto &text : arg_buffers) {
+            unsigned index = 0;
+            unsigned long long size = 0;
+            auto [left, right] = llvm::StringRef(text).split(':');
+            if (left.getAsInteger(10, index) || right.getAsInteger(0, size)) {
+                LOG(ERROR) << "--arg-buffer expects INDEX:SIZE, got '" << text << "'\n";
+                return EXIT_FAILURE;
+            }
+            options.arg_buffers[index] = size;
+        }
+        for (const auto &text : arg_ranges) {
+            unsigned index = 0;
+            long long low = 0;
+            long long high = 0;
+            auto [left, rest]  = llvm::StringRef(text).split(':');
+            auto [middle, end] = rest.split(':');
+            if (left.getAsInteger(10, index) || middle.getAsInteger(0, low)
+                || end.getAsInteger(0, high))
+            {
+                LOG(ERROR) << "--arg-range expects INDEX:LOW:HIGH, got '" << text << "'\n";
+                return EXIT_FAILURE;
+            }
+            options.arg_ranges[index] = { low, high };
+        }
+        if (!keep_target) {
+            retargetModuleToX86_64(*original, verbose);
+            retargetModuleToX86_64(*patched, verbose);
+        }
+        llvm::json::Object info;
+        auto product = buildProductHarness(
+            std::move(original), std::move(patched), target_function, options, info
+        );
+        if (!product) {
+            return EXIT_FAILURE;
+        }
+        info["retargeted"] = !keep_target;
+        if (!harness_info.empty() && !writeHarnessInfo(info, harness_info)) {
+            return EXIT_FAILURE;
+        }
+        return writeModuleToFile(*product, output_filename) ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+
 } // namespace patchestry::klee_verifier
 
 int main(int argc, char **argv) {
@@ -113,6 +221,10 @@ int main(int argc, char **argv) {
     if (!module) {
         err.print(argv[0], llvm::errs());
         return EXIT_FAILURE;
+    }
+
+    if (!compare_original.empty()) {
+        return compareMain(argv[0], std::move(module), context);
     }
 
     // Retarget module to x86_64 for KLEE compatibility. See the comment on

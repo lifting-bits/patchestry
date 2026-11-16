@@ -9,6 +9,7 @@ add_executable(patchir-klee-verifier
     Runtime.cpp
     GlobalsInit.cpp
     HarnessGen.cpp
+    Compare.cpp
 )
 
 target_link_libraries(patchir-klee-verifier
