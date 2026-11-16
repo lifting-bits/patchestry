@@ -35,3 +35,11 @@ void patch__replace__qemu_target_tiny(void) {
 void patch__replace__qemu_target_pointer(void) {
     uart_write_line("PATCH:pointer");
 }
+
+void patch__replace__qemu_target_handler(void) {
+    uart_write_line("PATCH:handler");
+}
+
+void patch__before__qemu_target_dispatch(void) {
+    uart_write_line("PATCH:dispatch");
+}

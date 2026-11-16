@@ -42,3 +42,13 @@ patch_definitions:
   category: serial-qemu
   function_name: patch::replace::qemu_target_pointer
   code_file: serial_qemu_patch.c
+- name: serial_qemu_handler_patch
+  description: Replace the body of qemu_target_handler, which is called through qemu_callback
+  category: serial-qemu
+  function_name: patch::replace::qemu_target_handler
+  code_file: serial_qemu_patch.c
+- name: serial_qemu_dispatch_patch
+  description: Emit a line before qemu_target_dispatch, which makes an indirect call
+  category: serial-qemu
+  function_name: patch::before::qemu_target_dispatch
+  code_file: serial_qemu_patch.c

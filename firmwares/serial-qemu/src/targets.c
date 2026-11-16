@@ -76,3 +76,27 @@ static void emit_pointer_base(void) {
 void qemu_target_pointer(void) {
     emit_pointer_base();
 }
+
+static void emit_handler_base(void) {
+    uart_write_line("BASE:handler");
+}
+
+/* Called only through qemu_callback. */
+void qemu_target_handler(void) {
+    emit_handler_base();
+}
+
+/* A one-slot callback table. volatile keeps the load and the indirect call
+   in qemu_target_dispatch at every optimization level. */
+void (*const volatile qemu_callback)(void) = qemu_target_handler;
+
+static void emit_dispatch_base(void) {
+    uart_write_line("BASE:dispatch");
+}
+
+/* Makes an indirect call: the lifted body has to read the slot and call
+   through it after reinsertion. */
+void qemu_target_dispatch(void) {
+    emit_dispatch_base();
+    qemu_callback();
+}

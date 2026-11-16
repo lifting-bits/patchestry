@@ -24,6 +24,7 @@ int main(void) {
     qemu_target_short();
     qemu_target_tiny();
     pointer_targets[0]();
+    qemu_target_dispatch();
     uart_write_line("DONE");
 
     return 0;

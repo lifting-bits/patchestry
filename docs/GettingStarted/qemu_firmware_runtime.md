@@ -135,8 +135,18 @@ The current runtime cases are:
 - `short`: a 4-byte target, which the entry branch fills exactly
 - `tiny`: a 2-byte target, which is expected to be rejected
 - `pointer`: a target reached only through a stored function address
+- `handler`: the callee of an indirect call, installed in the `qemu_callback` slot
+- `dispatch`: the caller, whose reinserted body reads `qemu_callback` and calls through it
 
 Each case rewrites the original firmware ELF and validates the serial output from QEMU.
+
+## Globals and Indirect Calls
+
+`<case>/bindings.manifest.json` (from `patchir-decomp -emit-bindings`) lists every global and function the lifted unit refers to, and in `unresolved_calls` every indirect call and every tail call to an address that is not a known function. Nothing binds the target of those calls; `<case>/bindings.json` carries the list through so it can be reviewed.
+
+Patcherex2 resolves a patch's external references from function symbols only. The runtime therefore passes it the address of each original global in the manifest, and compiles the patch with `-fno-pic` so the address is used directly and not through a GOT slot that a bare-metal image does not have. Without both, reinserted code that touches a global reads from an address the patch loader made up. The `dispatch` case covers this.
+
+When an indirect call's arguments or used result disagree with the function type recovered for its target, `patchir-decomp` reports `callind-signature-mismatch` (an error under `-strict`).
 
 ## Reinsertion Check
 
