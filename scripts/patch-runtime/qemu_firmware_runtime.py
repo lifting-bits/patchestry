@@ -16,6 +16,7 @@ from patcherex2 import InsertFunctionPatch, ModifyFunctionPatch, Patcherex
 from patcherex2.components.compilers import clang_arm as _patcherex_clang_arm
 from patcherex2.targets.elf_arm_bare import ElfArmBare
 
+import check_applied_bytes
 import check_bindings
 import check_trampoline
 import patch_dependencies
@@ -736,6 +737,22 @@ def verify_dependencies(
     return ordered, problems
 
 
+def verify_applied_bytes(
+    record_path: Path,
+    original_elf: Path,
+    rewritten_elf: Path,
+    snippets: dict[str, str],
+    report_path: Path,
+) -> list[str]:
+    """Compare the rewritten image with a fresh compile of each recorded function."""
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    report = check_applied_bytes.check_applied_bytes(
+        record, original_elf, rewritten_elf, snippets, patch_dependencies.Tools.from_environment()
+    )
+    report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    return check_applied_bytes.failures(report)
+
+
 def verify_trampoline(
     original_elf: Path,
     rewritten_elf: Path,
@@ -817,6 +834,7 @@ def main() -> int:
         trampoline_report_path = case_dir / "trampoline.json"
         dependencies_report_path = case_dir / "dependencies.json"
         patch_record_path = case_dir / "patch_record.json"
+        applied_bytes_path = case_dir / "applied_bytes.json"
 
         fixture_json_path = fixture_dir / f"{case.function_name}.json"
         if args.refresh_ghidra_fixtures:
@@ -941,6 +959,15 @@ def main() -> int:
                 f"Patch record check failed for {case.name}: "
                 f"{'; '.join(f'{kind}: {detail}' for kind, detail in record_problems.items())} "
                 f"(see {patch_record_path})."
+            )
+
+        byte_problems = verify_applied_bytes(
+            patch_record_path, firmware_elf, rewritten_elf_path, snippets, applied_bytes_path
+        )
+        if byte_problems:
+            raise RuntimeError(
+                f"Applied bytes check failed for {case.name}: {', '.join(byte_problems)} "
+                f"(see {applied_bytes_path})."
             )
 
         if case.expect_reject is not None:

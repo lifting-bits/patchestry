@@ -124,6 +124,7 @@ The script writes results under `builds/qemu-firmware-runtime/`:
 - `<case>/dependencies.json`
 - `<case>/trampoline.json`
 - `<case>/patch_record.json`
+- `<case>/applied_bytes.json`
 - `<case>/qemu.log`
 - `summary.tsv`
 - `summary.md`
@@ -238,6 +239,33 @@ python3 scripts/patch-runtime/patch_record.py \
 ```
 
 Its unit tests (`scripts/patch-runtime/test_patch_record.py`) run at the start of `scripts/test-qemu-firmware-runtime.sh`.
+
+## Applied Bytes
+
+`scripts/patch-runtime/check_applied_bytes.py` checks that the rewritten image holds the intended replacement and nothing else, and writes `<case>/applied_bytes.json`. It takes the IR snippets again, compiles each with the recorded flags, links it with `ld.lld` at its recorded address against its recorded symbols, and compares the result with the image byte for byte. The rewriter gets its bytes another way (a relocatable link that a loader then relocates), so the two agree only if both applied the same relocations to the same object code. A case fails on any of these:
+
+| Problem | Meaning |
+| --- | --- |
+| `snippet-mismatch` | a snippet is missing or is not the one the record was made from |
+| `link-failed` | the snippet does not compile or link with the recorded symbols |
+| `byte-mismatch` | the image differs from the expected bytes of a function |
+| `entry-branch-mismatch` | the bytes at the old entry are not a Thumb `b.w` to the new body |
+| `unrecorded-change` | a byte of the original image changed outside every recorded write |
+| `unrecorded-code` | a non-zero byte was added outside every recorded write |
+
+With the record check, every loaded byte of the rewritten image is accounted for: unchanged from the original, zero fill, or equal to code compiled from a known snippet. Flipping any single applied byte fails the check.
+
+Both paths use the same compiler, so a compiler that mistranslates the IR is not detected here.
+
+```sh
+PATCHESTRY_LLVM_PREFIX=<llvm bin dir> python3 scripts/patch-runtime/check_applied_bytes.py \
+  --record builds/qemu-firmware-runtime/replace/patch_record.json \
+  --elf firmwares/serial-qemu/build/serial.elf \
+  --rewritten builds/qemu-firmware-runtime/replace/rewritten.elf \
+  --module builds/qemu-firmware-runtime/replace/qemu_target_replace.patched.ll
+```
+
+Its unit tests (`scripts/patch-runtime/test_check_applied_bytes.py`) run at the start of `scripts/test-qemu-firmware-runtime.sh`.
 
 ## Failure Inspection
 
