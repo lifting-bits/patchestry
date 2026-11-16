@@ -163,7 +163,7 @@ class Record(unittest.TestCase):
     def test_record_contents(self):
         record = self.build()
         s = self.symbols
-        self.assertEqual(record["target"], {"name": "plain", "address": f"0x{s['plain']:x}", "size": 8})
+        self.assertEqual(record["target"], {"name": "plain", "address": f"0x{s['plain']:x}", "size": 8, "mode": "thumb"})
         self.assertEqual(record["compiler"], self.compiler)
         self.assertEqual(record["original"]["sha256"],
                          hashlib.sha256(self.original.read_bytes()).hexdigest())

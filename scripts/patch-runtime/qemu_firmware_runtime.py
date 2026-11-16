@@ -809,7 +809,7 @@ def patch_function_in_elf(
     return recorder.applied, recorder.unattributed(p)
 
 
-def patch_compiler_info(compiler_flags: list[str]) -> dict:
+def patch_compiler_info(compiler_flags: list[str], thumb: bool = True) -> dict:
     """The compiler the reinsertion runs, for the patch record."""
     # Patcherex2's "clang19" component runs `clang-19` from PATH.
     path = shutil.which("clang-19")
@@ -821,7 +821,7 @@ def patch_compiler_info(compiler_flags: list[str]) -> dict:
         "path": str(Path(path).resolve()) if path else None,
         "version": version,
         "target": patch_dependencies.PATCH_TARGET,
-        "flags": [*compiler_flags, "-mthumb"],
+        "flags": [*compiler_flags, "-mthumb" if thumb else "-mno-thumb"],
     }
 
 

@@ -198,15 +198,19 @@ def build_record(
     compiler: dict,
     references: Mapping[str, list[str]],
     unattributed: list[tuple[int, bytes]],
+    target_extent: tuple[int, int] | None = None,
+    mode: str = "thumb",
 ) -> dict:
     """The record for one rewritten image.
 
     `references` gives, per function, the symbols its snippet leaves undefined
     (from the dependency report); the record keeps the address each had when
-    that function was linked.
+    that function was linked.  `target_extent` is the (address, size) of the
+    target for an image with no symbol for it, and `mode` the instruction set
+    it was compiled for ("thumb" or "arm").
     """
     segments = _load_segments(rewritten)
-    target_address, target_size = _function_symbol(original, target)
+    target_address, target_size = target_extent or _function_symbol(original, target)
     original_layout = _layout(original)
     rewritten_layout = _layout(rewritten)
 
@@ -214,10 +218,8 @@ def build_record(
     # rewrites the ELF header and its header tables.
     other_writes = _write_rows(segments, unattributed)
     for row, (offset, content) in zip(other_writes, unattributed):
-        if row["address"] is not None:
-            row["kind"] = "loaded"
-            continue
-        row["kind"] = "unknown"
+        # The header and its tables can themselves be in a loaded segment.
+        row["kind"] = "unknown" if row["address"] is None else "loaded"
         for kind, (start, size) in rewritten_layout["structure"].items():
             if start <= offset and offset + len(content) <= start + size:
                 row["kind"] = kind
@@ -266,11 +268,34 @@ def build_record(
             "sha256": _sha256(rewritten.read_bytes()),
             "entry": rewritten_layout["entry"],
         },
-        "target": {"name": target, "address": _hex(target_address), "size": target_size},
+        "target": {
+            "name": target, "address": _hex(target_address), "size": target_size, "mode": mode
+        },
         "compiler": compiler,
         "functions": functions,
         "unattributed_writes": other_writes,
     }
+
+
+def link_address_problems(record: dict, addresses: Mapping[str, int]) -> list[str]:
+    """References that were linked against an address other than the checked one.
+
+    `addresses` gives, by name, where the binding check found each entity of
+    the original image.  The rewriter resolves names through its own analysis
+    of the image; this compares the two.
+    """
+    problems = []
+    for row in record["functions"]:
+        for name, value in row["symbols"].items():
+            wanted = addresses.get(name)
+            if wanted is None or value is None:
+                continue
+            if int(value, 16) & ~1 != wanted & ~1:
+                problems.append(
+                    f"{row['name']} was linked with {name} at {value}; "
+                    f"the binding check has it at 0x{wanted:x}"
+                )
+    return problems
 
 
 def check_record(record: dict, rewritten: Path, trampoline: dict) -> dict[str, str]:

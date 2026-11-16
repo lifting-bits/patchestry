@@ -36,6 +36,8 @@ Verdict per binding:
   unmapped           a function no symbol or loaded segment covers
   imported           Ghidra placed the entity outside the binary; a static
                      image has nothing to resolve it against
+  plt-stub           an imported function whose PLT stub in the image was
+                     confirmed (dynamically linked executables only)
   unexplained        the lifted unit declares it but the program model does
                      not account for it
 
@@ -44,10 +46,18 @@ and tail calls to an address that is not a known function.  They are copied
 into the report and counted, not judged: where such a call goes is decided at
 run time.
 
-Only static, fixed-address ELF images are supported.  A shared object or
-position-independent executable (ET_DYN), or an image with a dynamic section
-or a program interpreter, is rejected: its symbols resolve through a load
-bias and PLT/GOT entries that this check does not model.
+Only fixed-address ELF images are supported.  A shared object or
+position-independent executable (ET_DYN) is always rejected: its symbols
+resolve through a load bias this check does not model.
+
+An image with a dynamic section or a program interpreter is rejected unless
+`--allow-dynamic` is given.  Its own code and data are still at fixed
+addresses; what differs is an imported function, which the image reaches
+through a PLT stub.  With `--function-json`, the stub address the lift
+recorded for each import is checked against the image: the stub must load its
+target from the GOT slot whose relocation names that import.  Such a binding
+gets the verdict `plt-stub`; an import with no stub, or with a stub of another
+import, keeps the failing verdict `imported`.
 
 Exit status is 1 when any binding gets a verdict from address-mismatch
 onward in the list above; `--strict` adds size-mismatch.  With `--rewritten`,
@@ -63,6 +73,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from elftools.elf.dynamic import DynamicSegment
 from elftools.elf.elffile import ELFFile
 
 FAILING = {
@@ -137,21 +148,24 @@ class Image:
         return None
 
 
-def load_image(path: Path) -> Image:
-    """Read symbols and loaded segments; reject anything not statically placed."""
+def load_image(path: Path, allow_dynamic: bool = False) -> Image:
+    """Read symbols and loaded segments; reject anything not at fixed addresses.
+
+    A dynamically linked executable is accepted only with `allow_dynamic`.
+    """
     with path.open("rb") as handle:
         elf = ELFFile(handle)
         if elf["e_type"] != "ET_EXEC":
             raise UnsupportedImage(
-                f"{path}: ELF type is {elf['e_type']}; only a static, fixed-address "
+                f"{path}: ELF type is {elf['e_type']}; only a fixed-address "
                 "executable (ET_EXEC) is supported"
             )
         segments = []
         for segment in elf.iter_segments():
-            if segment["p_type"] in ("PT_DYNAMIC", "PT_INTERP"):
+            if segment["p_type"] in ("PT_DYNAMIC", "PT_INTERP") and not allow_dynamic:
                 raise UnsupportedImage(
                     f"{path}: has a {segment['p_type']} segment; dynamically linked "
-                    "images are not supported"
+                    "images are not supported unless allowed"
                 )
             if segment["p_type"] == "PT_LOAD":
                 start = int(segment["p_vaddr"])
@@ -185,6 +199,78 @@ def load_image(path: Path) -> Image:
         return Image(symbols, by_address, segments)
 
 
+def _jump_slots(elf: ELFFile) -> dict[int, str]:
+    """GOT slot address -> name of the import the loader binds there."""
+    slots: dict[int, str] = {}
+    for segment in elf.iter_segments():
+        if not isinstance(segment, DynamicSegment):
+            continue
+        table = segment.get_relocation_tables().get("JMPREL")
+        if table is None:
+            continue
+        for relocation in table.iter_relocations():
+            symbol = segment.get_symbol(relocation["r_info_sym"])
+            if symbol is not None and symbol.name:
+                slots[int(relocation["r_offset"])] = symbol.name
+    return slots
+
+
+def _read(elf: ELFFile, address: int, size: int) -> bytes | None:
+    for segment in elf.iter_segments():
+        start = int(segment["p_vaddr"])
+        if (
+            segment["p_type"] == "PT_LOAD"
+            and segment["p_flags"] & PF_X
+            and start <= address
+            and address + size <= start + int(segment["p_filesz"])
+        ):
+            return segment.data()[address - start:address - start + size]
+    return None
+
+
+def plt_stub_import(path: Path, address: int) -> str | None:
+    """The import an ARM PLT stub at `address` jumps to, or None if it is not one.
+
+    The stub is three ARM instructions that build the address of a GOT slot in
+    ip and load pc from it:
+
+        add ip, pc, #a
+        add ip, ip, #b
+        ldr pc, [ip, #c]!
+
+    The slot is `address + 8 + a + b + c`, and the import is the symbol of the
+    jump-slot relocation at that slot.
+    """
+    with path.open("rb") as handle:
+        elf = ELFFile(handle)
+        if elf["e_machine"] != "EM_ARM":
+            return None
+        code = _read(elf, address, 12)
+        if code is None:
+            return None
+        words = [int.from_bytes(code[i:i + 4], "little") for i in (0, 4, 8)]
+        # add ip, pc, #a / add ip, ip, #b / ldr pc, [ip, #c]!
+        if [word & 0xFFFFF000 for word in words] != [0xE28FC000, 0xE28CC000, 0xE5BCF000]:
+            return None
+
+        def rotated(word: int) -> int:
+            value, turn = word & 0xFF, 2 * ((word >> 8) & 0xF)
+            return ((value >> turn) | (value << (32 - turn))) & 0xFFFFFFFF
+
+        slot = address + 8 + rotated(words[0]) + rotated(words[1]) + (words[2] & 0xFFF)
+        return _jump_slots(elf).get(slot & 0xFFFFFFFF)
+
+
+def stubs_from_function_json(function_json: dict) -> dict[str, int]:
+    """Name -> stub address for every import the lift recorded an entry point for."""
+    stubs = {}
+    for key, function in function_json.get("functions", {}).items():
+        entry = function.get("entry_point")
+        if key.startswith("EXTERNAL:") and entry:
+            stubs[function["name"]] = int(entry.rsplit(":", 1)[-1], 16)
+    return stubs
+
+
 def binding_address(binding: dict) -> int | None:
     text = binding.get("address")
     return int(text, 16) if text else None
@@ -209,8 +295,14 @@ def size_differs(binding: dict, symbol: ElfSymbol) -> bool:
     return size != symbol.size
 
 
-def check_binding(binding: dict, image: Image) -> dict:
-    """Return the report row for one binding."""
+def check_binding(
+    binding: dict, image: Image, original: Path | None = None, stubs: dict | None = None
+) -> dict:
+    """Return the report row for one binding.
+
+    `stubs` gives the PLT stub address claimed for each import; it is checked
+    against `original`.
+    """
     row = {
         "name": binding["name"],
         "symbol": binding.get("symbol", binding["name"]),
@@ -226,6 +318,15 @@ def check_binding(binding: dict, image: Image) -> dict:
         return row
     if binding["origin"] == "imported":
         row["verdict"] = "imported"
+        stub = (stubs or {}).get(row["symbol"])
+        if stub is not None and original is not None:
+            resolved = plt_stub_import(original, stub)
+            if resolved == row["symbol"]:
+                row["verdict"] = "plt-stub"
+                row["stub"] = f"0x{stub:x}"
+            else:
+                row["stub_claimed"] = f"0x{stub:x}"
+                row["stub_resolves_to"] = resolved
         return row
     if binding["origin"] != "original" or address is None:
         row["verdict"] = "unexplained"
@@ -278,19 +379,30 @@ def check_binding(binding: dict, image: Image) -> dict:
     return row
 
 
-def check_bindings(manifest: dict, original: Path, rewritten: Path | None = None) -> dict:
+def check_bindings(
+    manifest: dict,
+    original: Path,
+    rewritten: Path | None = None,
+    allow_dynamic: bool = False,
+    stubs: dict[str, int] | None = None,
+) -> dict:
     """Check every binding in `manifest` against `original`.
 
     With `rewritten`, also require that each original entity the unit does not
     define is at the same address there.  Raises UnsupportedImage for an ELF
-    that is not a static, fixed-address image.
+    that is not a fixed-address image, or is dynamically linked and
+    `allow_dynamic` is not set.  `stubs` (name -> address) says where the PLT
+    stub of each import is; only a stub the image confirms binds the import.
     """
-    image = load_image(original)
-    rows = [check_binding(binding, image) for binding in manifest.get("bindings", [])]
+    image = load_image(original, allow_dynamic)
+    rows = [
+        check_binding(binding, image, original, stubs if allow_dynamic else None)
+        for binding in manifest.get("bindings", [])
+    ]
 
     rewritten_checked = None
     if rewritten is not None:
-        after = load_image(rewritten)
+        after = load_image(rewritten, allow_dynamic)
         # A rewriter that strips the symbol table leaves nothing to compare.
         rewritten_checked = bool(after.symbols)
     if rewritten_checked:
@@ -324,6 +436,7 @@ def check_bindings(manifest: dict, original: Path, rewritten: Path | None = None
         for row in rows
         if row["verdict"] in ("alias", "interior", "unnamed", "outside-image")
     }
+    absolute.update({row["symbol"]: row["stub"] for row in rows if row["verdict"] == "plt-stub"})
     return {
         "original": str(original),
         "rewritten": str(rewritten) if rewritten else None,
@@ -348,11 +461,20 @@ def main() -> int:
     parser.add_argument("--rewritten", type=Path, help="ELF after reinsertion")
     parser.add_argument("--output", type=Path, help="write the report here (default: stdout)")
     parser.add_argument("--strict", action="store_true", help="also fail on size-mismatch")
+    parser.add_argument("--allow-dynamic", action="store_true",
+                        help="accept a dynamically linked fixed-address executable")
+    parser.add_argument("--function-json", type=Path,
+                        help="Ghidra JSON of the lift; gives the PLT stub of each import")
     args = parser.parse_args()
 
     manifest = json.loads(args.bindings.read_text(encoding="utf-8"))
+    stubs = None
+    if args.function_json:
+        stubs = stubs_from_function_json(
+            json.loads(args.function_json.read_text(encoding="utf-8"))
+        )
     try:
-        report = check_bindings(manifest, args.elf, args.rewritten)
+        report = check_bindings(manifest, args.elf, args.rewritten, args.allow_dynamic, stubs)
     except UnsupportedImage as error:
         print(f"check-bindings: {error}", file=sys.stderr)
         return 2

@@ -22,7 +22,7 @@ What must hold:
 | `snippet-mismatch` | a snippet is missing or is not the one the record was made from |
 | `link-failed` | the snippet does not compile or link with the recorded symbols |
 | `byte-mismatch` | the image differs from the expected bytes of a function, or the recorded size is not the expected size |
-| `entry-branch-mismatch` | the bytes at the old entry are not a Thumb `b.w` to the new body |
+| `entry-branch-mismatch` | the bytes at the old entry are not a branch to the new body: a Thumb `b.w`, or an ARM `b` when the record says the target is ARM-mode code |
 | `unrecorded-change` | a byte of the original image changed outside every recorded write |
 | `unrecorded-code` | a non-zero byte was added outside every recorded write |
 
@@ -70,6 +70,16 @@ def thumb_branch_wide(source: int, target: int) -> bytes:
     high = 0xF000 | (sign << 10) | ((offset >> 12) & 0x3FF)
     low = 0x9000 | (j1 << 13) | (j2 << 11) | ((offset >> 1) & 0x7FF)
     return high.to_bytes(2, "little") + low.to_bytes(2, "little")
+
+
+def arm_branch(source: int, target: int) -> bytes:
+    """Encoding of ARM-mode `b target` placed at `source` (encoding A1)."""
+    word = 0xEA000000 | (((target - (source + 8)) >> 2) & 0xFFFFFF)
+    return word.to_bytes(4, "little")
+
+
+def branch_at_entry(source: int, target: int, mode: str) -> bytes:
+    return arm_branch(source, target) if mode == "arm" else thumb_branch_wide(source, target)
 
 
 def _run(command: list[str]) -> None:
@@ -161,6 +171,14 @@ def _unrecorded(record: dict, original: Path, rewritten: Path) -> list[dict]:
         for write in row["writes"]
         if write["address"] is not None
     ]
+    # The ELF header and its tables, when the image loads them: the record
+    # check judges what they say.
+    recorded += [
+        (int(write["address"], 16), int(write["address"], 16) + write["size"])
+        for write in record.get("unattributed_writes", [])
+        if write["address"] is not None
+        and write["kind"] in ("elf-header", "program-headers", "section-headers")
+    ]
     before = check_trampoline.Memory(original)
     after = check_trampoline.Memory(rewritten)
     runs: list[dict] = []
@@ -232,7 +250,9 @@ def check_applied_bytes(
     )
     if target is not None and target["address"] is not None:
         source = int(record["target"]["address"], 16)
-        wanted = thumb_branch_wide(source, int(target["address"], 16))
+        wanted = branch_at_entry(
+            source, int(target["address"], 16), record["target"].get("mode", "thumb")
+        )
         found = image.read(source, len(wanted))
         entry_branch = {
             "address": record["target"]["address"],
