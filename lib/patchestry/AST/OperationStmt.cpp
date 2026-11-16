@@ -1990,6 +1990,92 @@ namespace patchestry::ast {
         return { ret_stmt, false };
     }
 
+    void OpBuilder::report_callind_signature_mismatch(
+        clang::ASTContext &ctx, const Function &function, const Operation &op,
+        clang::QualType target_type, clang::SourceLocation loc
+    ) {
+        // A serialized function type lifts as a pointer to function, so
+        // Ghidra's "pointer to function" arrives with two pointer levels.
+        // Accept either.
+        const clang::FunctionProtoType *recovered = nullptr;
+        auto type = target_type.getCanonicalType();
+        for (int level = 0; level < 2 && recovered == nullptr && type->isPointerType(); ++level) {
+            type      = type->getPointeeType().getCanonicalType();
+            recovered = type->getAs< clang::FunctionProtoType >();
+        }
+        if (recovered == nullptr) {
+            return; // the target has no recovered signature to compare with
+        }
+
+        const auto &types  = type_builder().GetSerializedTypes();
+        auto bits_of_type  = [&](clang::QualType qual) -> uint64_t {
+            if (qual.isNull() || qual->isVoidType() || qual->isIncompleteType()) {
+                return 0;
+            }
+            return ctx.getTypeSize(qual);
+        };
+        auto bits_of_input = [&](const Varnode &input) -> uint64_t {
+            if (input.size != 0) {
+                return uint64_t{ input.size } * 8U;
+            }
+            auto it = types.find(input.type_key);
+            return it == types.end() ? 0 : bits_of_type(it->second);
+        };
+
+        std::vector< std::string > differences;
+
+        const auto num_params = recovered->getNumParams();
+        const auto num_inputs = op.inputs.size();
+        if (num_inputs < num_params || (num_inputs > num_params && !recovered->isVariadic())) {
+            differences.push_back(
+                "the call site passes " + std::to_string(num_inputs) + " argument(s), the type takes "
+                + std::to_string(num_params)
+            );
+        }
+        for (unsigned i = 0; i < num_params && i < num_inputs; ++i) {
+            const auto passed   = bits_of_input(op.inputs[i]);
+            const auto expected = bits_of_type(recovered->getParamType(i));
+            if (passed != 0 && expected != 0 && passed != expected) {
+                differences.push_back(
+                    "argument " + std::to_string(i) + " is " + std::to_string(passed)
+                    + "-bit, the parameter is " + std::to_string(expected) + "-bit"
+                );
+            }
+        }
+
+        // A result the call site ignores is not a disagreement.
+        if (op.output) {
+            uint64_t used = 0;
+            if (op.type) {
+                auto it = types.find(*op.type);
+                used    = it == types.end() ? 0 : bits_of_type(it->second);
+            }
+            if (recovered->getReturnType()->isVoidType()) {
+                differences.push_back("the call site uses a result, the type returns void");
+            } else if (const auto returned = bits_of_type(recovered->getReturnType());
+                       used != 0 && returned != 0 && used != returned)
+            {
+                differences.push_back(
+                    "the call site uses a " + std::to_string(used) + "-bit result, the type returns "
+                    + std::to_string(returned) + "-bit"
+                );
+            }
+        }
+
+        if (differences.empty()) {
+            return;
+        }
+        std::string message = "indirect call disagrees with the recovered target type '"
+            + clang::QualType(recovered, 0).getAsString() + "': ";
+        for (size_t i = 0; i < differences.size(); ++i) {
+            message += (i == 0 ? "" : "; ") + differences[i];
+        }
+        function_builder().loss_reporter.get().report(
+            loc, "callind-signature-mismatch",
+            message + " in function '" + function.name + "'. key: " + op.key
+        );
+    }
+
     std::pair< clang::Stmt *, bool > OpBuilder::create_callind(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
@@ -2052,6 +2138,12 @@ namespace patchestry::ast {
 
         // 3. Infer function pointer type and cast if needed
         auto expr_type = fn_ptr_expr->getType();
+
+        // The call below is built from what the call site passes and uses.
+        // When the target's recovered type is a function type that disagrees
+        // with the call site, one of the two is wrong and the lift follows the
+        // call site; say so instead of casting the difference away.
+        report_callind_signature_mismatch(ctx, function, op, expr_type, op_loc);
 
         // Check if we need to build an explicit function pointer type
         const bool needs_type_inference =

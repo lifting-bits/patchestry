@@ -1,0 +1,824 @@
+// An indirect call is lifted from what the call site passes and uses: the
+// target is cast to a function pointer built from the CALLIND inputs and
+// output.  When the type recovered for the target is a function type that
+// says something else, the two disagree and the lift follows the call site.
+// That is reported.  cb is `unsigned int (*)(unsigned int)` unless noted.
+//
+//   ind_match             r = cb(a)                      no report
+//   ind_extra_arg         r = cb(a, b)                   one argument too many
+//   ind_missing_arg       r = cb()                       one argument short
+//   ind_wide_arg          r = cb(w), w is 64-bit         argument wider than the parameter
+//   ind_wide_return       r = cb(a), r is 64-bit         result wider than the return type
+//   ind_void_return_used  r = cb(a), cb returns void     result of a void function used
+//   ind_return_ignored    cb(a)                          no report: nothing is lost
+//   ind_untyped           r = cb(a), cb is an integer    no report: no recovered signature
+//
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-llvm -print-tu -output %t > %t.log 2>&1
+// RUN: %file-check -vv -check-prefix=WARN %s --input-file %t.log
+// RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
+// RUN: not %patchir-decomp -input %t.json -emit-llvm -strict -output %t.strict > %t.strict.log 2>&1
+// RUN: %file-check -vv -check-prefix=ERR %s --input-file %t.strict.log
+// RUN: test ! -e %t.strict.ll
+//
+// WARN-DAG: Diag Warning: {{.*}}lossy lift [callind-signature-mismatch]: indirect call disagrees with the recovered target type 'unsigned int (unsigned int)': the call site passes 2 argument(s), the type takes 1 in function 'ind_extra_arg'
+// WARN-DAG: Diag Warning: {{.*}}lossy lift [callind-signature-mismatch]: indirect call disagrees with the recovered target type 'unsigned int (unsigned int)': the call site passes 0 argument(s), the type takes 1 in function 'ind_missing_arg'
+// WARN-DAG: Diag Warning: {{.*}}lossy lift [callind-signature-mismatch]: indirect call disagrees with the recovered target type 'unsigned int (unsigned int)': argument 0 is 64-bit, the parameter is 32-bit in function 'ind_wide_arg'
+// WARN-DAG: Diag Warning: {{.*}}lossy lift [callind-signature-mismatch]: indirect call disagrees with the recovered target type 'unsigned int (unsigned int)': the call site uses a 64-bit result, the type returns 32-bit in function 'ind_wide_return'
+// WARN-DAG: Diag Warning: {{.*}}lossy lift [callind-signature-mismatch]: indirect call disagrees with the recovered target type 'void (unsigned int)': the call site uses a result, the type returns void in function 'ind_void_return_used'
+// WARN-NOT: in function 'ind_match'
+// WARN-NOT: in function 'ind_return_ignored'
+// WARN-NOT: in function 'ind_untyped'
+// WARN-NOT: Diag Error
+//
+// The call itself still follows the call site.
+// LL-DAG: define dso_local void @ind_wide_arg(ptr {{.*}}, i64
+// LL-DAG: call i32 %{{.*}}(i64 %{{.*}})
+// LL-DAG: call i32 %{{.*}}(i32 %{{.*}}, i32 %{{.*}})
+// LL-DAG: call i64 %{{.*}}(i32 %{{.*}})
+//
+// ERR-DAG: Diag Error: {{.*}}lossy lift [callind-signature-mismatch]{{.*}}in function 'ind_extra_arg'
+// ERR-DAG: Diag Error: {{.*}}lossy lift [callind-signature-mismatch]{{.*}}in function 'ind_void_return_used'
+// ERR: Skipping code generation due to prior diagnostics errors
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "ind_match",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": [
+          "type_cb_ptr",
+          "type_u32",
+          "type_u32"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "cb",
+              "type": "type_cb_ptr",
+              "kind": "parameter",
+              "index": 0
+            },
+            "p1": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "a",
+              "type": "type_u32",
+              "kind": "parameter",
+              "index": 1
+            },
+            "p2": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "b",
+              "type": "type_u32",
+              "kind": "parameter",
+              "index": 2
+            },
+            "r": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "r",
+              "type": "type_u32"
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "p1",
+            "p2",
+            "r",
+            "br"
+          ]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "call": {
+              "mnemonic": "CALLIND",
+              "has_return_value": true,
+              "target": {
+                "type": "type_cb_ptr",
+                "size": 4,
+                "kind": "parameter",
+                "operation": "p0"
+              },
+              "inputs": [
+                {
+                  "type": "type_u32",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "p1"
+                }
+              ],
+              "type": "type_u32",
+              "size": 4,
+              "output": {
+                "kind": "local",
+                "operation": "r"
+              }
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": []
+            }
+          },
+          "ordered_operations": [
+            "call",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    },
+    "ram:10000100": {
+      "name": "ind_extra_arg",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": [
+          "type_cb_ptr",
+          "type_u32",
+          "type_u32"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000100:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "cb",
+              "type": "type_cb_ptr",
+              "kind": "parameter",
+              "index": 0
+            },
+            "p1": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "a",
+              "type": "type_u32",
+              "kind": "parameter",
+              "index": 1
+            },
+            "p2": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "b",
+              "type": "type_u32",
+              "kind": "parameter",
+              "index": 2
+            },
+            "r": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "r",
+              "type": "type_u32"
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000100:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "p1",
+            "p2",
+            "r",
+            "br"
+          ]
+        },
+        "ram:10000100:0:basic": {
+          "operations": {
+            "call": {
+              "mnemonic": "CALLIND",
+              "has_return_value": true,
+              "target": {
+                "type": "type_cb_ptr",
+                "size": 4,
+                "kind": "parameter",
+                "operation": "p0"
+              },
+              "inputs": [
+                {
+                  "type": "type_u32",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "p1"
+                },
+                {
+                  "type": "type_u32",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "p2"
+                }
+              ],
+              "type": "type_u32",
+              "size": 4,
+              "output": {
+                "kind": "local",
+                "operation": "r"
+              }
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": []
+            }
+          },
+          "ordered_operations": [
+            "call",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000100:entry"
+    },
+    "ram:10000200": {
+      "name": "ind_missing_arg",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": [
+          "type_cb_ptr",
+          "type_u32",
+          "type_u32"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000200:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "cb",
+              "type": "type_cb_ptr",
+              "kind": "parameter",
+              "index": 0
+            },
+            "p1": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "a",
+              "type": "type_u32",
+              "kind": "parameter",
+              "index": 1
+            },
+            "p2": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "b",
+              "type": "type_u32",
+              "kind": "parameter",
+              "index": 2
+            },
+            "r": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "r",
+              "type": "type_u32"
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000200:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "p1",
+            "p2",
+            "r",
+            "br"
+          ]
+        },
+        "ram:10000200:0:basic": {
+          "operations": {
+            "call": {
+              "mnemonic": "CALLIND",
+              "has_return_value": true,
+              "target": {
+                "type": "type_cb_ptr",
+                "size": 4,
+                "kind": "parameter",
+                "operation": "p0"
+              },
+              "inputs": [],
+              "type": "type_u32",
+              "size": 4,
+              "output": {
+                "kind": "local",
+                "operation": "r"
+              }
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": []
+            }
+          },
+          "ordered_operations": [
+            "call",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000200:entry"
+    },
+    "ram:10000300": {
+      "name": "ind_wide_arg",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": [
+          "type_cb_ptr",
+          "type_u64"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000300:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "cb",
+              "type": "type_cb_ptr",
+              "kind": "parameter",
+              "index": 0
+            },
+            "p1": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "w",
+              "type": "type_u64",
+              "kind": "parameter",
+              "index": 1
+            },
+            "r": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "r",
+              "type": "type_u32"
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000300:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "p1",
+            "r",
+            "br"
+          ]
+        },
+        "ram:10000300:0:basic": {
+          "operations": {
+            "call": {
+              "mnemonic": "CALLIND",
+              "has_return_value": true,
+              "target": {
+                "type": "type_cb_ptr",
+                "size": 4,
+                "kind": "parameter",
+                "operation": "p0"
+              },
+              "inputs": [
+                {
+                  "type": "type_u64",
+                  "size": 8,
+                  "kind": "parameter",
+                  "operation": "p1"
+                }
+              ],
+              "type": "type_u32",
+              "size": 4,
+              "output": {
+                "kind": "local",
+                "operation": "r"
+              }
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": []
+            }
+          },
+          "ordered_operations": [
+            "call",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000300:entry"
+    },
+    "ram:10000400": {
+      "name": "ind_wide_return",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": [
+          "type_cb_ptr",
+          "type_u32",
+          "type_u32"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000400:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "cb",
+              "type": "type_cb_ptr",
+              "kind": "parameter",
+              "index": 0
+            },
+            "p1": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "a",
+              "type": "type_u32",
+              "kind": "parameter",
+              "index": 1
+            },
+            "p2": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "b",
+              "type": "type_u32",
+              "kind": "parameter",
+              "index": 2
+            },
+            "r": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "r",
+              "type": "type_u64"
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000400:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "p1",
+            "p2",
+            "r",
+            "br"
+          ]
+        },
+        "ram:10000400:0:basic": {
+          "operations": {
+            "call": {
+              "mnemonic": "CALLIND",
+              "has_return_value": true,
+              "target": {
+                "type": "type_cb_ptr",
+                "size": 4,
+                "kind": "parameter",
+                "operation": "p0"
+              },
+              "inputs": [
+                {
+                  "type": "type_u32",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "p1"
+                }
+              ],
+              "type": "type_u64",
+              "size": 8,
+              "output": {
+                "kind": "local",
+                "operation": "r"
+              }
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": []
+            }
+          },
+          "ordered_operations": [
+            "call",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000400:entry"
+    },
+    "ram:10000500": {
+      "name": "ind_void_return_used",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": [
+          "type_vcb_ptr",
+          "type_u32"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000500:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "cb",
+              "type": "type_vcb_ptr",
+              "kind": "parameter",
+              "index": 0
+            },
+            "p1": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "a",
+              "type": "type_u32",
+              "kind": "parameter",
+              "index": 1
+            },
+            "r": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "r",
+              "type": "type_u32"
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000500:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "p1",
+            "r",
+            "br"
+          ]
+        },
+        "ram:10000500:0:basic": {
+          "operations": {
+            "call": {
+              "mnemonic": "CALLIND",
+              "has_return_value": true,
+              "target": {
+                "type": "type_vcb_ptr",
+                "size": 4,
+                "kind": "parameter",
+                "operation": "p0"
+              },
+              "inputs": [
+                {
+                  "type": "type_u32",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "p1"
+                }
+              ],
+              "type": "type_u32",
+              "size": 4,
+              "output": {
+                "kind": "local",
+                "operation": "r"
+              }
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": []
+            }
+          },
+          "ordered_operations": [
+            "call",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000500:entry"
+    },
+    "ram:10000600": {
+      "name": "ind_return_ignored",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": [
+          "type_cb_ptr",
+          "type_u32",
+          "type_u32"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000600:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "cb",
+              "type": "type_cb_ptr",
+              "kind": "parameter",
+              "index": 0
+            },
+            "p1": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "a",
+              "type": "type_u32",
+              "kind": "parameter",
+              "index": 1
+            },
+            "p2": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "b",
+              "type": "type_u32",
+              "kind": "parameter",
+              "index": 2
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000600:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "p1",
+            "p2",
+            "br"
+          ]
+        },
+        "ram:10000600:0:basic": {
+          "operations": {
+            "call": {
+              "mnemonic": "CALLIND",
+              "has_return_value": false,
+              "target": {
+                "type": "type_cb_ptr",
+                "size": 4,
+                "kind": "parameter",
+                "operation": "p0"
+              },
+              "inputs": [
+                {
+                  "type": "type_u32",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "p1"
+                }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": []
+            }
+          },
+          "ordered_operations": [
+            "call",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000600:entry"
+    },
+    "ram:10000700": {
+      "name": "ind_untyped",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": [
+          "type_u32",
+          "type_u32"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000700:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "cb",
+              "type": "type_u32",
+              "kind": "parameter",
+              "index": 0
+            },
+            "p1": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "a",
+              "type": "type_u32",
+              "kind": "parameter",
+              "index": 1
+            },
+            "r": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "r",
+              "type": "type_u32"
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000700:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "p1",
+            "r",
+            "br"
+          ]
+        },
+        "ram:10000700:0:basic": {
+          "operations": {
+            "call": {
+              "mnemonic": "CALLIND",
+              "has_return_value": true,
+              "target": {
+                "type": "type_u32",
+                "size": 4,
+                "kind": "parameter",
+                "operation": "p0"
+              },
+              "inputs": [
+                {
+                  "type": "type_u32",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "p1"
+                }
+              ],
+              "type": "type_u32",
+              "size": 4,
+              "output": {
+                "kind": "local",
+                "operation": "r"
+              }
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": []
+            }
+          },
+          "ordered_operations": [
+            "call",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000700:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_u32": {
+      "name": "unsigned int",
+      "size": 4,
+      "kind": "integer"
+    },
+    "type_u64": {
+      "name": "unsigned long long",
+      "size": 8,
+      "kind": "integer"
+    },
+    "type_void": {
+      "name": "void",
+      "size": 0,
+      "kind": "void"
+    },
+    "type_cb": {
+      "kind": "function",
+      "return_type": "type_u32",
+      "is_variadic": false,
+      "is_noreturn": false,
+      "calling_convention": "unknown",
+      "parameter_types": [
+        "type_u32"
+      ]
+    },
+    "type_cb_ptr": {
+      "kind": "pointer",
+      "size": 4,
+      "element_type": "type_cb"
+    },
+    "type_vcb": {
+      "kind": "function",
+      "return_type": "type_void",
+      "is_variadic": false,
+      "is_noreturn": false,
+      "calling_convention": "unknown",
+      "parameter_types": [
+        "type_u32"
+      ]
+    },
+    "type_vcb_ptr": {
+      "kind": "pointer",
+      "size": 4,
+      "element_type": "type_vcb"
+    }
+  }
+}

@@ -71,6 +71,14 @@ namespace patchestry::ast {
         std::pair< clang::Stmt *, bool >
         create_callind(clang::ASTContext &ctx, const Function &function, const Operation &op);
 
+        // Report `callind-signature-mismatch` when the argument count, an
+        // argument width or the used result of a CALLIND disagrees with the
+        // function type recovered for its target.
+        void report_callind_signature_mismatch(
+            clang::ASTContext &ctx, const Function &function, const Operation &op,
+            clang::QualType target_type, clang::SourceLocation loc
+        );
+
         std::pair< clang::Stmt *, bool >
         create_callother(clang::ASTContext &ctx, const Function &function, const Operation &op);
 
