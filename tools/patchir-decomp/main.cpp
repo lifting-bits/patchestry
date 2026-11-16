@@ -257,7 +257,8 @@ namespace {
             return false;
         }
         patchestry::ast::WriteBindings(
-            out, unit.bindings, program.arch.value_or(""), program.lang.value_or(""),
+            out, unit.bindings, patchestry::ast::CollectUnresolvedCalls(program),
+            program.arch.value_or(""), program.lang.value_or(""),
             program.format.value_or("")
         );
         out.close();

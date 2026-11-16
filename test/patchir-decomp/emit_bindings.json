@@ -50,6 +50,7 @@
 // CHECK-NEXT: "size": 8
 // CHECK: "format": "Executable and Linking Format (ELF)"
 // CHECK: "language": "ARM:LE:32:Cortex"
+// CHECK: "unresolved_calls": []
 {
   "architecture": "ARM",
   "id": "ARM:LE:32:Cortex",

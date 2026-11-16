@@ -39,6 +39,11 @@ Verdict per binding:
   unexplained        the lifted unit declares it but the program model does
                      not account for it
 
+The manifest also lists the calls whose target nothing binds: indirect calls
+and tail calls to an address that is not a known function.  They are copied
+into the report and counted, not judged: where such a call goes is decided at
+run time.
+
 Only static, fixed-address ELF images are supported.  A shared object or
 position-independent executable (ET_DYN), or an image with a dynamic section
 or a program interpreter, is rejected: its symbols resolve through a load
@@ -325,6 +330,7 @@ def check_bindings(manifest: dict, original: Path, rewritten: Path | None = None
         "rewritten_checked": rewritten_checked,
         "summary": dict(sorted(counts.items())),
         "absolute_symbols": dict(sorted(absolute.items())),
+        "unresolved_calls": manifest.get("unresolved_calls", []),
         "bindings": rows,
     }
 
@@ -363,6 +369,9 @@ def main() -> int:
     failed = failures(report, args.strict)
     summary = ", ".join(f"{count} {verdict}" for verdict, count in report["summary"].items())
     print(f"check-bindings: {len(report['bindings'])} bindings: {summary}", file=sys.stderr)
+    if report["unresolved_calls"]:
+        print(f"check-bindings: {len(report['unresolved_calls'])} call(s) with an "
+              "unresolved target", file=sys.stderr)
     for row in failed:
         print(
             f"check-bindings: {row['verdict']}: {row['kind']} '{row['name']}'"

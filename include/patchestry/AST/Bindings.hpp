@@ -14,6 +14,10 @@
 
 #include <llvm/Support/raw_ostream.h>
 
+namespace patchestry::ghidra {
+    struct Program;
+} // namespace patchestry::ghidra
+
 namespace patchestry::ast {
 
     /// One global or function the lifted translation unit refers to, tied back
@@ -56,11 +60,41 @@ namespace patchestry::ast {
         bool defined = false;
     };
 
+    /// A call in a lifted function body whose callee the program model does
+    /// not name.  Nothing in the manifest binds its target: the address is
+    /// computed at run time (or, for a tail call, Ghidra found no function at
+    /// it), so a reinsertion step cannot check where the call goes.
+    struct UnresolvedCall
+    {
+        /// Name of the function that contains the call.
+        std::string function;
+        /// Key of the call operation (`ram:0800182a:51:4`).
+        std::string key;
+        /// `indirect` for a CALLIND, `tail-call` for a tail call to an
+        /// address that is not a known function.
+        std::string kind;
+        /// Call-site address parsed from `key`; unset when the key does not
+        /// start with `<space>:<hex offset>`.
+        std::string address_space;
+        std::optional< uint64_t > address;
+        /// Indirect calls: name of the global the pointer is read from, when
+        /// the target is a global variable.  Empty otherwise.
+        std::string through;
+        /// Tail calls: the literal target address Ghidra recorded.
+        std::string target_address;
+    };
+
+    /// Every indirect call and unresolved tail call in the program's function
+    /// bodies, ordered by function name and operation key.
+    std::vector< UnresolvedCall > CollectUnresolvedCalls(const ghidra::Program &program);
+
     /// Write the bindings as a JSON manifest, sorted for a stable diff.
-    /// `architecture`, `language` and `format` are copied from the program
-    /// header and may be empty.
+    /// `unresolved_calls` goes into a list of its own, each entry with
+    /// `"target": "unresolved"`.  `architecture`, `language` and `format` are
+    /// copied from the program header and may be empty.
     void WriteBindings(
         llvm::raw_ostream &out, std::vector< Binding > bindings,
+        const std::vector< UnresolvedCall > &unresolved_calls,
         const std::string &architecture, const std::string &language,
         const std::string &format
     );

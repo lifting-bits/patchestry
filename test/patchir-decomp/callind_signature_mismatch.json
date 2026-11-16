@@ -20,6 +20,8 @@
 // RUN: not %patchir-decomp -input %t.json -emit-llvm -strict -output %t.strict > %t.strict.log 2>&1
 // RUN: %file-check -vv -check-prefix=ERR %s --input-file %t.strict.log
 // RUN: test ! -e %t.strict.ll
+// RUN: %patchir-decomp -input %t.json -emit-cir -emit-bindings %t.bindings.json -output %t.b
+// RUN: %file-check -vv -check-prefix=BIND %s --input-file %t.bindings.json
 //
 // WARN-DAG: Diag Warning: {{.*}}lossy lift [callind-signature-mismatch]: indirect call disagrees with the recovered target type 'unsigned int (unsigned int)': the call site passes 2 argument(s), the type takes 1 in function 'ind_extra_arg'
 // WARN-DAG: Diag Warning: {{.*}}lossy lift [callind-signature-mismatch]: indirect call disagrees with the recovered target type 'unsigned int (unsigned int)': the call site passes 0 argument(s), the type takes 1 in function 'ind_missing_arg'
@@ -36,6 +38,19 @@
 // LL-DAG: call i32 %{{.*}}(i64 %{{.*}})
 // LL-DAG: call i32 %{{.*}}(i32 %{{.*}}, i32 %{{.*}})
 // LL-DAG: call i64 %{{.*}}(i32 %{{.*}})
+//
+// Nothing binds the target of an indirect call, matching or not, so the
+// manifest lists every one of them.  These keys carry no address.
+// BIND: "unresolved_calls": [
+// BIND: "function": "ind_extra_arg"
+// BIND-NEXT: "key": "call"
+// BIND-NEXT: "kind": "indirect"
+// BIND-NEXT: "target": "unresolved"
+// BIND: "function": "ind_match"
+// BIND: "function": "ind_untyped"
+// BIND-NEXT: "key": "call"
+// BIND-NEXT: "kind": "indirect"
+// BIND-NEXT: "target": "unresolved"
 //
 // ERR-DAG: Diag Error: {{.*}}lossy lift [callind-signature-mismatch]{{.*}}in function 'ind_extra_arg'
 // ERR-DAG: Diag Error: {{.*}}lossy lift [callind-signature-mismatch]{{.*}}in function 'ind_void_return_used'
