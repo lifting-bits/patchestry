@@ -483,7 +483,13 @@ def repo_tool(repo_root: Path, build_type: str, tool_name: str) -> Path:
 # IR with no type-based aliasing, no `inbounds` and wrapping signed arithmetic;
 # the patch compiler must not add those assumptions back.  The optimization
 # level is appended per run (`--patch-opt-level`).
-PATCH_COMPILER_FLAGS = ("-fno-strict-aliasing", "-fwrapv")
+#
+# `-fno-pic`: Patcherex2 compiles for arm-linux-gnueabihf, where clang defaults
+# to position-independent code and reaches an external global through a GOT
+# slot.  Nothing creates that slot in a bare-metal image, so the inserted code
+# would load the global's address from unmapped memory.  The image is linked at
+# fixed addresses, so the address can be used directly.
+PATCH_COMPILER_FLAGS = ("-fno-strict-aliasing", "-fwrapv", "-fno-pic")
 
 
 def patch_compiler_flags(opt_level: str) -> list[str]:
@@ -496,6 +502,7 @@ def patch_function_in_elf(
     target_function: str,
     rewritten_elf: Path,
     extra_compiler_flags: list[str],
+    data_symbols: dict[str, int],
 ) -> None:
     snippets = extract_functions_from_llvm_ir(patched_ll.read_text(encoding="utf-8"))
     if target_function not in snippets:
@@ -538,6 +545,13 @@ def patch_function_in_elf(
         },
     )
 
+    # Patcherex2 resolves the patch's external references from the function
+    # symbols angr finds.  It does not define data symbols, so a global the
+    # lifted code reads or writes would be left unresolved and get whatever
+    # address the patch loader invents.  Give it the address each lifted
+    # global has in the original image.
+    p.symbols.update(data_symbols)
+
     compile_opts = {
         "extension": ".ll",
         "load_options": PATCHEREX2_LOAD_OPTIONS,
@@ -557,6 +571,16 @@ def patch_function_in_elf(
     )
     p.apply_patches()
     p.save_binary(str(rewritten_elf))
+
+
+def original_object_addresses(bindings_path: Path) -> dict[str, int]:
+    """Linker name -> address for every global the lifted unit takes from the binary."""
+    manifest = json.loads(bindings_path.read_text(encoding="utf-8"))
+    return {
+        binding.get("symbol", binding["name"]): int(binding["address"], 16)
+        for binding in manifest.get("bindings", [])
+        if binding["kind"] == "object" and binding["origin"] == "original" and binding.get("address")
+    }
 
 
 def verify_bindings(
@@ -728,6 +752,7 @@ def main() -> int:
             case.function_name,
             rewritten_elf_path,
             compiler_flags,
+            original_object_addresses(bindings_path),
         )
         verify_bindings(bindings_path, firmware_elf, rewritten_elf_path, bindings_report_path)
 
