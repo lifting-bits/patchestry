@@ -144,8 +144,25 @@ The current runtime cases are:
 - `divide`: inserted code that needs `__aeabi_uldivmod`, which is expected to be rejected
 - `state`: inserted code with a zero-initialized writable variable of its own, which is expected to be rejected
 - `initialized`: the same with an initial value of 3, which is expected to be rejected
+- `length`: `qemu_target_length(buf, len)` gets a replacement body that returns an error value for a length over 16
+- `forward`: the second call in `qemu_target_forward(value)` is guarded and skipped for a value over 32
+- `send`: `qemu_target_send(byte)` gets an entry check that calls `qemu_reject` for a lower-case letter or above
 
 Each case rewrites the original firmware ELF and validates the serial output from QEMU.
+
+## Validation Corpus Targets
+
+The last three cases patch targets whose behaviour crosses the function boundary, so that a patch can be judged by what a caller observes:
+
+| Target | What crosses the boundary | Patch | How it rejects |
+| --- | --- | --- | --- |
+| `qemu_target_length` | two arguments, a read through a pointer, a write to the global `qemu_length_last`, a return value | `replace_definition` | early return of `QEMU_LENGTH_ERROR` |
+| `qemu_target_forward` | two calls with arguments computed from its own | `replace` on the second call | the call is not made |
+| `qemu_target_send` | two ordered writes to the UART data register between an interrupt disable and enable | `apply_at_entrypoint` | calls `qemu_reject`, which does not return |
+
+Each patch only restricts the accepted inputs. `main` calls every target once with an input the patch accepts and once with one it rejects, and its unpatched callers print what they see (`LEN:ok`, `LEN:error`, `FWD:second:large`, ...), so each transcript shows the accepted input behaving as before and the rejected one being refused. In the `send` case the run ends at `REJECT`.
+
+The fixtures for these three targets are written by hand, like the others; the lifted C matches the firmware source.
 
 ## Globals and Indirect Calls
 
