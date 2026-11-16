@@ -123,6 +123,7 @@ The script writes results under `builds/qemu-firmware-runtime/`:
 - `<case>/rewritten.elf`
 - `<case>/dependencies.json`
 - `<case>/trampoline.json`
+- `<case>/patch_record.json`
 - `<case>/qemu.log`
 - `summary.tsv`
 - `summary.md`
@@ -208,6 +209,35 @@ python3 scripts/patch-runtime/check_trampoline.py \
 ```
 
 Its unit tests (`scripts/patch-runtime/test_check_trampoline.py`) run at the start of `scripts/test-qemu-firmware-runtime.sh`.
+
+## Patch Record
+
+Patcherex2 writes no record of a patch and does not update the symbol table. The runtime watches each patch being applied and writes `<case>/patch_record.json` (`scripts/patch-runtime/patch_record.py`): the original and rewritten image by hash, the compiler and flags, and for every function in insertion order its address and size, the hash of the IR snippet it was compiled from, each write (file offset, address, size, hash) and the address every symbol it references had when it was linked. Writes outside every patch are listed too; the only ones expected are the ELF header and its header tables, which are rewritten on save.
+
+The record is then checked against the rewritten image and against `trampoline.json`, which finds the new body independently by decoding the branch at the old entry. A case fails on any of these:
+
+| Problem | Meaning |
+| --- | --- |
+| `image-mismatch` | the rewritten image is not the file the record was made for |
+| `missing-target` | the record has no entry for the target function |
+| `unmapped-write` | a write is outside the loaded segments |
+| `write-mismatch` | the image does not hold the recorded bytes |
+| `destination-mismatch` | the recorded placement or address of the target is not what the image's entry shows |
+| `symbol-mismatch` | a referenced symbol had no address at link time, or an inserted function was linked at an address other than where it was placed |
+| `unattributed-write` | bytes were written that belong to no recorded function and are not ELF structure |
+| `entry-changed` | the entry point moved |
+| `segment-changed` | a segment of the original image is no longer loaded at the same addresses with the same permissions |
+
+The record says what was written and where. It does not say the bytes are the right code; that needs a comparison with a fresh compile of the snippets.
+
+```sh
+python3 scripts/patch-runtime/patch_record.py \
+  --record builds/qemu-firmware-runtime/replace/patch_record.json \
+  --rewritten builds/qemu-firmware-runtime/replace/rewritten.elf \
+  --trampoline builds/qemu-firmware-runtime/replace/trampoline.json
+```
+
+Its unit tests (`scripts/patch-runtime/test_patch_record.py`) run at the start of `scripts/test-qemu-firmware-runtime.sh`.
 
 ## Failure Inspection
 

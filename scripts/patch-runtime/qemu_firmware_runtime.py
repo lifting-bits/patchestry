@@ -19,6 +19,7 @@ from patcherex2.targets.elf_arm_bare import ElfArmBare
 import check_bindings
 import check_trampoline
 import patch_dependencies
+import patch_record
 
 
 # Patcherex2's ClangArm.compile() post-processes the assembled Thumb bytes and
@@ -539,7 +540,8 @@ def patch_function_in_elf(
     rewritten_elf: Path,
     extra_compiler_flags: list[str],
     data_symbols: dict[str, int],
-) -> None:
+) -> tuple[list[patch_record.Applied], list[tuple[int, bytes]]]:
+    """Reinsert the snippets; return what each patch wrote and what else was written."""
     if target_function not in snippets:
         raise RuntimeError(
             f"Patched LLVM IR does not define {target_function}. Defines: {sorted(snippets)}"
@@ -597,15 +599,65 @@ def patch_function_in_elf(
     # into ARM code and the M-profile core faults on the first instruction.
     # Force Thumb for every inserted helper.  `snippets` is in insertion order:
     # each helper is linked against the ones placed before it.
+    recorder = patch_record.Recorder()
     for name, code in snippets.items():
         if name == target_function:
             continue
-        p.patches.append(InsertFunctionPatch(name, code, is_thumb=True, compile_opts=compile_opts))
-    p.patches.append(
-        ModifyFunctionPatch(target_function, snippets[target_function], compile_opts=compile_opts)
+        patch = InsertFunctionPatch(name, code, is_thumb=True, compile_opts=compile_opts)
+        recorder.watch(patch, name, "inserted", code)
+        p.patches.append(patch)
+    patch = ModifyFunctionPatch(
+        target_function, snippets[target_function], compile_opts=compile_opts
     )
+    recorder.watch(patch, target_function, "target", snippets[target_function])
+    p.patches.append(patch)
     p.apply_patches()
     p.save_binary(str(rewritten_elf))
+    return recorder.applied, recorder.unattributed(p)
+
+
+def patch_compiler_info(compiler_flags: list[str]) -> dict:
+    """The compiler the reinsertion runs, for the patch record."""
+    # Patcherex2's "clang19" component runs `clang-19` from PATH.
+    path = shutil.which("clang-19")
+    version = None
+    if path:
+        result = subprocess.run([path, "--version"], capture_output=True, text=True, check=False)
+        version = result.stdout.splitlines()[0] if result.stdout else None
+    return {
+        "path": str(Path(path).resolve()) if path else None,
+        "version": version,
+        "target": patch_dependencies.PATCH_TARGET,
+        "flags": [*compiler_flags, "-mthumb"],
+    }
+
+
+def verify_patch_record(
+    original_elf: Path,
+    rewritten_elf: Path,
+    target_function: str,
+    applied: list[patch_record.Applied],
+    unattributed: list[tuple[int, bytes]],
+    compiler_flags: list[str],
+    dependencies_report_path: Path,
+    trampoline_report_path: Path,
+    record_path: Path,
+) -> dict[str, str]:
+    """Write the record of what the rewriter did and check it against the image."""
+    dependencies = json.loads(dependencies_report_path.read_text(encoding="utf-8"))
+    references = {row["function"]: row["undefined"] for row in dependencies["functions"]}
+    record = patch_record.build_record(
+        original_elf,
+        rewritten_elf,
+        target_function,
+        applied,
+        patch_compiler_info(compiler_flags),
+        references,
+        unattributed,
+    )
+    record_path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+    trampoline = json.loads(trampoline_report_path.read_text(encoding="utf-8"))
+    return patch_record.check_record(record, rewritten_elf, trampoline)
 
 
 def original_object_addresses(bindings_path: Path) -> dict[str, int]:
@@ -764,6 +816,7 @@ def main() -> int:
         bindings_report_path = case_dir / "bindings.json"
         trampoline_report_path = case_dir / "trampoline.json"
         dependencies_report_path = case_dir / "dependencies.json"
+        patch_record_path = case_dir / "patch_record.json"
 
         fixture_json_path = fixture_dir / f"{case.function_name}.json"
         if args.refresh_ghidra_fixtures:
@@ -859,7 +912,7 @@ def main() -> int:
                 f"the dependency check found no problem (see {dependencies_report_path})."
             )
 
-        patch_function_in_elf(
+        applied, unattributed = patch_function_in_elf(
             firmware_elf,
             snippets,
             case.function_name,
@@ -872,6 +925,24 @@ def main() -> int:
         problems = verify_trampoline(
             firmware_elf, rewritten_elf_path, case.function_name, json_path, trampoline_report_path
         )
+        record_problems = verify_patch_record(
+            firmware_elf,
+            rewritten_elf_path,
+            case.function_name,
+            applied,
+            unattributed,
+            compiler_flags,
+            dependencies_report_path,
+            trampoline_report_path,
+            patch_record_path,
+        )
+        if record_problems:
+            raise RuntimeError(
+                f"Patch record check failed for {case.name}: "
+                f"{'; '.join(f'{kind}: {detail}' for kind, detail in record_problems.items())} "
+                f"(see {patch_record_path})."
+            )
+
         if case.expect_reject is not None:
             if case.expect_reject not in problems:
                 raise RuntimeError(
