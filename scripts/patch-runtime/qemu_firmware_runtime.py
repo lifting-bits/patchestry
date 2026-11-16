@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import shutil
 import subprocess
 import sys
@@ -19,6 +18,7 @@ from patcherex2.targets.elf_arm_bare import ElfArmBare
 
 import check_bindings
 import check_trampoline
+import patch_dependencies
 
 
 # Patcherex2's ClangArm.compile() post-processes the assembled Thumb bytes and
@@ -241,6 +241,72 @@ CASES: tuple[Case, ...] = (
             "DONE",
         ),
     ),
+    # Inserted code with a switch and string constants of its own; the
+    # transcript shows every arm.
+    Case(
+        name="switch",
+        function_name="qemu_target_replace",
+        spec_name="serial_qemu_switch_patch.yaml",
+        expected_lines=(
+            "BOOT",
+            "BASE:before",
+            "BASE:after",
+            "PATCH:switch:zero",
+            "PATCH:switch:one",
+            "PATCH:switch:two",
+            "PATCH:switch:three",
+            "PATCH:switch:four",
+            "PATCH:switch:other",
+            "BASE:contract",
+            "BASE:short",
+            "BASE:tiny",
+            "BASE:pointer",
+            "BASE:dispatch",
+            "BASE:handler",
+            "DONE",
+        ),
+    ),
+    # Inserted code that calls a compiler runtime helper the firmware does not
+    # have.  Rejected before the image is rewritten.
+    Case(
+        name="divide",
+        function_name="qemu_target_replace",
+        spec_name="serial_qemu_divide_patch.yaml",
+        expected_lines=(
+            "BOOT",
+            "BASE:before",
+            "BASE:after",
+            "PATCH:divide",
+            "BASE:contract",
+            "BASE:short",
+            "BASE:tiny",
+            "BASE:pointer",
+            "BASE:dispatch",
+            "BASE:handler",
+            "DONE",
+        ),
+        expect_reject="unresolved-dependency",
+    ),
+    # Inserted code with a writable variable of its own, which nothing places.
+    Case(
+        name="state",
+        function_name="qemu_target_replace",
+        spec_name="serial_qemu_state_patch.yaml",
+        expected_lines=(
+            "BOOT",
+            "BASE:before",
+            "BASE:after",
+            "PATCH:state",
+            "BASE:contract",
+            "BASE:short",
+            "BASE:tiny",
+            "BASE:pointer",
+            "BASE:dispatch",
+            "BASE:handler",
+            "DONE",
+        ),
+        expect_reject="unresolved-dependency",
+    ),
 )
 
 BASELINE_LINES: tuple[str, ...] = (
@@ -382,120 +448,6 @@ def detect_arm_bare_regions(path: Path) -> tuple[int, int, int, int, int]:
     return flash_start, flash_end, ram_start, ram_end, entry_point
 
 
-_LL_FUNCTION_HEADER_PATTERN = re.compile(
-    r"^define\s+(?:dso_local\s+)?(?:\w+\s+)*@(\w+)\(",
-)
-_LL_LINKAGE_KEYWORDS = re.compile(
-    r"^(?:private|internal|available_externally|linkonce(?:_odr)?"
-    r"|weak(?:_odr)?|common|appending|extern_weak|external)\s+",
-)
-
-
-def iter_function_definitions(content: str) -> Iterable[tuple[str, str, str]]:
-    pos = 0
-    while True:
-        start = content.find("define ", pos)
-        while start != -1 and start > 0 and content[start - 1] != "\n":
-            start = content.find("define ", start + len("define "))
-        if start == -1:
-            return
-
-        body_start = content.find("{", start)
-        if body_start == -1:
-            raise RuntimeError("Malformed LLVM IR: unterminated function header")
-
-        header = content[start:body_start]
-        header_match = _LL_FUNCTION_HEADER_PATTERN.match(header.strip())
-        if header_match is None:
-            raise RuntimeError(
-                "Malformed LLVM IR: could not extract function name from header:\n"
-                f"{header.strip()}"
-            )
-
-        depth = 1
-        cursor = body_start + 1
-        while cursor < len(content) and depth > 0:
-            char = content[cursor]
-            if char == "{":
-                depth += 1
-            elif char == "}":
-                depth -= 1
-            cursor += 1
-        if depth != 0:
-            raise RuntimeError(
-                f"Malformed LLVM IR: unterminated function body for {header_match.group(1)}"
-            )
-
-        yield header_match.group(1), header, content[start:cursor]
-        pos = cursor
-
-
-def extract_functions_from_llvm_ir(content: str) -> dict[str, str]:
-    """Split an LLVM IR module into one self-contained snippet per function.
-
-    Each snippet carries the module-level type defs, globals, external
-    declarations, attribute groups, and metadata, plus `declare`s for the
-    *other* functions defined in the module — so it can be compiled in
-    isolation by Patcherex2's clang invocation. Mirrors
-    Patcherex2/tools/patche_firmware.py:106–210 since that helper is not
-    part of the installed `patcherex2` package.
-    """
-    type_defs = re.findall(
-        r"^%[\w.]+ = type\s+(?:opaque|<?\{[^}]*\}>?).*$",
-        content,
-        re.MULTILINE,
-    )
-    global_vars = re.findall(
-        r"^@[\w.]+ = (?:private |internal |external |global )?(?:constant |global).*$",
-        content,
-        re.MULTILINE,
-    )
-    declarations = re.findall(
-        r"^declare.*?@\w+\([^)]*\).*?(?:\n|$)",
-        content,
-        re.MULTILINE | re.DOTALL,
-    )
-    attributes = re.findall(r"^attributes #\d+ = \{[^}]+\}", content, re.MULTILINE)
-    metadata = re.findall(r"^![\w.]+ = .*$", content, re.MULTILINE)
-
-    functions = tuple(iter_function_definitions(content))
-
-    local_decls: dict[str, str] = {}
-    for name, _, function_body in functions:
-        signature_match = re.match(
-            r"(define\s+(?:dso_local\s+)?(?:\w+\s+)*@\w+\([^)]*\)[^{]*)",
-            function_body,
-        )
-        if signature_match is None:
-            continue
-        body_match = re.match(
-            r"define\s+(?:dso_local\s+)?(.*?@\w+\([^)]*\))",
-            signature_match.group(1),
-        )
-        if body_match is None:
-            continue
-        body = _LL_LINKAGE_KEYWORDS.sub("", body_match.group(1))
-        local_decls[name] = f"declare {body}"
-
-    suffix = "\n\n" + "\n".join(attributes) + "\n\n" + "\n".join(metadata)
-
-    snippets: dict[str, str] = {}
-    for name, _, function_body in functions:
-        other_decls = [decl for fn, decl in local_decls.items() if fn != name]
-        prefix = (
-            "\n".join(type_defs)
-            + "\n\n"
-            + "\n".join(global_vars)
-            + "\n\n"
-            + "\n".join(declarations)
-            + "\n"
-            + "\n".join(other_decls)
-            + "\n\n"
-        )
-        snippets[name] = prefix + function_body + suffix
-    return snippets
-
-
 def write_lines(path: Path, lines: Iterable[str]) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -547,23 +499,26 @@ def repo_tool(repo_root: Path, build_type: str, tool_name: str) -> Path:
 PATCH_COMPILER_FLAGS = ("-fno-strict-aliasing", "-fwrapv", "-fno-pic")
 
 
+# `Case.expect_reject` value for a case stopped before the image is rewritten,
+# because its inserted code references a symbol nothing provides.
+UNRESOLVED_DEPENDENCY = "unresolved-dependency"
+
+
 def patch_compiler_flags(opt_level: str) -> list[str]:
     return [*PATCH_COMPILER_FLAGS, f"-{opt_level}"]
 
 
 def patch_function_in_elf(
     original_elf: Path,
-    patched_ll: Path,
+    snippets: dict[str, str],
     target_function: str,
     rewritten_elf: Path,
     extra_compiler_flags: list[str],
     data_symbols: dict[str, int],
 ) -> None:
-    snippets = extract_functions_from_llvm_ir(patched_ll.read_text(encoding="utf-8"))
     if target_function not in snippets:
         raise RuntimeError(
-            f"Patched LLVM IR {patched_ll} does not define {target_function}. "
-            f"Defines: {sorted(snippets)}"
+            f"Patched LLVM IR does not define {target_function}. Defines: {sorted(snippets)}"
         )
 
     flash_start, flash_end, ram_start, ram_end, entry_point = detect_arm_bare_regions(original_elf)
@@ -616,7 +571,8 @@ def patch_function_in_elf(
     # defaults is_thumb=False, which makes patcherex2 compile the patch with
     # -mno-thumb (ARM mode); the BLX from the Thumb trampoline then jumps
     # into ARM code and the M-profile core faults on the first instruction.
-    # Force Thumb for every inserted helper.
+    # Force Thumb for every inserted helper.  `snippets` is in insertion order:
+    # each helper is linked against the ones placed before it.
     for name, code in snippets.items():
         if name == target_function:
             continue
@@ -652,6 +608,33 @@ def verify_bindings(
             for row in failed
         )
         raise RuntimeError(f"Binding check failed against {original_elf}: {details}")
+
+
+def verify_dependencies(
+    patched_ll: Path,
+    provided: set[str],
+    compiler_flags: list[str],
+    target_function: str,
+    report_path: Path,
+) -> tuple[dict[str, str], list[str]]:
+    """Split the patched module per function and list what no one provides.
+
+    Returns the snippets, in the order to insert them (helpers before their
+    callers, the target last), and the symbols they reference that neither the
+    original image nor an earlier snippet defines.
+    """
+    tools = patch_dependencies.Tools.from_environment()
+    snippets = patch_dependencies.split_module(patched_ll, tools)
+    report = patch_dependencies.check_snippets(snippets, provided, tools, compiler_flags)
+    report["writable_definitions"] = patch_dependencies.writable_definitions(patched_ll, tools)
+    order, stuck = patch_dependencies.insertion_order(report, target_function)
+    report["insertion_order"] = order
+    report["mutually_dependent"] = stuck
+    report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    ordered = {name: snippets[name] for name in order}
+    if target_function in snippets:
+        ordered[target_function] = snippets[target_function]
+    return ordered, sorted({*patch_dependencies.failures(report), *stuck})
 
 
 def verify_trampoline(
@@ -733,6 +716,7 @@ def main() -> int:
         bindings_path = case_dir / "bindings.manifest.json"
         bindings_report_path = case_dir / "bindings.json"
         trampoline_report_path = case_dir / "trampoline.json"
+        dependencies_report_path = case_dir / "dependencies.json"
 
         fixture_json_path = fixture_dir / f"{case.function_name}.json"
         if args.refresh_ghidra_fixtures:
@@ -801,13 +785,40 @@ def main() -> int:
         if case.function_name not in original_symbols:
             raise RuntimeError(f"Original ELF is missing function symbol {case.function_name}.")
 
+        data_symbols = original_object_addresses(bindings_path)
+        snippets, unresolved = verify_dependencies(
+            patched_ll_path,
+            # What the patch linker defines: the image's functions, and the
+            # globals passed to it by address.  Other objects of the image are
+            # not visible to it.
+            {name for name, symbol in original_symbols.items() if symbol.kind == "STT_FUNC"}
+            | set(data_symbols),
+            compiler_flags,
+            case.function_name,
+            dependencies_report_path,
+        )
+        if unresolved:
+            if case.expect_reject != UNRESOLVED_DEPENDENCY:
+                raise RuntimeError(
+                    f"Inserted code for {case.name} references symbols nothing provides: "
+                    f"{', '.join(unresolved)} (see {dependencies_report_path})."
+                )
+            statuses[case.name] = f"rejected:{UNRESOLVED_DEPENDENCY}"
+            summary_rows.append(f"{case.name}\t{statuses[case.name]}\t-")
+            continue
+        if case.expect_reject == UNRESOLVED_DEPENDENCY:
+            raise RuntimeError(
+                f"Case {case.name} should have been rejected for {UNRESOLVED_DEPENDENCY}; "
+                f"every reference resolved (see {dependencies_report_path})."
+            )
+
         patch_function_in_elf(
             firmware_elf,
-            patched_ll_path,
+            snippets,
             case.function_name,
             rewritten_elf_path,
             compiler_flags,
-            original_object_addresses(bindings_path),
+            data_symbols,
         )
         verify_bindings(bindings_path, firmware_elf, rewritten_elf_path, bindings_report_path)
 

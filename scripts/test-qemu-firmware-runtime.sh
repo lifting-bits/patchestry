@@ -162,6 +162,10 @@ PATCHESTRY_LLVM_PREFIX="$llvm_prefix" PATCHESTRY_LD_LLD="$ld_lld" \
   uv run --python "$python_bin" "${patcherex_env[@]}" \
   python "$repo_root/scripts/patch-runtime/test_check_trampoline.py"
 
+PATCHESTRY_LLVM_PREFIX="$llvm_prefix" \
+  uv run --python "$python_bin" "${patcherex_env[@]}" \
+  python "$repo_root/scripts/patch-runtime/test_patch_dependencies.py"
+
 runtime_args=(
   "$repo_root/scripts/patch-runtime/qemu_firmware_runtime.py"
   --repo-root "$repo_root"
@@ -175,4 +179,7 @@ if [[ "$refresh_ghidra" == "1" ]]; then
   runtime_args+=(--refresh-ghidra-fixtures)
 fi
 
-uv run --python "$python_bin" "${patcherex_env[@]}" python "${runtime_args[@]}"
+# The runtime splits the patched module and checks its dependencies with the
+# LLVM tools in this directory.
+PATCHESTRY_LLVM_PREFIX="$llvm_prefix" \
+  uv run --python "$python_bin" "${patcherex_env[@]}" python "${runtime_args[@]}"
