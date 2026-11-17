@@ -1,0 +1,70 @@
+[
+  {
+    "suite": "qemu-firmware-runtime",
+    "case": "length",
+    "function": "qemu_target_length",
+    "intended": "qemu_target_length.patched.ll",
+    "expect": "tested",
+    "seeded": [
+      {"name": "limit", "address": "0x100a", "byte": "0x41",
+       "description": "cmp r0, #0x11 becomes cmp r0, #0x41: the length limit is 64, not 16"},
+      {"name": "subtract", "address": "0x102d", "byte": "0x1a",
+       "description": "adds r0, r0, r1 becomes subs r0, r0, r1: another return value"}
+    ]
+  },
+  {
+    "suite": "qemu-firmware-runtime",
+    "case": "forward",
+    "function": "qemu_target_forward",
+    "intended": "qemu_target_forward.patched.ll",
+    "expect": "tested"
+  },
+  {
+    "suite": "qemu-firmware-runtime",
+    "case": "replace",
+    "function": "qemu_target_replace",
+    "intended": "qemu_target_replace.patched.ll",
+    "expect": "tested"
+  },
+  {
+    "suite": "qemu-firmware-runtime",
+    "case": "send",
+    "function": "qemu_target_send",
+    "intended": "qemu_target_send.patched.ll",
+    "declare": {
+      "mmio_regions": [[1073790976, 1073795071]],
+      "balance": [["qemu_irq_disable", "qemu_irq_enable"]]
+    },
+    "expect": "failed",
+    "note": "A limit of the lift, not of the inserted bytes: Ghidra's decompiler treats 0x4000C000 as plain memory and removes the first of the two stores as dead, so the re-lifted function writes the device once. The checked-in fixture for this function is hand-written for the same reason."
+  },
+  {
+    "suite": "identity-reinsertion",
+    "case": "httpd-fun-0007ae8c",
+    "function": "FUN_0007ae8c",
+    "intended": "FUN_0007ae8c.ll",
+    "whole_image": false,
+    "moved": true,
+    "expect": "tested"
+  },
+  {
+    "suite": "identity-reinsertion",
+    "case": "httpd-fun-00067c0c",
+    "function": "FUN_00067c0c",
+    "intended": "FUN_00067c0c.ll",
+    "whole_image": false,
+    "moved": true,
+    "expect": "tested"
+  },
+  {
+    "suite": "identity-reinsertion",
+    "case": "cgibin-fun-00026534",
+    "function": "FUN_00026534",
+    "intended": "FUN_00026534.ll",
+    "whole_image": false,
+    "moved": true,
+    "declare": {"arg_buffers": {"0": 64}},
+    "expect": "failed",
+    "note": "Open. On about a quarter of the inputs the intended IR faults and the re-lifted function does not (P1, original-faults); memory, return values and calls agree wherever both finish. Not diagnosed: the function keeps a 5-byte local array, and the re-lift of the recompiled code has other locals, so an out-of-bounds access that depends on the frame is the first thing to rule out."
+  }
+]

@@ -549,6 +549,29 @@ class Evidence(unittest.TestCase):
                          ["not-run"] * 3)
         self.assertIn("declared", built["checks"]["mmio-order"]["reason"])
 
+    def test_relift_comes_from_its_report(self):
+        def tested(reports):
+            reports["relift.json"] = {"verdict": "tested", "reason": None, "violations": [],
+                                      "lifted": ["f", "FUN_00001000"],
+                                      "outcomes": {"accepted": 200}}
+        built = self.build(tested)
+        self.assertEqual(built["checks"]["relift"]["verdict"], "tested")
+        self.assertEqual(built["groups"]["cross-check"], "tested")
+        self.assertEqual(built["checks"]["relift"]["facts"]["lifted"], ["f", "FUN_00001000"])
+
+        def differs(reports):
+            reports["relift.json"] = {
+                "verdict": "failed", "reason": "differs", "lifted": ["f"], "outcomes": {},
+                "violations": [{"seed": 1, "property": "P3", "kind": "return-differs"}]}
+        self.failed(differs, "relift", "P3:return-differs")
+
+        def stopped(reports):
+            reports["relift.json"] = {"verdict": "not-run", "reason": "ghidra failed",
+                                      "violations": [], "lifted": []}
+        built = self.build(stopped)
+        self.assertEqual(built["checks"]["relift"]["verdict"], "not-run")
+        self.assertIn("ghidra", built["checks"]["relift"]["reason"])
+
     def test_report_without_a_property_is_refused(self):
         def change(reports):
             report = self.equivalence()

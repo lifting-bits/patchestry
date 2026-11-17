@@ -198,6 +198,8 @@ export PATCHESTRY_KLEE_VERIFIER="${PATCHESTRY_KLEE_VERIFIER:-$repo_root/builds/d
 PATCHESTRY_LLVM_PREFIX="$llvm_prefix" PATCHESTRY_LD_LLD="$ld_lld" \
   uv run --python "$python_bin" "${patcherex_env[@]}" \
   python "$repo_root/scripts/patch-runtime/test_check_equivalence.py"
+uv run --python "$python_bin" "${patcherex_env[@]}" \
+  python "$repo_root/scripts/patch-runtime/test_check_relift.py"
 
 runtime_args=(
   "$repo_root/scripts/patch-runtime/qemu_firmware_runtime.py"

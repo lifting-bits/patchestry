@@ -23,9 +23,8 @@ Verdicts:
 
 The verdict of a group, and of the case, is the weakest verdict in it, in the
 order `failed`, `not-run`, `tested`, `proven`.  A check whose report is absent
-is `not-run`: nothing is taken as passed because nobody looked.  Until the
-re-lift exists, no case has an overall verdict better than `not-run`;
-`groups` says what the implemented checks established.  P1 to
+is `not-run`: nothing is taken as passed because nobody looked.  `groups`
+says what each group of checks established.  P1 to
 P4 are `tested` when the two versions were run on concrete inputs; `proven`
 is accepted only from a KLEE run.
 
@@ -44,7 +43,7 @@ Checks and where each verdict is read from:
 | runtime | `runtime-transcript` | `case.json` (`runtime`), written by the suite |
 | equivalence | `P1`, `P2`, `P3`, `P4` | `equivalence.json` (check_equivalence.py) |
 | firmware | `mmio-order`, `lock-balance`, `reject-hygiene` | `equivalence.json` |
-| cross-check | `relift` | none yet |
+| cross-check | `relift` | `relift.json` |
 
 `case.json` is what the suite knows and no report holds: the case, the image
 and its digest, the patch, where the fixture came from, the outcome of running
@@ -136,10 +135,6 @@ CLAIMS = {
     "relift": "the function lifted back from the rewritten image matches the intended code",
 }
 
-NOT_IMPLEMENTED = {
-    "relift": "the rewritten image was not lifted again (plan phase V10)",
-}
-
 BINDING_FAILURES = {
     "address-mismatch", "kind-mismatch", "not-executable", "unmapped", "imported", "unexplained",
 }
@@ -148,7 +143,7 @@ SUITE_RUNTIME_VERDICTS = ("tested", "failed", "not-run")
 REPORT_FILES = (
     "bindings.json", "bindings.rewritten.json", "dependencies.json", "abi.json",
     "trampoline.json", "patch_record.json", "patch_record_check.json", "applied_bytes.json",
-    "static.json", "equivalence.json",
+    "static.json", "equivalence.json", "relift.json",
 )
 
 
@@ -356,6 +351,21 @@ def _equivalence(reports: Reports, name: str) -> dict:
     return _row(judged["verdict"], "equivalence.json", reason=judged.get("reason"), facts=facts)
 
 
+def _relift(reports: Reports) -> dict:
+    """The function lifted back from the rewritten image, against the intended code."""
+    report = reports.get("relift.json")
+    if report is None:
+        return _row("not-run", reason="relift.json was not written: the rewritten image "
+                                      "was not lifted again")
+    if report["verdict"] not in ("tested", "failed", "not-run"):
+        raise ValueError(f"relift.json: verdict {report['verdict']!r} is not accepted")
+    facts = {"lifted": report.get("lifted", []), "outcomes": report.get("outcomes", {})}
+    if report["verdict"] == "failed":
+        kinds = sorted({f"{row['property']}:{row['kind']}" for row in report["violations"]})
+        return _row("failed", "relift.json", kinds, facts=facts)
+    return _row(report["verdict"], "relift.json", reason=report.get("reason"), facts=facts)
+
+
 def _budget(reports: Reports, key: str) -> dict:
     report = reports.get("static.json")
     if report is None:
@@ -541,8 +551,7 @@ def build_evidence(directory: Path) -> dict:
     }
     for name in ("P1", "P2", "P3", "P4", "mmio-order", "lock-balance", "reject-hygiene"):
         checks[name] = _equivalence(reports, name)
-    for name, reason in NOT_IMPLEMENTED.items():
-        checks[name] = _row("not-run", reason=reason)
+    checks["relift"] = _relift(reports)
 
     stopped = context.get("stopped")
     if stopped:

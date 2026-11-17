@@ -319,7 +319,7 @@ It gives every check of the validation plan one of four verdicts:
 | `failed` | the check found a problem |
 | `not-run` | the check did not run, could not decide, or does not exist yet |
 
-A check whose report is absent is `not-run`. The verdict of a group and of the case is the weakest one in it (`failed`, then `not-run`, `tested`, `proven`). P1 to P4 and the firmware checks come from `check_equivalence.py` (`equivalence.json`, see the next section). The re-lift does not exist yet, so no case has an overall verdict better than `not-run`. `groups` says what the implemented checks established: `integrity` (bindings, dependencies, ABI, reinsertion, patch record, link addresses, applied bytes, rewritten bindings), `static` (calling convention, the two budgets), `runtime` (the transcript).
+A check whose report is absent is `not-run`. The verdict of a group and of the case is the weakest one in it (`failed`, then `not-run`, `tested`, `proven`). P1 to P4 and the firmware checks come from `check_equivalence.py` (`equivalence.json`, see the next section). The re-lift comes from `check_relift.py` (`relift.json`, see Re-lift below), which is run separately, so no case has an overall verdict better than `not-run`. `groups` says what the implemented checks established: `integrity` (bindings, dependencies, ABI, reinsertion, patch record, link addresses, applied bytes, rewritten bindings), `static` (calling convention, the two budgets), `runtime` (the transcript).
 
 The file also has the bounds (the budgets and what was measured against them, the compiler and flags), every assumption with its name, source and statement, warnings (inlined copies), and each report it read with its SHA-256.
 
@@ -364,6 +364,31 @@ Each case then has seeded harms: the patched IR with lines replaced, compared ag
 | `send--rejects-with-interrupts-off` | the check runs after interrupts are disabled | lock-balance |
 | `send--enable-dropped` | interrupts are not enabled again | P4, lock-balance |
 | `send--writes-before-reject` | the reject path writes the device first | reject-hygiene |
+
+## Re-lift
+
+`check_relift.py` lifts the patched function back from `rewritten.elf` with Ghidra, lowers it the way the original was lowered, and compares it with the intended patched IR on generated inputs. Nothing is declared for that comparison, so the two must agree on every input. It starts from the bytes in the image and shares neither the compiler nor Patcherex2 with the rest of the pipeline; it does share Ghidra, `patchir-decomp` and the comparison harness.
+
+It needs Docker, so the suite does not run it. After the suite (and the identity suite) has run:
+
+```sh
+PATCHESTRY_LLVM_PREFIX=... PATCHESTRY_LD_LLD=... QEMU_SYSTEM_ARM=... \
+PATCHESTRY_KLEE_VERIFIER=builds/default/tools/patchir-klee-verifier/Debug/patchir-klee-verifier \
+python3 scripts/patch-runtime/relift_cases.py --cases test/relift/cases.json --builds builds
+```
+
+Each case gets `relift.json` and a rebuilt `validation.json` with the `relift` check; `builds/relift-summary.tsv` lists the verdicts. A firmware case lifts the whole image so that helpers the patch inserted (no symbol, `FUN_<address>` in Ghidra) are lifted with the target. A case from a stripped binary lifts one function at the trampoline destination from `trampoline.json`.
+
+| Case | Verdict | |
+| --- | --- | --- |
+| `length`, `forward`, `replace` | tested | 200 inputs each |
+| `length--relift-limit` | failed (P2, P3) | seeded: one byte turns `cmp r0, #0x11` into `cmp r0, #0x41` |
+| `length--relift-subtract` | failed (P3) | seeded: one byte turns `adds` into `subs` |
+| `send` | failed (mmio-order), expected | Ghidra's decompiler removes the first of two stores to 0x4000C000 as dead, so the re-lifted function writes the device once. A limit of the lift, not a fault in the bytes |
+| `httpd` `FUN_0007ae8c`, `FUN_00067c0c` | tested | |
+| `cgibin` `FUN_00026534` | failed (P1), expected, open | the intended IR faults on about a quarter of the inputs where the re-lift does not; not diagnosed |
+
+A `failed` says the bytes, as Ghidra reads them, do not behave like the intended code. It cannot say whether the bytes or the lift are at fault.
 
 ## Failure Inspection
 
