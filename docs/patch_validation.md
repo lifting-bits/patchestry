@@ -29,7 +29,8 @@ The check is split along those three so that a failure names its cause.
 
 Step A compares 1 with 2. It asks whether the patch design does harm. Declared
 reject paths are allowed here: the patch may turn an accepted input into a
-rejected one, and nothing else.
+rejected one, and nothing else. This comparison at IR level is not one of
+the stages below at the moment; it is deferred.
 
 Step B compares 2 with 3. It asks whether the patcher and the toolchain applied
 what was intended. No reject path and no relaxation is allowed: the two must
@@ -70,11 +71,10 @@ because later stages would compare the wrong things.
 | 4. Patch record | Which bytes did Patcherex2 write, where, with which compiler and flags? Do they agree with the rewritten ELF? | `patch_record.py` | proven, failed |
 | 5. Applied bytes | Recompile the intended snippets and compare them with the bytes in the rewritten ELF. | `check_applied_bytes.py` | proven, failed |
 | 6. Static discipline | Per inserted function: stack balance, saved registers restored, code size and stack depth against declared budgets. | `check_static.py` | proven, failed, not-run when no budget is declared |
-| 7. Equivalence (Step A) | P1 to P4 between the lifted original and the patched IR. | `patchir-klee-verifier --compare-original`, `check_equivalence.py` | tested, failed; proven only from KLEE |
-| 8. Firmware checks | Device write order, acquire and release balance, hygiene of reject paths. | same harness | tested, failed, not-run when nothing is declared |
-| 9. Runtime | Does the rewritten firmware still print the expected transcript under QEMU? | `qemu_firmware_runtime.py` | tested, failed |
-| 10. Re-lift (Step B) | Lift the patched function back from the rewritten ELF and compare it with the intended IR. | `check_relift.py`, `relift_cases.py` | tested, failed |
-| 11. Evidence | Collect every report into one artifact with verdicts and assumptions. | `evidence.py` | |
+| 7. Firmware checks | Device write order, acquire and release balance, hygiene of reject paths. | `patchir-klee-verifier --compare-original`, `check_equivalence.py` | tested, failed, not-run when nothing is declared |
+| 8. Runtime | Does the rewritten firmware still print the expected transcript under QEMU? | `qemu_firmware_runtime.py` | tested, failed |
+| 9. Re-lift (Step B) | Lift the patched function back from the rewritten ELF and compare it with the intended IR. | `check_relift.py`, `relift_cases.py` | tested, failed |
+| 10. Evidence | Collect every report into one artifact with verdicts and assumptions. | `evidence.py` | |
 
 All scripts are under `scripts/patch-runtime/`.
 
@@ -84,11 +84,12 @@ These read the two ELF files and the patch record. They do not execute
 anything, and their verdicts are `proven` or `failed`. Stage 5 is the first
 half of Step B: it shows that the bytes in the image are the bytes the
 compiler produced for the intended code. It trusts the compiler, which is why
-stage 10 exists.
+stage 9 exists.
 
-### Stage 7: equivalence, properties P1 to P4
+### Properties P1 to P4
 
-The property definitions are VeriBin's.
+The later comparisons report against four properties. The definitions are
+VeriBin's.
 
 | Property | Claim |
 | --- | --- |
@@ -97,47 +98,13 @@ The property definitions are VeriBin's.
 | P3 | When both accept, the return values are equal. |
 | P4 | When both accept, the calls of external functions and their arguments are equal, after the declared rules. |
 
+### Stage 7: firmware checks
+
 `patchir-klee-verifier --compare-original` builds a product harness: one LLVM
-module that holds both versions, each with its own copy of every global. The
-harness makes the arguments, the argument buffers and the writable globals
-symbolic and equal, runs the patched version, restores the inputs, runs the
-original, and ends the path with a code that says which property differed.
-
-How each property is observed:
-
-- P1: a version rejects when it calls a declared reject handler, returns a
-  declared reject value, or skips a declared call. A fault or an abort in the
-  original alone also counts.
-- P2: paired globals without pointers and the argument buffers are compared
-  byte by byte after both runs. Stack memory is not compared.
-- P3: the return values are compared; pointers are compared after mapping an
-  address in either copy of a global to the same place.
-- P4: every external function is a stub that records its name and arguments.
-  The two traces are compared. A `pure_callee` may be dropped, duplicated or
-  reordered. A `substitution` lets one named callee stand for another. A
-  small set of string functions run as models instead of stubs.
-
-Declarations are command-line options today (`--reject-handler`,
-`--reject-return`, `--reject-skip`, `--pure-callee`, `--substitution`,
-`--arg-buffer`, `--arg-range`). The patch specification does not carry them
-yet.
-
-The harness has two runners.
-
-The concrete runner (`check_equivalence.py`) links the harness as bare-metal
-ARM code and runs it under `qemu-system-arm -M virt` on generated inputs, 200
-by default. It gives `tested`.
-
-KLEE is the symbolic runner. `lib/patchestry/klee/models/compare_models.c`
-ends a violating path in `klee_abort` from a function named after the failed
-check, and `scripts/klee/klee_gate.py` reads the KLEE output directory and
-gives `proven` only for a complete run with no error. This path has not been
-exercised: KLEE is not installed on the development host and the project's
-image is x86-64 only. Until it runs, no property is `proven`.
-
-### Stage 8: firmware checks
-
-These use the same runs and are `not-run` unless something is declared.
+module that holds the lifted original and the patched IR, run on the same
+inputs. `check_equivalence.py` runs it under `qemu-system-arm -M virt` on
+generated inputs, 200 by default. The checks are `not-run` unless something
+is declared.
 
 | Check | Declared with | Holds when |
 | --- | --- | --- |
@@ -150,11 +117,11 @@ local or a global asks the runner first. Inside a range a write is recorded
 and not performed, and a read returns the next of a series of values both
 versions share.
 
-### Stage 10: re-lift
+### Stage 9: re-lift
 
 `check_relift.py` runs Ghidra on the rewritten ELF, lowers the lifted function
 the same way the original was lowered, and compares it with the intended IR
-through the stage 7 harness with nothing declared. On firmware it lifts the
+through the same product harness with nothing declared. On firmware it lifts the
 whole image so that helper functions the patch inserted are lifted with the
 target. On a stripped binary it lifts one function at the trampoline
 destination from the reinsertion report.
@@ -199,7 +166,7 @@ Patcherex2 environment of the suites already has.
 | firmware `forward`, skipped call declared | proven |
 | firmware `forward`, nothing declared | failed P4 |
 | `length` with `adds` changed to `subs` in the inserted code | failed P3 |
-| `length` with the limit changed from 16 to 64 | proven: against the original this is still a restricting patch. Only the comparison with the intended code (stage 5, stage 10) sees it |
+| `length` with the limit changed from 16 to 64 | proven: against the original this is still a restricting patch. Only the comparison with the intended code (stage 5, stage 9) sees it |
 | `httpd` `FUN_00067c0c` reinserted unchanged | proven, 5 and 5 paths, 25 calls per path |
 | the same with one byte changed (a `memset` length, 64 to 32) | failed P4 |
 | `httpd` `FUN_0007ae8c` reinserted unchanged, 3-byte buffers | incomplete: 16 and 16 paths agree, but both sides write through an address that depends on the input |
@@ -210,7 +177,7 @@ floating-point arguments are not compared; memory that is read before it is
 written is zero; path pairs are compared one by one, so a function with many
 paths runs out of time; a writable segment over 1 MB keeps the image's bytes.
 
-### Stage 11: evidence
+### Stage 10: evidence
 
 `evidence.py` writes `<case>/validation.json`: one row per check with its
 verdict, the report it came from, the problems found and the facts measured;
@@ -229,9 +196,8 @@ compares seeded variants with the original.
 
 | What | Result |
 | --- | --- |
-| Firmware cases `length`, `forward`, `send` against their lifted originals | P1, P3, P4 tested on 200 inputs each; `send` also tested on write order, balance and reject hygiene |
+| Firmware case `send` against its lifted original | write order, balance and reject hygiene tested on 200 inputs |
 | Seeded harms in the firmware suite (8) | each fails the expected check |
-| Seeded variants on `httpd` and `cgibin` functions (15) | each gives the expected verdicts |
 | Re-lift of `length`, `forward`, `replace`, `httpd` `FUN_0007ae8c` and `FUN_00067c0c` | tested |
 | Re-lift with one byte of the inserted code changed (2) | both fail |
 | Harness lit tests | 32 pass in Debug and Release |
@@ -247,9 +213,9 @@ Known gaps and open findings:
   about a quarter of the inputs where the re-lifted function does not. Not
   diagnosed.
 - Both the original and the patched IR come from the same lifter. A lifter
-  bug that affects both the same way is invisible to stage 7. Stage 10 covers
-  the patched side only. The binary-to-binary prototype removes this for
-  the functions it can finish.
+  bug that affects both the same way is invisible to any comparison of the
+  two. Stage 9 covers the patched side only. The binary-to-binary prototype
+  removes this for the functions it can finish.
 - Writes through an address computed from a constant are outside P2 unless
   the range is declared as device registers. A device register nobody
   declared is not seen.
