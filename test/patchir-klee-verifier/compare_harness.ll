@@ -54,14 +54,26 @@ ok:
 ; CHECK-DAG: @patch_limit.patched = {{.*}}constant i32 8
 ; CHECK-DAG: @__patchestry_values.read_sensor = internal global [8 x i32] zeroinitializer
 
-; An external function returns the same value at the same call index on both sides.
+; An address inside either copy of a global names the same place.
+; CHECK-DAG: @__patchestry_pairs = constant [3 x { ptr, ptr, i32 }] [{ ptr, ptr, i32 } { ptr @counter.orig, ptr @counter.patched, i32 4 }
+; CHECK-DAG: @__patchestry_pair_count = constant i32 3
+; Constant data is compared by content, whichever side it belongs to.
+; CHECK-DAG: @__patchestry_constants = constant [3 x { ptr, i32 }] [{ ptr, i32 } { ptr @table.orig, i32 8 }, { ptr, i32 } { ptr @table.patched, i32 8 }, { ptr, i32 } { ptr @patch_limit.patched, i32 4 }]
+
+; An external function records its call, then returns the same value at the
+; same call index on both sides.
 ; CHECK: define internal i32 @read_sensor(i32 %0)
+; CHECK: call void @__patchestry_trace_call(i32 1, i32 1)
+; CHECK-NEXT: call void @__patchestry_trace_arg(i32 %0)
 ; CHECK: load i32, ptr @__patchestry_calls.read_sensor
 ; CHECK: getelementptr inbounds [8 x i32], ptr @__patchestry_values.read_sensor
 
 ; A reject handler that does not return ends the path: accepted by the patch
 ; and rejected by the original is a P1 violation (10), rejected by the patch is 1.
+; CHECK: define internal void @log_event()
+; CHECK: call void @__patchestry_trace_call(i32 2, i32 0)
 ; CHECK: define internal void @reject_request()
+; CHECK-NOT: __patchestry_trace_call
 ; CHECK: load i32, ptr @__patchestry_phase
 ; CHECK: call void @__patchestry_path_end(i32 10)
 ; CHECK: call void @__patchestry_path_end(i32 1)
@@ -79,8 +91,11 @@ ok:
 ; CHECK-DAG: call void @klee_make_symbolic(ptr @shared_state.orig, i32 4, ptr
 ; CHECK-NOT: klee_make_symbolic(ptr @names
 ; CHECK-NOT: klee_make_symbolic(ptr @table
-; The declared buffer size is used for argument 0.
-; CHECK: call ptr @malloc(i32 16)
+; The declared buffer size is used for argument 0.  The harness's copies are
+; allocated first, the buffer the versions are given last.
+; CHECK: %arg0.patched = call ptr @malloc(i32 16)
+; CHECK: %arg0.initial = call ptr @malloc(i32 16)
+; CHECK: %arg0 = call ptr @malloc(i32 16)
 ; A declared range bounds an integer argument: low + (value mod span).
 ; CHECK: urem i32 %{{.*}}, 16
 ; CHECK: %arg1.bounded = add i32 %{{.*}}, -2
@@ -93,13 +108,24 @@ ok:
 ; Run alone, the original reports only whether it accepted the input.
 ; CHECK: select i1 %only.original, i32 31, i32 10
 ; CHECK: call void @__patchestry_path_end(i32 30)
-; CHECK: call void @__patchestry_path_end(i32 11)
+; Both accepted: the return values, the calls and the memory are compared,
+; and a difference ends the path with 64 plus one bit per property.
+; CHECK: %return.differs = select i1 %{{.*}}, i32 1, i32 0
+; CHECK: %trace = call i32 @__patchestry_trace_differs()
+; CHECK: call void @__patchestry_path_end(i32 20)
+; CHECK: %calls.differ = select i1 %{{.*}}, i32 4, i32 0
+; CHECK: call i32 @__patchestry_memory_differs(ptr @counter.orig, ptr @counter.patched, i32 4, i32 0)
+; CHECK: call i32 @__patchestry_memory_differs(ptr @shared_state.orig, ptr @shared_state.patched, i32 4, i32 1)
+; CHECK: call i32 @__patchestry_memory_differs(ptr %arg0, ptr %arg0.patched, i32 16, i32 2)
+; CHECK: %[[#CODE:]] = or i32 %{{.*}}, 64
+; CHECK: call void @__patchestry_path_end(i32 %[[#CODE]])
 ; CHECK: call void @__patchestry_path_end(i32 0)
 
 ; INFO-DAG: "target": "checked"
 ; INFO-DAG: "reject_returns": [
 ; INFO-DAG: "name": "read_sensor"
 ; INFO-DAG: "names"
+; INFO-DAG: "memory_regions": [
 
 ; A null pointer as the reject value of a function that returns a pointer.
 ; RUN: %patchir-klee-verifier %S/Inputs/compare_pointer.ll.in --compare-original %S/Inputs/compare_pointer.ll.in --target-function pick --reject-return 0 --keep-target --harness-info %t.ptr.json -S -o %t.ptr.ll

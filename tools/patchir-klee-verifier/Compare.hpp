@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -18,6 +19,16 @@
 #include <llvm/Support/JSON.h>
 
 namespace patchestry::klee_verifier {
+
+    // A callee swap the patch declares equivalent: a call of `patched` in the
+    // patched version stands for a call of `original`, and the two agree on
+    // their first `compare_args` arguments.
+    struct Substitution
+    {
+        std::string original;
+        std::string patched;
+        unsigned compare_args = 0;
+    };
 
     struct CompareOptions
     {
@@ -31,6 +42,12 @@ namespace patchestry::klee_verifier {
         std::map< unsigned, std::pair< int64_t, int64_t > > arg_ranges;
         // Buffer size for a pointer argument with no declared size.
         uint64_t pointer_size = 256;
+        // Callees whose calls are left out of the call trace.
+        std::vector< std::string > pure_callees;
+        std::vector< Substitution > substitutions;
+        // External functions the runner implements (`__patchestry_model_<name>`):
+        // their calls are traced and then executed.
+        std::set< std::string > models;
         // How many distinct values an external function returns before it
         // repeats the last one.
         unsigned stub_values = 8;

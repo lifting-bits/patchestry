@@ -24,10 +24,10 @@ Verdicts:
 The verdict of a group, and of the case, is the weakest verdict in it, in the
 order `failed`, `not-run`, `tested`, `proven`.  A check whose report is absent
 is `not-run`: nothing is taken as passed because nobody looked.  Until the
-checks P2 and P4, the firmware checks and the re-lift exist, no case has an
-overall verdict better than `not-run`; `groups` says what the implemented
-checks established.  P1 and P3 are `tested` when the two versions were run on
-concrete inputs; `proven` is accepted only from a KLEE run.
+firmware checks and the re-lift exist, no case has an overall verdict better
+than `not-run`; `groups` says what the implemented checks established.  P1 to
+P4 are `tested` when the two versions were run on concrete inputs; `proven`
+is accepted only from a KLEE run.
 
 Checks and where each verdict is read from:
 
@@ -42,8 +42,7 @@ Checks and where each verdict is read from:
 | integrity | `rewritten-bindings` | `bindings.rewritten.json`, or `bindings.json` when it covers the rewritten image |
 | static | `calling-convention`, `code-size-budget`, `stack-budget` | `static.json` |
 | runtime | `runtime-transcript` | `case.json` (`runtime`), written by the suite |
-| equivalence | `P1`, `P3` | `equivalence.json` (check_equivalence.py) |
-| equivalence | `P2`, `P4` | none yet |
+| equivalence | `P1`, `P2`, `P3`, `P4` | `equivalence.json` (check_equivalence.py) |
 | firmware | `mmio-order`, `lock-balance`, `reject-hygiene` | none yet |
 | cross-check | `relift` | none yet |
 
@@ -59,9 +58,12 @@ confirm them, `plt-stubs-from-fixture`, `addresses-outside-image`,
 `fixtures-hand-written`, `fixtures-not-regenerated`, and
 `validation-block-absent` while the patch specification declares no intent.
 From a run of the equivalence harness: `inputs-sampled`, one
-`stubbed-callee:<name>` per external function, `globals-as-lifted`,
-`layout-adopted`, and `retargeted-layout` when the harness was not run in the
-image's own layout.
+`stubbed-callee:<name>` or `modelled-callee:<name>` per external function,
+`variadic-arguments:<name>`, `memory-scope`, `locals-by-kind`,
+`globals-as-lifted`, `layout-adopted`, and `retargeted-layout` when the
+harness was not run in the image's own layout.  Each declaration that relaxes
+the call comparison is one too: `pure-callee:<name>` and
+`substitution:<original>-><patched>`, the latter with its condition.
 
 Only the standard library is needed.
 
@@ -131,8 +133,6 @@ CLAIMS = {
 }
 
 NOT_IMPLEMENTED = {
-    "P2": "the memory comparison does not exist yet (plan phase V7); KLEE did not run",
-    "P4": "the call-trace comparison does not exist yet (plan phase V7); KLEE did not run",
     "mmio-order": "the device write trace does not exist yet (plan phase V8)",
     "lock-balance": "the lock and interrupt models do not exist yet (plan phase V8)",
     "reject-hygiene": "the patch specification declares no reject paths (plan phases V1, V8)",
@@ -319,11 +319,13 @@ def _calling_convention(reports: Reports) -> dict:
 
 
 def _equivalence(reports: Reports, name: str) -> dict:
-    """P1 or P3, from a run of the product harness."""
+    """P1 to P4, from a run of the product harness."""
     report = reports.get("equivalence.json")
     if report is None:
         return _row("not-run", reason="equivalence.json was not written: the original and "
                                       "the patched version were not compared")
+    if name not in report.get("properties", {}):
+        raise ValueError(f"equivalence.json: no verdict for {name}")
     judged = report["properties"][name]
     # Concrete inputs test; only a complete symbolic exploration proves.
     if judged["verdict"] not in ("tested", "failed", "not-run") and not (
@@ -342,6 +344,13 @@ def _equivalence(reports: Reports, name: str) -> dict:
     if judged["verdict"] == "failed":
         seeds = [row["seed"] for row in report["violations"] if row["property"] == name]
         facts["first_seeds"] = seeds[:5]
+        where = sorted({
+            str(row[key]) for row in report["violations"]
+            for key in ("region", "call")
+            if row["property"] == name and row.get(key) is not None
+        })
+        if where:
+            facts["memory_regions" if name == "P2" else "calls"] = where
         return _row("failed", "equivalence.json", kinds, facts=facts)
     return _row(judged["verdict"], "equivalence.json", reason=judged.get("reason"), facts=facts)
 
@@ -442,6 +451,31 @@ def _assumptions(reports: Reports, context: dict) -> list[dict]:
             assume(f"stubbed-callee:{stub['name']}", "equivalence.json",
                    f"{stub['name']} is not run; it returns the same value at the same call "
                    "index in both versions, whatever its arguments, and writes nothing")
+        if stub["kind"] == "model":
+            assume(f"modelled-callee:{stub['name']}", "equivalence.json",
+                   f"{stub['name']} is run from the harness's own implementation, not the "
+                   "image's")
+        if stub.get("variadic") and not stub.get("pure"):
+            assume(f"variadic-arguments:{stub['name']}", "equivalence.json",
+                   f"only the fixed arguments of {stub['name']} are compared")
+    for name in (equivalence or {}).get("pure_callees", []):
+        assume(f"pure-callee:{name}", "equivalence.json",
+               f"declared: calls of {name} are left out of the call comparison")
+    for swap in (equivalence or {}).get("substitutions", []):
+        assume(f"substitution:{swap['original']}->{swap['patched']}", "equivalence.json",
+               f"declared: a call of {swap['patched']} by the patched version counts as a "
+               f"call of {swap['original']}, compared on the first {swap['compare_args']} "
+               f"arguments, when {swap['condition']}; the condition is not checked")
+    if "memory_regions" in harness:
+        assume("memory-scope", "equivalence.json",
+               "P2 compares " + (", ".join(harness["memory_regions"]) or "nothing")
+               + "; writes through an address computed from a constant, and globals that "
+               "hold pointers, are not compared")
+    if any(stub["kind"] not in ("reject", "reject-noreturn")
+           for stub in harness.get("stubs", [])):
+        assume("locals-by-kind", "equivalence.json",
+               "the address of a local passed to an external function is compared only "
+               "as the address of a local; what the local holds is not compared")
     if harness.get("concrete_globals"):
         assume("globals-as-lifted", "equivalence.json",
                "these globals keep their lifted initial value instead of an arbitrary one: "
@@ -478,8 +512,8 @@ def build_evidence(directory: Path) -> dict:
         "stack-budget": _budget(reports, "stack_bytes"),
         "runtime-transcript": _runtime(context),
     }
-    checks["P1"] = _equivalence(reports, "P1")
-    checks["P3"] = _equivalence(reports, "P3")
+    for name in ("P1", "P2", "P3", "P4"):
+        checks[name] = _equivalence(reports, name)
     for name, reason in NOT_IMPLEMENTED.items():
         checks[name] = _row("not-run", reason=reason)
 

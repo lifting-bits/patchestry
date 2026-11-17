@@ -132,6 +132,28 @@ namespace patchestry::klee_verifier {
         llvm::cl::value_desc("index:low:high")
     );
 
+    llvm::cl::list< std::string > pure_callees(
+        "pure-callee",
+        llvm::cl::desc("External function whose calls are not compared (compare mode)"),
+        llvm::cl::value_desc("name")
+    );
+
+    llvm::cl::list< std::string > substitutions(
+        "substitution",
+        llvm::cl::desc(
+            "PATCHED called by the patched version stands for ORIGINAL; the first COUNT "
+            "arguments are compared (compare mode)"
+        ),
+        llvm::cl::value_desc("original:patched:count")
+    );
+
+    llvm::cl::list< std::string > models(
+        "model",
+        llvm::cl::desc("External function the runner implements as __patchestry_model_NAME "
+                       "(compare mode)"),
+        llvm::cl::value_desc("name")
+    );
+
     llvm::cl::opt< unsigned > stub_values(
         "stub-values",
         llvm::cl::desc("Distinct values an external function returns (compare mode)"),
@@ -187,6 +209,21 @@ namespace patchestry::klee_verifier {
                 return EXIT_FAILURE;
             }
             options.arg_ranges[index] = { low, high };
+        }
+        options.pure_callees.assign(pure_callees.begin(), pure_callees.end());
+        options.models.insert(models.begin(), models.end());
+        for (const auto &text : substitutions) {
+            Substitution swap;
+            auto [left, rest]  = llvm::StringRef(text).split(':');
+            auto [middle, end] = rest.split(':');
+            if (left.empty() || middle.empty() || end.getAsInteger(10, swap.compare_args)) {
+                LOG(ERROR) << "--substitution expects ORIGINAL:PATCHED:COUNT, got '" << text
+                           << "'\n";
+                return EXIT_FAILURE;
+            }
+            swap.original = left.str();
+            swap.patched  = middle.str();
+            options.substitutions.push_back(std::move(swap));
         }
         if (!keep_target) {
             retargetModuleToX86_64(*original, verbose);

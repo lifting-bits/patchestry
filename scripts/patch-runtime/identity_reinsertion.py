@@ -363,6 +363,20 @@ def run_variants(case: Case, args, repo_root: Path, digest: str | None) -> list[
             (out / stale).unlink(missing_ok=True)
 
         def compiled(defines: list[str], stem: str) -> Path:
+            if variant["source"] == "@lifted":
+                # The lifted IR with lines replaced: a patch at the level the
+                # patcher works at.  Each `find` must name exactly one place.
+                text = lifted.read_text(encoding="utf-8")
+                for edit in variant["edits"]:
+                    if text.count(edit["find"]) != 1:
+                        raise ValueError(
+                            f"{name}: edit {edit['find']!r} matches "
+                            f"{text.count(edit['find'])} places in {lifted.name}"
+                        )
+                    text = text.replace(edit["find"], edit["replace"])
+                module = out / f"{stem}.ll"
+                module.write_text(text, encoding="utf-8")
+                return module
             # "@printed" is the C the decompiler printed for the case.
             source = (case_dir / f"{case.function}.c" if variant["source"] == "@printed"
                       else repo_root / variant["source"])
@@ -388,12 +402,16 @@ def run_variants(case: Case, args, repo_root: Path, digest: str | None) -> list[
             arg_ranges={int(k): tuple(v) for k, v in settings.get("arg_ranges", {}).items()},
             inputs=settings.get("inputs", 200),
             pointer_size=settings.get("pointer_size", 64),
+            pure_callees=variant.get("pure_callees", []),
+            substitutions=variant.get("substitutions", []),
+            strict_callees=variant.get("strict_callees", []),
         )
         write_json(out / "equivalence.json", report)
+        properties = check_equivalence.PROPERTIES
         status = ",".join(
-            f"{key}={report['properties'][key]['verdict']}" for key in ("P1", "P3")
+            f"{key}={report['properties'][key]['verdict']}" for key in properties
         )
-        expected = ",".join(f"{key}={variant['expect'][key]}" for key in ("P1", "P3"))
+        expected = ",".join(f"{key}={variant['expect'][key]}" for key in properties)
         write_json(out / "case.json", {
             "suite": "identity-reinsertion",
             "case": name,
@@ -409,10 +427,12 @@ def run_variants(case: Case, args, repo_root: Path, digest: str | None) -> list[
         })
         built = evidence.write_evidence(out)
         detail = "; ".join(sorted({
-            f"{row['property']} {row['kind']}" for row in report["violations"]
+            f"{row['property']} {row['kind']}"
+            + "".join(f" {row[key]}" for key in ("region", "call") if row.get(key) is not None)
+            for row in report["violations"]
         })) or (report["properties"]["P1"]["reason"] or "")
-        if [built["checks"][key]["verdict"] for key in ("P1", "P3")] != [
-            report["properties"][key]["verdict"] for key in ("P1", "P3")
+        if [built["checks"][key]["verdict"] for key in properties] != [
+            report["properties"][key]["verdict"] for key in properties
         ]:
             status, detail = "error", "evidence disagrees with equivalence.json"
         rows.append((name, status, expected, detail))

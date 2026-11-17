@@ -12,7 +12,9 @@
  * param_1 and has no bound on the copy.  With LIMIT defined, a token of LIMIT
  * bytes or more is rejected by returning a null pointer; the original never
  * returns one.  RETURN_OFFSET, when defined, is added to the returned pointer:
- * a change no input-restricting patch may make.
+ * a change no input-restricting patch may make.  So are EXTRA_WRITE, which
+ * stores a byte at that offset of the output buffer, and EXTRA_CALL, which
+ * calls an external function the original does not call.
  *
  * Without either macro this is the original, with the dereferences written
  * as the lifted IR has them.
@@ -32,11 +34,21 @@ typedef unsigned char undefined1;
 
 #define BYTE_AT(address) (*(signed char *)(address))
 
+#ifdef EXTRA_CALL
+extern void audit_request(int);
+#endif
+
 undefined1 *FUN_0007ae8c(undefined1 *param_1, int param_2, int param_3) {
     int local_10;
     int local_c;
     local_10 = 0;
     local_c = 0;
+#ifdef EXTRA_WRITE
+    param_1[EXTRA_WRITE] = 1U;
+#endif
+#ifdef EXTRA_CALL
+    audit_request(param_3);
+#endif
     while (BYTE_AT(param_2 + local_c) == 32)
         local_c = local_c + 1;
     while (BYTE_AT(param_2 + local_c) != 32) {

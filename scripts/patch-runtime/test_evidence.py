@@ -428,12 +428,14 @@ class Evidence(unittest.TestCase):
             "engine": "concrete", "inputs": 200,
             "outcomes": {"accepted": 150, "patched-rejected": 50, "timeout": 0},
             "violations": [],
-            "properties": {"P1": {"verdict": "tested", "reason": None},
-                           "P3": {"verdict": "tested", "reason": None}},
+            "properties": {name: {"verdict": "tested", "reason": None}
+                           for name in ("P1", "P2", "P3", "P4")},
+            "pure_callees": [], "substitutions": [],
             "bounds": {"inputs": 200, "pointer_size": 64, "seeds": [0, 200], "stub_values": 8},
             "cut_short": None,
             "harness": {"stubs": [{"name": "read_reg", "kind": "values"},
                                   {"name": "reject", "kind": "reject-noreturn"}],
+                        "memory_regions": ["state", "arg0"],
                         "concrete_globals": [], "retargeted": False, "layout_adopted": False,
                         "arguments": [{"index": 0, "kind": "integer", "size": 4}]},
         }
@@ -445,9 +447,9 @@ class Evidence(unittest.TestCase):
             reports["equivalence.json"] = self.equivalence()
         built = self.build(change)
         self.assertEqual(self.verdicts(built, ("P1", "P2", "P3", "P4")),
-                         ["tested", "not-run", "tested", "not-run"])
+                         ["tested"] * 4)
+        self.assertEqual(built["groups"]["equivalence"], "tested")
         self.assertEqual(built["checks"]["P1"]["report"], "equivalence.json")
-        self.assertEqual(built["groups"]["equivalence"], "not-run")
         self.assertEqual(built["verdict"], "not-run")
         self.assertEqual(built["bounds"]["equivalence"]["inputs"], 200)
         names = self.names(built)
@@ -456,13 +458,69 @@ class Evidence(unittest.TestCase):
         self.assertIn("stubbed-callee:read_reg", names)
         self.assertNotIn("stubbed-callee:reject", names)
         self.assertNotIn("retargeted-layout", names)
+        self.assertIn("memory-scope", names)
+        self.assertIn("locals-by-kind", names)
+
+    def properties(self, **changed) -> dict:
+        rows = {name: {"verdict": "tested", "reason": None}
+                for name in ("P1", "P2", "P3", "P4")}
+        for name, verdict in changed.items():
+            rows[name] = {"verdict": verdict,
+                          "reason": "harness not built" if verdict == "not-run" else None}
+        return rows
+
+    def test_memory_difference_fails_p2(self):
+        def change(reports):
+            reports["equivalence.json"] = self.equivalence(
+                violations=[{"seed": 3, "property": "P2", "kind": "memory-differs",
+                             "region": "state"}],
+                properties=self.properties(P2="failed"))
+        built = self.failed(change, "P2", "memory-differs")
+        self.assertEqual(built["checks"]["P2"]["facts"]["memory_regions"], ["state"])
+        self.assertEqual(built["checks"]["P4"]["verdict"], "tested")
+
+    def test_call_difference_fails_p4(self):
+        def change(reports):
+            reports["equivalence.json"] = self.equivalence(
+                violations=[{"seed": 3, "property": "P4", "kind": "calls-differ", "call": 1}],
+                properties=self.properties(P4="failed"))
+        built = self.failed(change, "P4", "calls-differ")
+        self.assertEqual(built["checks"]["P4"]["facts"]["calls"], ["1"])
+
+    def test_declarations_are_assumptions(self):
+        def change(reports):
+            report = self.equivalence(
+                pure_callees=["strlen"],
+                substitutions=[{"original": "strcpy", "patched": "strncpy",
+                                "compare_args": 2, "condition": "strlen(src) < n"}])
+            report["harness"]["stubs"] = [
+                {"name": "strlen", "kind": "model", "pure": True},
+                {"name": "sprintf", "kind": "values", "variadic": True},
+            ]
+            reports["equivalence.json"] = report
+        built = self.build(change)
+        names = self.names(built)
+        for name in ("pure-callee:strlen", "substitution:strcpy->strncpy",
+                     "modelled-callee:strlen", "variadic-arguments:sprintf",
+                     "stubbed-callee:sprintf"):
+            self.assertIn(name, names)
+        detail = next(row["detail"] for row in built["assumptions"]
+                      if row["name"] == "substitution:strcpy->strncpy")
+        self.assertIn("strlen(src) < n", detail)
+
+    def test_report_without_a_property_is_refused(self):
+        def change(reports):
+            report = self.equivalence()
+            del report["properties"]["P4"]
+            reports["equivalence.json"] = report
+        with self.assertRaises(ValueError):
+            self.build(change)
 
     def test_violation_fails_the_property(self):
         def change(reports):
             reports["equivalence.json"] = self.equivalence(
                 violations=[{"seed": 7, "property": "P1", "kind": "original-rejects"}],
-                properties={"P1": {"verdict": "failed", "reason": None},
-                            "P3": {"verdict": "tested", "reason": None}})
+                properties=self.properties(P1="failed"))
         built = self.failed(change, "P1", "original-rejects")
         self.assertEqual(built["checks"]["P1"]["facts"]["first_seeds"], [7])
         self.assertEqual(built["checks"]["P3"]["verdict"], "tested")
@@ -471,8 +529,8 @@ class Evidence(unittest.TestCase):
         def change(reports):
             reports["equivalence.json"] = self.equivalence(
                 inputs=0,
-                properties={"P1": {"verdict": "not-run", "reason": "harness not built"},
-                            "P3": {"verdict": "not-run", "reason": "harness not built"}})
+                properties=self.properties(P1="not-run", P2="not-run", P3="not-run",
+                                           P4="not-run"))
         built = self.build(change)
         self.assertEqual(built["checks"]["P3"]["verdict"], "not-run")
         self.assertIn("harness not built", built["checks"]["P3"]["reason"])
@@ -481,8 +539,7 @@ class Evidence(unittest.TestCase):
     def test_concrete_run_cannot_claim_proven(self):
         def change(reports):
             reports["equivalence.json"] = self.equivalence(
-                properties={"P1": {"verdict": "proven", "reason": None},
-                            "P3": {"verdict": "tested", "reason": None}})
+                properties=self.properties(P1="proven"))
         with self.assertRaises(ValueError):
             self.build(change)
 

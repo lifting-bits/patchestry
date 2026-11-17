@@ -65,26 +65,43 @@ The sizes are measured, not judged: no budget is declared for these binaries. No
 | Property | Holds when | Violations |
 | --- | --- | --- |
 | P1 | an input the patched version accepts is one the original accepts | `original-rejects`, `original-faults`, `original-aborts` |
+| P2 | when both accept, they leave the same memory behind | `memory-differs` (with the region) |
 | P3 | when both accept, they return the same value | `return-differs`, `patched-faults`, `patched-aborts` |
+| P4 | when both accept, they make the same calls to external functions | `calls-differ` (with the index of the first differing call) |
+
+P2 compares each side's copy of every global that holds no pointer, and the contents of every argument buffer. P4 compares the calls in order, callee and arguments. The address of a global is compared as global and offset, the address of constant data by the bytes it points at, and the address of a local only as "a local". Only the fixed arguments of a variadic function are compared.
+
+Three declarations relax P4, and each becomes a named assumption in the evidence. `--pure-callee NAME` leaves calls of the function out. `--substitution ORIGINAL:PATCHED:ARGS:CONDITION` counts the patched version's call of one function as a call of the one it replaces, compared on the first ARGS arguments; the condition is recorded and not checked, and a substitution without one is refused. `--strict-callee NAME` refuses either relaxation of that function.
+
+An external function is a stub that returns the same value at the same call index on both sides. The C library functions listed in `MODELS` of `check_equivalence.py` are run instead, from `equivalence_runtime/models.c`, so what they write is part of P2. A substitution therefore relaxes the call comparison and nothing else: `strcpy` replaced by `strncpy` into a global fails P2, because `strncpy` pads the destination with zeros.
 
 A version rejects an input when it calls a declared reject handler (`--reject-handler`) or returns a declared reject value (`--reject-return`). `--arg-buffer INDEX:SIZE` says an argument points at a buffer, which lifted code often passes as an integer; `--arg-range INDEX:LOW:HIGH` bounds an integer argument. These stand in for the patch specification's validation block, which is not designed yet.
 
 A property is `failed` when a violation was seen, `tested` when none was seen and at least one input reached the comparison, and `not-run` otherwise. `tested` covers the inputs that were run. `proven` needs the same harness under KLEE.
 
-The cases file gives `httpd` `FUN_0007ae8c` six patched versions, each its own row in `summary.tsv` and its own evidence. They are C written from the lifted C (`test/identity-reinsertion/patches/httpd_fun_0007ae8c.c`); none is reinserted, so their integrity checks are `not-run`.
+The cases file gives three reinserted functions patched versions, each its own row in `summary.tsv` and its own evidence. None is reinserted, so their integrity checks are `not-run`. A variant is either C written from the lifted C (`test/identity-reinsertion/patches/`) or the lifted IR with lines replaced (`"source": "@lifted"` with `edits`; each `find` must match exactly one place).
 
-| Variant | What it is | P1 | P3 |
+| Function | Variant | What it is | Fails |
 | --- | --- | --- | --- |
-| `rewritten` | the lifted C written out by hand, no patch | tested | tested |
-| `limit-8` | rejects a path token of 8 bytes or more with a null pointer, declared | tested | tested |
-| `limit-8-undeclared` | the same patch, reject value not declared | tested | failed |
-| `widened` | limit 24 replacing limit 8 | failed | tested |
-| `changed-return` | returns the buffer address plus one | tested | failed |
-| `printed-c` | the C `-print-tu` printed, compiled as is | tested | failed |
+| `httpd` `FUN_0007ae8c` | `rewritten` | the lifted C written out by hand, no patch | nothing |
+| | `limit-8` | rejects a path token of 8 bytes or more with a null pointer, declared | nothing |
+| | `limit-8-undeclared` | the same patch, reject value not declared | P2, P3 |
+| | `widened` | limit 24 replacing limit 8 | P1 |
+| | `extra-write` | stores a byte at offset 100 of the output buffer | P2 |
+| | `extra-call` | calls an external function the original does not call | P4 |
+| | `changed-return` | returns the buffer address plus one | P3 |
+| | `printed-c` | the C `-print-tu` printed, compiled as is | P2 |
+| `httpd` `FUN_00067c0c` | `unchanged` | the lifted IR against itself | nothing (P2 `not-run`: no memory to compare) |
+| | `dropped-call` | the first `SetValue` call removed | P4 |
+| | `altered-argument` | `get_wlan_mac` called with 28 instead of 27 | P4 |
+| | `other-format` | one `sprintf` given another format string | P4 |
+| `cgibin` `FUN_00026534` | `unchanged` | the lifted IR against itself | nothing |
+| | `extra-global-write` | stores a byte into `DAT_00000005` on entry | P2 |
+| | `shorter-compare` | one `strncasecmp` compares 5 bytes instead of 6 | P4 |
 
-`printed-c` pins a known defect: the printer writes `*(signed char *)param_2 + local_c` where the IR loads from `param_2 + local_c`, so the printed C is not the lifted function. The expectation changes when the printer is fixed.
+`printed-c` pins a known defect: the printer writes `*(signed char *)param_2 + local_c` where the IR loads from `param_2 + local_c`, so the printed C is not the lifted function. The expectation changes when the printer is fixed. The printed C of the other two functions does not compile at all, which is why their variants edit the IR.
 
-Limits: memory writes (P2) and calls (P4) are not compared. An external function is a stub that returns the same value at the same call index on both sides; one that returns a pointer ends the path as inconclusive. An input on which a version never returns costs a 5-second timeout, and the run stops after 8 of them.
+Limits: writes through an address the function computes from a constant are not compared, and neither are globals that hold pointers. What a local passed to a callee holds is not compared. An external function that returns a pointer and has no model ends the path as inconclusive; every input of `formGetUpnpLists` ends that way, so it has no variants. An input on which a version never returns costs a 5-second timeout, and the run stops after 8 of them.
 
 ## Known rejection: `builtin_strncpy`
 

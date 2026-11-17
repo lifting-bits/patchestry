@@ -24,7 +24,9 @@ import check_equivalence
 
 COMMON = """
 int state;
+int other;
 extern int read_reg(int);
+extern void note(int);
 void reject(void) __attribute__((noreturn));
 void soft_reject(void);
 """
@@ -36,6 +38,16 @@ BODY = """
     return sum;
 }
 """
+
+COPY = """
+int state;
+char kept[128];
+extern char *strcpy(char *, const char *);
+extern char *strncpy(char *, const char *, unsigned);
+extern unsigned strlen(const char *);
+"""
+SWAP = {"original": "strcpy", "patched": "strncpy", "compare_args": 2,
+        "condition": "strlen(src) < n"}
 
 # Accepts any length from 0 up; returns -1 for a negative one.
 ORIGINAL = COMMON + """
@@ -87,6 +99,68 @@ int target(unsigned char *buf, int len) {
     if (len < 0) return -1;
     if (len > 12) return -1;
 """ + BODY,
+    # More harms: what the version writes and whom it calls.
+    "extra_global_write": COMMON + """
+int target(unsigned char *buf, int len) {
+    if (len < 0) return -1;
+    other = len;
+""" + BODY,
+    "buffer_write": COMMON + """
+int target(unsigned char *buf, int len) {
+    if (len < 0) return -1;
+    int sum = read_reg(len) & 0xff;
+    for (int i = 0; i < len && i < 16; i++) sum += buf[i];
+    state = sum;
+    buf[0] = 7;
+    return sum;
+}
+""",
+    "extra_call": COMMON + """
+int target(unsigned char *buf, int len) {
+    if (len < 0) return -1;
+    note(len);
+""" + BODY,
+    "altered_call": COMMON + """
+int target(unsigned char *buf, int len) {
+    if (len < 0) return -1;
+    int sum = read_reg(len + 1) & 0xff;
+    for (int i = 0; i < len && i < 16; i++) sum += buf[i];
+    state = sum;
+    return sum;
+}
+""",
+    # A copy into a local, bounded by the patch.
+    "copy_original": COPY + """
+int target(const char *text, int unused) {
+    char local[128];
+    strcpy(local, text);
+    state = local[0];
+    return local[0];
+}
+""",
+    "copy_patched": COPY + """
+int target(const char *text, int unused) {
+    char local[128];
+    if (strlen(text) >= 16) return -1;
+    strncpy(local, text, 16);
+    state = local[0];
+    return local[0];
+}
+""",
+    # The same swap with a global as the destination: strncpy pads it.
+    "copy_global_original": COPY + """
+int target(const char *text, int unused) {
+    strcpy(kept, text);
+    return kept[0];
+}
+""",
+    "copy_global_patched": COPY + """
+int target(const char *text, int unused) {
+    if (strlen(text) >= 16) return -1;
+    strncpy(kept, text, 16);
+    return kept[0];
+}
+""",
     "always_faults": COMMON + """
 int target(unsigned char *buf, int len) {
     return *(volatile int *)0xE0000000 + len + buf[0];
@@ -148,6 +222,9 @@ class Equivalence(unittest.TestCase):
     def verdicts(self, report: dict) -> tuple[str, str]:
         return report["properties"]["P1"]["verdict"], report["properties"]["P3"]["verdict"]
 
+    def all_verdicts(self, report: dict) -> list[str]:
+        return [report["properties"][name]["verdict"] for name in ("P1", "P2", "P3", "P4")]
+
     def kinds(self, report: dict, name: str) -> set[str]:
         return {row["kind"] for row in report["violations"] if row["property"] == name}
 
@@ -160,6 +237,8 @@ class Equivalence(unittest.TestCase):
         self.assertGreater(report["outcomes"]["accepted"], 0)
         self.assertEqual(report["engine"], "concrete")
         self.assertEqual(report["inputs"], 150)
+        self.assertEqual(self.all_verdicts(report), ["tested"] * 4)
+        self.assertEqual(report["harness"]["memory_regions"], ["state", "other", "arg0"])
 
     def test_restriction_by_early_return(self):
         report = self.compare("identical", "early_return", reject_returns=[-1])
@@ -212,6 +291,81 @@ class Equivalence(unittest.TestCase):
         self.assertEqual(report["properties"]["P1"]["verdict"], "failed", report["outcomes"])
         self.assertEqual(self.kinds(report, "P1"), {"original-faults"})
 
+    def test_extra_global_write_fails_p2(self):
+        report = self.compare("identical", "extra_global_write", reject_returns=[-1])
+        self.assertEqual(self.all_verdicts(report), ["tested", "failed", "tested", "tested"],
+                         report["outcomes"])
+        self.assertEqual(self.kinds(report, "P2"), {"memory-differs"})
+        self.assertEqual({row["region"] for row in report["violations"]}, {"other"})
+
+    def test_write_into_argument_buffer_fails_p2(self):
+        report = self.compare("identical", "buffer_write", reject_returns=[-1])
+        self.assertEqual(self.all_verdicts(report), ["tested", "failed", "tested", "tested"],
+                         report["outcomes"])
+        self.assertEqual({row["region"] for row in report["violations"]}, {"arg0"})
+
+    def test_extra_call_fails_p4(self):
+        report = self.compare("identical", "extra_call", reject_returns=[-1])
+        self.assertEqual(self.all_verdicts(report), ["tested", "tested", "tested", "failed"],
+                         report["outcomes"])
+        self.assertEqual(self.kinds(report, "P4"), {"calls-differ"})
+        self.assertEqual({row["call"] for row in report["violations"]}, {0})
+
+    def test_altered_call_argument_fails_p4(self):
+        report = self.compare("identical", "altered_call", reject_returns=[-1])
+        self.assertEqual(self.all_verdicts(report), ["tested", "tested", "tested", "failed"],
+                         report["outcomes"])
+
+    # Declared relaxations of the call comparison.
+
+    def test_declared_substitution_passes(self):
+        report = self.compare("copy_original", "copy_patched", reject_returns=[-1],
+                              pure_callees=["strlen"], substitutions=[SWAP])
+        self.assertEqual(self.all_verdicts(report), ["tested"] * 4, report["outcomes"])
+        self.assertGreater(report["outcomes"]["patched-rejected"], 0)
+        self.assertGreater(report["outcomes"]["accepted"], 0)
+        kinds = {row["name"]: row["kind"] for row in report["harness"]["stubs"]}
+        self.assertEqual(kinds, {"strcpy": "model", "strncpy": "model", "strlen": "model"})
+
+    def test_undeclared_substitution_fails_p4(self):
+        report = self.compare("copy_original", "copy_patched", reject_returns=[-1],
+                              pure_callees=["strlen"])
+        self.assertEqual(self.all_verdicts(report), ["tested", "tested", "tested", "failed"],
+                         report["outcomes"])
+
+    def test_call_not_declared_pure_fails_p4(self):
+        report = self.compare("copy_original", "copy_patched", reject_returns=[-1],
+                              substitutions=[SWAP])
+        self.assertEqual(report["properties"]["P4"]["verdict"], "failed", report["outcomes"])
+
+    def test_substitution_does_not_hide_a_memory_difference(self):
+        # strncpy pads the destination with zeros; strcpy does not.
+        report = self.compare("copy_global_original", "copy_global_patched",
+                              reject_returns=[-1], pure_callees=["strlen"],
+                              substitutions=[SWAP])
+        self.assertEqual(report["properties"]["P4"]["verdict"], "tested", report["outcomes"])
+        self.assertEqual(report["properties"]["P2"]["verdict"], "failed", report["outcomes"])
+        self.assertEqual({row["region"] for row in report["violations"]}, {"kept"})
+
+    def test_substitution_without_condition_is_refused(self):
+        report = self.compare("copy_original", "copy_patched", reject_returns=[-1],
+                              pure_callees=["strlen"],
+                              substitutions=[{**SWAP, "condition": " "}])
+        self.assertEqual(self.all_verdicts(report), ["not-run"] * 4)
+        self.assertIn("condition", report["properties"]["P4"]["reason"])
+
+    def test_strict_callee_cannot_be_relaxed(self):
+        report = self.compare("copy_original", "copy_patched", reject_returns=[-1],
+                              pure_callees=["strlen"], substitutions=[SWAP],
+                              strict_callees=["strcpy"])
+        self.assertEqual(self.all_verdicts(report), ["not-run"] * 4)
+        self.assertIn("strict", report["properties"]["P4"]["reason"])
+
+    def test_pure_callee_nobody_calls_is_refused(self):
+        report = self.compare("identical", "identical", pure_callees=["absent"])
+        self.assertEqual(self.all_verdicts(report), ["not-run"] * 4)
+        self.assertIn("absent", report["properties"]["P1"]["reason"])
+
     # What cannot be decided.
 
     def test_no_input_reaches_the_comparison(self):
@@ -245,7 +399,7 @@ class Equivalence(unittest.TestCase):
         self.assertEqual(report["bounds"]["inputs"], 150)
         self.assertEqual(report["bounds"]["pointer_size"], 32)
         self.assertEqual(report["harness"]["stubs"], [{"kind": "values", "name": "read_reg"}])
-        self.assertEqual(report["harness"]["symbolic_globals"], ["state"])
+        self.assertEqual(report["harness"]["symbolic_globals"], ["state", "other"])
         self.assertFalse(report["harness"]["retargeted"])
         self.assertEqual(sum(report["outcomes"].values()), 150)
 

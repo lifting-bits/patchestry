@@ -17,6 +17,8 @@
  *     I <seed> fault <phase>   an exception while <phase> ran (1 original, 2 patched)
  *     I <seed> abort <phase>   an abort-like call while <phase> ran
  *     I <seed> discard 0       klee_assume was false for this input
+ *     I <seed> memory <n>      before `end`: memory region <n> differs
+ *     I <seed> call <n>        before `end`: the <n>-th calls differ
  *
  * After a fault or abort in the patched version the same input is run again
  * with the original alone; that line carries the same seed and code 30 or 31,
@@ -32,7 +34,9 @@ extern int main(void);
 extern int __patchestry_phase;
 extern int __patchestry_only_original;
 extern char __harness_data_start[], __harness_data_end[], __harness_snapshot[];
-extern char __heap_start[], __heap_end[];
+extern char __heap_start[], __heap_end[], __stack_top[];
+extern int __patchestry_first_memory, __patchestry_first_call; /* compare.c */
+void __patchestry_compare_reset(void);
 void runtime_resume(void) __attribute__((noreturn));
 
 static unsigned next_seed = FIRST_SEED;
@@ -41,6 +45,7 @@ static int rerun_original;
 static int in_rerun;
 static uint32_t random_state;
 static char *heap_next;
+static char *side_heap;
 
 static int semihost(int operation, void *argument) {
     register int r0 __asm__("r0")   = operation;
@@ -129,6 +134,22 @@ void *malloc(size_t size) {
 
 void free(void *block) { (void) block; }
 
+/*
+ * Called by the harness before each version runs.  Both get the same heap,
+ * so a pointer one of them allocates and returns equals the other's.
+ */
+void __patchestry_side_begin(void) {
+    if (__patchestry_phase == 2 || __patchestry_only_original) {
+        side_heap = heap_next;
+    } else {
+        heap_next = side_heap;
+    }
+}
+
+int __patchestry_stack_address(uintptr_t address) {
+    return address >= (uintptr_t) __heap_end && address < (uintptr_t) __stack_top;
+}
+
 static uint32_t random_word(void) {
     random_state ^= random_state << 13;
     random_state ^= random_state >> 17;
@@ -210,6 +231,12 @@ void klee_abort(void) { stopped("abort"); }
 void runtime_fault(void) { stopped("fault"); }
 
 void __patchestry_path_end(int code) {
+    if (code >= 64 && __patchestry_first_memory >= 0) {
+        report("memory", (unsigned) __patchestry_first_memory);
+    }
+    if (code >= 64 && __patchestry_first_call >= 0) {
+        report("call", (unsigned) __patchestry_first_call);
+    }
     report("end", (unsigned) code);
     runtime_resume();
 }
@@ -230,6 +257,7 @@ void runtime_loop(void) {
                (size_t) (__harness_data_end - __harness_data_start));
         __patchestry_only_original = in_rerun;
         heap_next                  = __heap_start;
+        __patchestry_compare_reset();
         random_state               = current_seed * 2654435761U + 0x9e3779b9U;
         if (random_state == 0) {
             random_state = 1;

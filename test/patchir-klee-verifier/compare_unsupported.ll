@@ -25,6 +25,8 @@ define i32 @plain(i32 %x) {
 
 ; PTR: define internal ptr @find_entry(i32 %0)
 ; PTR-NEXT: entry:
+; PTR-NEXT: call void @__patchestry_trace_call(i32 1, i32 1)
+; PTR-NEXT: call void @__patchestry_trace_arg(i32 %0)
 ; PTR-NEXT: call void @__patchestry_path_end(i32 20)
 ; INFO: "kind": "unmodelled"
 ; HANDLER: reject handler 'missing' is not called

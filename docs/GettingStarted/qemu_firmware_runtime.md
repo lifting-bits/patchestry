@@ -319,7 +319,7 @@ It gives every check of the validation plan one of four verdicts:
 | `failed` | the check found a problem |
 | `not-run` | the check did not run, could not decide, or does not exist yet |
 
-A check whose report is absent is `not-run`. The verdict of a group and of the case is the weakest one in it (`failed`, then `not-run`, `tested`, `proven`). P1 and P3 come from `check_equivalence.py` (`equivalence.json`, see `identity_reinsertion.md`); this suite does not run it yet. P2, P4, the firmware checks and the re-lift do not exist yet, so no case has an overall verdict better than `not-run`. `groups` says what the implemented checks established: `integrity` (bindings, dependencies, ABI, reinsertion, patch record, link addresses, applied bytes, rewritten bindings), `static` (calling convention, the two budgets), `runtime` (the transcript).
+A check whose report is absent is `not-run`. The verdict of a group and of the case is the weakest one in it (`failed`, then `not-run`, `tested`, `proven`). P1 to P4 come from `check_equivalence.py` (`equivalence.json`, see `identity_reinsertion.md`); this suite does not run it yet. The firmware checks and the re-lift do not exist yet, so no case has an overall verdict better than `not-run`. `groups` says what the implemented checks established: `integrity` (bindings, dependencies, ABI, reinsertion, patch record, link addresses, applied bytes, rewritten bindings), `static` (calling convention, the two budgets), `runtime` (the transcript).
 
 The file also has the bounds (the budgets and what was measured against them, the compiler and flags), every assumption with its name, source and statement, warnings (inlined copies), and each report it read with its SHA-256.
 

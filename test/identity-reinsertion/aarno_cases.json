@@ -25,7 +25,9 @@
           "source": "test/identity-reinsertion/patches/httpd_fun_0007ae8c.c",
           "expect": {
             "P1": "tested",
-            "P3": "tested"
+            "P2": "tested",
+            "P3": "tested",
+            "P4": "tested"
           }
         },
         {
@@ -40,7 +42,9 @@
           ],
           "expect": {
             "P1": "tested",
-            "P3": "tested"
+            "P2": "tested",
+            "P3": "tested",
+            "P4": "tested"
           }
         },
         {
@@ -52,7 +56,9 @@
           ],
           "expect": {
             "P1": "tested",
-            "P3": "failed"
+            "P2": "failed",
+            "P3": "failed",
+            "P4": "tested"
           }
         },
         {
@@ -70,7 +76,43 @@
           ],
           "expect": {
             "P1": "failed",
-            "P3": "tested"
+            "P2": "tested",
+            "P3": "tested",
+            "P4": "tested"
+          }
+        },
+        {
+          "name": "extra-write",
+          "description": "stores a byte at offset 100 of the output buffer (seeded harm)",
+          "source": "test/identity-reinsertion/patches/httpd_fun_0007ae8c.c",
+          "defines": [
+            "EXTRA_WRITE=100"
+          ],
+          "reject_returns": [
+            0
+          ],
+          "expect": {
+            "P1": "tested",
+            "P2": "failed",
+            "P3": "tested",
+            "P4": "tested"
+          }
+        },
+        {
+          "name": "extra-call",
+          "description": "calls an external function the original does not call (seeded harm)",
+          "source": "test/identity-reinsertion/patches/httpd_fun_0007ae8c.c",
+          "defines": [
+            "EXTRA_CALL"
+          ],
+          "reject_returns": [
+            0
+          ],
+          "expect": {
+            "P1": "tested",
+            "P2": "tested",
+            "P3": "tested",
+            "P4": "failed"
           }
         },
         {
@@ -85,7 +127,9 @@
           ],
           "expect": {
             "P1": "tested",
-            "P3": "failed"
+            "P2": "tested",
+            "P3": "failed",
+            "P4": "tested"
           }
         },
         {
@@ -94,7 +138,9 @@
           "source": "@printed",
           "expect": {
             "P1": "tested",
-            "P3": "failed"
+            "P2": "failed",
+            "P3": "tested",
+            "P4": "tested"
           }
         }
       ]
@@ -106,7 +152,75 @@
     "sha256": "69961109c2afabca1c858b0415afd8cf622a2ac9b52197b5fa1a7e99d32f75b4",
     "fixture": "test/patchir-decomp/cve_2018_18732_fun_00067c0c.json",
     "function": "FUN_00067c0c",
-    "expect": "pass"
+    "expect": "pass",
+    "equivalence": {
+      "inputs": 200,
+      "variants": [
+        {
+          "name": "unchanged",
+          "description": "none: the lifted IR against itself",
+          "source": "@lifted",
+          "edits": [],
+          "expect": {
+            "P1": "tested",
+            "P2": "not-run",
+            "P3": "tested",
+            "P4": "tested"
+          }
+        },
+        {
+          "name": "dropped-call",
+          "description": "the first SetValue call removed (seeded harm)",
+          "source": "@lifted",
+          "edits": [
+            {
+              "find": "  call void @SetValue(ptr %22, ptr %339)\n",
+              "replace": ""
+            }
+          ],
+          "expect": {
+            "P1": "tested",
+            "P2": "not-run",
+            "P3": "tested",
+            "P4": "failed"
+          }
+        },
+        {
+          "name": "altered-argument",
+          "description": "get_wlan_mac called with 28 where the original passes 27 (seeded harm)",
+          "source": "@lifted",
+          "edits": [
+            {
+              "find": "@get_wlan_mac(i32 27, ",
+              "replace": "@get_wlan_mac(i32 28, "
+            }
+          ],
+          "expect": {
+            "P1": "tested",
+            "P2": "not-run",
+            "P3": "tested",
+            "P4": "failed"
+          }
+        },
+        {
+          "name": "other-format",
+          "description": "the guest SSID formatted with the 5G format string (seeded harm)",
+          "source": "@lifted",
+          "edits": [
+            {
+              "find": "ptr @.str.2, ptr %325)",
+              "replace": "ptr @.str.5, ptr %325)"
+            }
+          ],
+          "expect": {
+            "P1": "tested",
+            "P2": "not-run",
+            "P3": "tested",
+            "P4": "failed"
+          }
+        }
+      ]
+    }
   },
   {
     "name": "httpd-form-get-upnp-lists",
@@ -122,7 +236,62 @@
     "sha256": "e9ce16a2f6ce2f1748a14bbc8dd5c3d95946c5eca88486c054f5dfbd1e746414",
     "fixture": "test/patchir-decomp/cve_2016_6563_fun_00026534.json",
     "function": "FUN_00026534",
-    "expect": "pass"
+    "expect": "pass",
+    "equivalence": {
+      "inputs": 200,
+      "pointer_size": 64,
+      "arg_buffers": {
+        "0": 64
+      },
+      "variants": [
+        {
+          "name": "unchanged",
+          "description": "none: the lifted IR against itself",
+          "source": "@lifted",
+          "edits": [],
+          "expect": {
+            "P1": "tested",
+            "P2": "tested",
+            "P3": "tested",
+            "P4": "tested"
+          }
+        },
+        {
+          "name": "extra-global-write",
+          "description": "stores a byte into DAT_00000005 on entry (seeded harm)",
+          "source": "@lifted",
+          "edits": [
+            {
+              "find": "  store i32 %2, ptr %6, align 4\n",
+              "replace": "  store i32 %2, ptr %6, align 4\n  store i8 1, ptr @DAT_00000005, align 1\n"
+            }
+          ],
+          "expect": {
+            "P1": "tested",
+            "P2": "failed",
+            "P3": "tested",
+            "P4": "tested"
+          }
+        },
+        {
+          "name": "shorter-compare",
+          "description": "the first strncasecmp compares 5 bytes where the original compares 6 (seeded harm)",
+          "source": "@lifted",
+          "edits": [
+            {
+              "find": "ptr @.str, i32 6)",
+              "replace": "ptr @.str, i32 5)"
+            }
+          ],
+          "expect": {
+            "P1": "tested",
+            "P2": "tested",
+            "P3": "tested",
+            "P4": "failed"
+          }
+        }
+      ]
+    }
   },
   {
     "name": "cgibin-fun-00011708",
