@@ -152,6 +152,44 @@ and pushes the KLEE image to `ghcr.io`.
 - **Push:** Only on `workflow_dispatch`; PR triggers build and verify
   without pushing
 
+## KLEE Gate
+
+The KLEE step of `.github/workflows/ci.yml` fails the job when a run is not
+what its test expects. A test states the expectation in a comment, and
+`scripts/klee/klee_gate.py` judges the KLEE output directory against it:
+
+```
+; KLEE-EXPECT: no-errors
+; KLEE-EXPECT: errors: abort
+```
+
+`no-errors` needs at least one kept path and no `*.err` file. `errors:` lists
+the kinds (the middle part of `test000001.abort.err`) that must be found; any
+other kind fails. `klee_gate_clean.ll` and `klee_gate_abort.ll` are the two
+judged tests; the second is the seeded harm, a run that must find an abort.
+Tests without the comment keep the older criterion (KLEE kept at least one
+path) until each has been run and given an expectation. The step also fails
+when no test was judged. It still skips, with a warning, when the KLEE image
+cannot be pulled.
+
+The gate gives a run one of `proven`, `failed`, `incomplete` (time limit
+reached, or a path the harness could not model) or `not-run`. `proven` is
+bounded by the harness: buffer sizes, stub values and the paths KLEE explored.
+
+For a product harness (`--compare-original`), link
+`lib/patchestry/klee/models/compare_models.c` with `compare.c` and `models.c`
+of `scripts/patch-runtime/equivalence_runtime`. A violating path then aborts
+from a function named after the failed check (`__patchestry_fail_p2`, ...),
+and `klee_gate.equivalence_report` turns the run into the `equivalence.json`
+the evidence reads, with `proven` only for a complete run.
+
+Not done: no product harness has run under KLEE. The linked module is checked
+to leave only `exit`, `klee_abort` and `klee_make_symbolic` undefined, nothing
+more. That an error file's stack names the aborting function is assumed from
+KLEE's output format and has not been seen on a real run. Under KLEE the
+address of a local passed to an external function is compared as a number, so
+such a path would fail P4 where the concrete runner passes it.
+
 ## Tests
 
 E2E tests live in `test/patchir-klee-verifier/` and run the full pipeline

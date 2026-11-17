@@ -182,8 +182,10 @@ jobs:
       - name: Run KLEE on generated harnesses
         # KLEE's POSIX runtime uses klee-uclibc, which is x86/x86_64-only.
         # Skip on arm64; re-enable if the runtime is ever ported.
+        # The step is a gate: a test that states what it expects of its KLEE
+        # run (a "; KLEE-EXPECT:" comment, see scripts/klee/klee_gate.py) fails
+        # the job when the run is anything else.
         if: matrix.build-type == 'Debug' && matrix.sanitizers == 'OFF' && matrix.arch != 'arm64'
-        continue-on-error: true
         env:
           KLEE_IMAGE: ghcr.io/lifting-bits/patchestry-klee-ubuntu-${{ matrix.image-version }}-llvm-${{ matrix.llvm-version }}:latest
         run: |
@@ -193,7 +195,10 @@ jobs:
             exit 0
           fi
 
+          python3 ./scripts/klee/test_klee_gate.py
+
           VERIFIER="./builds/ci/tools/patchir-klee-verifier/Debug/patchir-klee-verifier"
+          JUDGED=0
           PASSED=0
           FAILED=0
           SKIPPED=0
@@ -247,6 +252,7 @@ jobs:
             fi
 
             # Run KLEE (30s per harness)
+            STARTED=$(date +%s)
             if ! docker run --rm --platform linux/amd64 \
               -v "${WORK_DIR}:/work" \
               "${KLEE_IMAGE}" \
@@ -263,6 +269,24 @@ jobs:
             ERRORS=$(find "${KLEE_OUT}" -name '*.err' 2>/dev/null | wc -l)
             echo "  Tests: ${TESTS}, Errors: ${ERRORS}"
 
+            # A test with a KLEE-EXPECT comment is judged against it: exit 0
+            # as expected, 1 not as expected, 3 no expectation stated.
+            GATE=0
+            python3 ./scripts/klee/klee_gate.py judge \
+              --klee-out "${KLEE_OUT}" --test "${TEST_LL}" \
+              --elapsed "$(( $(date +%s) - STARTED ))" --max-time 30 \
+              --json "${WORK_DIR}/klee-gate.json" || GATE=$?
+            if [ "${GATE}" -eq 0 ]; then
+              JUDGED=$((JUDGED + 1))
+              PASSED=$((PASSED + 1))
+              continue
+            elif [ "${GATE}" -ne 3 ]; then
+              echo "::error::${TEST_NAME}: the KLEE run is not what the test expects"
+              JUDGED=$((JUDGED + 1))
+              FAILED=$((FAILED + 1))
+              continue
+            fi
+
             if [ "${TESTS}" -gt 0 ]; then
               echo "  PASS"
               PASSED=$((PASSED + 1))
@@ -274,12 +298,17 @@ jobs:
 
           echo ""
           echo "=== KLEE Summary ==="
+          echo "  Judged against a KLEE-EXPECT: ${JUDGED}"
           echo "  Passed:  ${PASSED}"
           echo "  Failed:  ${FAILED}"
           echo "  Skipped: ${SKIPPED}"
 
           if [ "${FAILED}" -gt 0 ]; then
-            echo "::warning::${FAILED} KLEE test(s) failed"
+            echo "::error::${FAILED} KLEE test(s) failed"
+            exit 1
+          fi
+          if [ "${JUDGED}" -eq 0 ]; then
+            echo "::error::no test was judged against a KLEE-EXPECT comment"
             exit 1
           fi
 
