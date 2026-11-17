@@ -108,6 +108,12 @@ Rejection is declared: `--reject-handler NAME`, `--reject-return VALUE`,
 `--reject-skip NAME`. With `--mmio-region LOW:HIGH` the writes to device
 registers are compared in order (`mmio-order`).
 
+A write through an address that depends on the input is made to every address
+it can reach, up to 256, and the final memory over that range is compared on
+both sides. `--arg-range INDEX:LOW:HIGH` bounds an integer argument so that
+such an address stays in range. An address with more possible values leaves
+the run `incomplete`.
+
 Both sides start from the same symbolic arguments, argument buffers and
 writable globals. Calls are not followed: each is recorded and returns a
 symbol shared by both sides. Each side is explored path by path, and for
@@ -136,7 +142,9 @@ Patcherex2 environment of the suites already has.
 | `length` with the limit changed from 16 to 64 | proven: against the original this is still a restricting patch. Only the comparison with the intended code (stage 5) sees it |
 | `httpd` `FUN_00067c0c` reinserted unchanged | proven, 5 and 5 paths, 25 calls per path |
 | the same with one byte changed (a `memset` length, 64 to 32) | failed P4 |
-| `httpd` `FUN_0007ae8c` reinserted unchanged, 3-byte buffers | incomplete: 16 and 16 paths agree, but both sides write through an address that depends on the input |
+| `httpd` `FUN_0007ae8c` reinserted unchanged, 3-byte buffers, offset argument 0 to 8 | proven, 16 and 16 paths |
+| the same with the offset argument not bounded | incomplete: the write address can be anywhere |
+| the same with one byte changed (a stored `/` becomes `.`) | failed P2 |
 | `cgibin` `FUN_00026534` reinserted unchanged | incomplete: more than 150 paths |
 
 Limits of the prototype: callees are assumed to write no memory; stack and
@@ -165,8 +173,9 @@ table above.
 Known gaps:
 
 - The binary comparison is not wired into the suites or the evidence.
-- It finishes only on small functions. Two of the three functions from the
-  prebuilt binaries end `incomplete`.
+- It finishes only on small functions. One of the three functions from the
+  prebuilt binaries ends `incomplete`, and another is proven only for 3-byte
+  buffers.
 - Its callees are assumed to write no memory, and behaviour inside them is
   not checked.
 - A device register nobody declared is compared as ordinary memory.
@@ -221,7 +230,7 @@ and costs a query per pair, which is why large functions do not finish.
 
 The maturity is different. VeriBin has an evaluation on 86 patches. The
 binary comparison here is a prototype that has finished on three firmware
-functions and one function from a prebuilt binary.
+functions and two functions from a prebuilt binary.
 
 What VeriBin does that Patchestry does not:
 

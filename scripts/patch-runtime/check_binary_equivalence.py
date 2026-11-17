@@ -33,7 +33,10 @@ How it works:
    because the two images lay both out differently.  A
    call into code the rewrite added is followed, since that code is part of
    the patch.  Writes outside the stack are recorded; writes to a declared
-   device range are recorded in order.
+   device range are recorded in order.  A write through an address that
+   depends on the input is made to every address it can reach (at most
+   SYMBOLIC_WRITE_SPAN of them), each under its own condition, and the whole
+   range is recorded.
 4. For every pair of a patched path and an original path that one input can
    take, the solver is asked for an input that separates them:
 
@@ -66,11 +69,14 @@ limits on paths and steps.
 
 Not handled: arguments on the stack, floating-point arguments and results,
 callees that write through their pointer arguments, indirect jumps the engine
-cannot resolve, and functions with more paths than the limit.
+cannot resolve, functions with more paths than the limit, and a read or write
+whose address can take more values than the engine enumerates (the run is
+then `incomplete`).
 
 CLI: check_binary_equivalence.py --original ELF --rewritten ELF
      --function NAME | --address ADDR [--mode arm|thumb]
-     [--prototypes IR] [--arg-buffer INDEX:SIZE] [--reject-handler NAME]
+     [--prototypes IR] [--arg-buffer INDEX:SIZE] [--arg-range INDEX:LOW:HIGH]
+     [--reject-handler NAME]
      [--reject-return VALUE] [--reject-skip NAME] [--pure-callee NAME]
      [--mmio-region LOW:HIGH] [--globals symbolic|image]
      [--max-paths N] [--max-steps N] [--max-seconds N] [--output FILE]
@@ -90,6 +96,11 @@ from pathlib import Path
 
 import angr
 import claripy
+from angr.concretization_strategies import (
+    SimConcretizationStrategyAny,
+    SimConcretizationStrategyMax,
+    SimConcretizationStrategyRange,
+)
 
 CHECKS = ("P1", "P2", "P3", "P4", "mmio-order")
 RETURN_ADDRESS = 0xDEAD0000
@@ -99,11 +110,14 @@ STACK_LOW, STACK_HIGH = 0x7FF00000, 0x80000000
 # A writable segment larger than this keeps the image's bytes.
 SYMBOLIC_SEGMENT_LIMIT = 0x100000
 ARGUMENT_REGISTERS = ("r0", "r1", "r2", "r3")
+# A write address that depends on the input is followed to this many places.
+SYMBOLIC_WRITE_SPAN = 256
 
 
 @dataclass
 class Settings:
     arg_buffers: dict = field(default_factory=dict)  # index -> size
+    arg_ranges: dict = field(default_factory=dict)  # index -> (low, high), unsigned, inclusive
     reject_handlers: tuple = ()
     reject_returns: tuple = ()
     reject_skips: tuple = ()
@@ -219,6 +233,9 @@ class Side:
             address = BUFFER_BASE + index * BUFFER_STEP
             state.memory.store(address, self.shared.buffer(index, size))
             setattr(state.regs, ARGUMENT_REGISTERS[index], claripy.BVV(address, 32))
+        for index, (low, high) in sorted(self.settings.arg_ranges.items()):
+            state.solver.add(claripy.UGE(self.shared.arguments[index], low),
+                             claripy.ULE(self.shared.arguments[index], high))
         if self.settings.symbolic_globals:
             for segment in self.known.main.segments:
                 if not segment.is_writable or segment.memsize == 0:
@@ -233,20 +250,53 @@ class Side:
         state.globals["counts"] = ()
         state.globals["device"] = ()
         state.globals["writes"] = frozenset()
-        state.inspect.b("mem_write", when=angr.BP_AFTER, action=self.wrote)
+        # angr's default fixes a write address that depends on the input to
+        # its largest value.  Enumerate a bounded range first; `pinned` notes
+        # an address the engine still fixed.
+        state.memory.write_strategies.insert(
+            0, SimConcretizationStrategyRange(SYMBOLIC_WRITE_SPAN))
+        state.inspect.b("mem_write", when=angr.BP_BEFORE, action=self.wrote)
+        state.inspect.b("address_concretization", when=angr.BP_AFTER, action=self.pinned)
         return state
+
+    def pinned(self, state) -> None:
+        strategy = state.inspect.address_concretization_strategy
+        if state.inspect.address_concretization_result is not None and isinstance(
+                strategy, (SimConcretizationStrategyAny, SimConcretizationStrategyMax)):
+            action = "read" if state.inspect.address_concretization_action == "load" else "write"
+            self.notes.add(f"a {action} through an address with too many possible values; "
+                           "one was taken")
+
+    def wrote_anywhere(self, state, address, size: int) -> None:
+        """A write whose address depends on the input: record every byte it
+        can reach, so that the final memory there is compared."""
+        low, high = state.solver.min(address), state.solver.max(address)
+        if STACK_LOW <= low and high + size <= STACK_HIGH:
+            return
+        if low < STACK_HIGH and high + size > STACK_LOW:
+            self.notes.add("a write through an address that can be inside or outside the stack")
+            return
+        if any(low <= last and high + size > first
+               for first, last in self.settings.mmio_regions):
+            self.notes.add("a device write through an address that depends on the input")
+            return
+        if high - low >= SYMBOLIC_WRITE_SPAN:
+            self.notes.add(f"a write through an address with more than {SYMBOLIC_WRITE_SPAN} "
+                           "possible values")
+            return
+        state.globals["writes"] = state.globals["writes"] | {(low, high - low + size)}
 
     def wrote(self, state) -> None:
         address = state.inspect.mem_write_address
+        size = state.inspect.mem_write_length
+        size = state.solver.eval(size) if size is not None else (
+            state.inspect.mem_write_expr.size() // 8)
         if state.solver.symbolic(address):
-            self.notes.add("a write through an address that depends on the input")
+            self.wrote_anywhere(state, address, size)
             return
         address = state.solver.eval(address)
         if STACK_LOW <= address < STACK_HIGH:
             return
-        size = state.inspect.mem_write_length
-        size = state.solver.eval(size) if size is not None else (
-            state.inspect.mem_write_expr.size() // 8)
         if any(low <= address <= high for low, high in self.settings.mmio_regions):
             state.globals["device"] += ((address, size, state.inspect.mem_write_expr),)
         else:
@@ -475,6 +525,8 @@ def check_binary_equivalence(original: Path, rewritten: Path, entry: int, thumb:
         "seconds": round(time.time() - started, 1),
         "assumptions": {
             "arg_buffers": {str(index): size for index, size in settings.arg_buffers.items()},
+            "arg_ranges": {str(index): list(bounds)
+                           for index, bounds in settings.arg_ranges.items()},
             "globals": "symbolic" if settings.symbolic_globals else "image",
             "callees": "uninterpreted; they write no memory; the result depends on the "
                        "callee and the call index",
@@ -487,7 +539,8 @@ def check_binary_equivalence(original: Path, rewritten: Path, entry: int, thumb:
             "pure_callees": list(settings.pure_callees),
             "mmio_regions": [[low, high] for low, high in settings.mmio_regions],
             "limits": {"paths": settings.max_paths, "blocks_per_path": settings.max_steps,
-                       "seconds_per_side": settings.max_seconds},
+                       "seconds_per_side": settings.max_seconds,
+                       "addresses_per_write": SYMBOLIC_WRITE_SPAN},
         },
     }
 
@@ -503,6 +556,8 @@ def main() -> int:
                         help="LLVM IR whose declarations give each callee's argument count")
     parser.add_argument("--prototype-function", help="name of the function in --prototypes")
     parser.add_argument("--arg-buffer", action="append", default=[], metavar="INDEX:SIZE")
+    parser.add_argument("--arg-range", action="append", default=[], metavar="INDEX:LOW:HIGH",
+                        help="an integer argument takes values LOW to HIGH inclusive")
     parser.add_argument("--reject-handler", action="append", default=[])
     parser.add_argument("--reject-return", action="append", default=[],
                         type=lambda text: int(text, 0))
@@ -524,6 +579,8 @@ def main() -> int:
         settings = Settings(
             arg_buffers={int(index): int(size, 0) for index, size in
                          (text.split(":") for text in args.arg_buffer)},
+            arg_ranges={int(index): (int(low, 0), int(high, 0)) for index, low, high in
+                        (text.split(":") for text in args.arg_range)},
             reject_handlers=tuple(args.reject_handler),
             reject_returns=tuple(args.reject_return),
             reject_skips=tuple(args.reject_skip),
