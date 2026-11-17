@@ -24,9 +24,7 @@ Verdicts:
 The verdict of a group, and of the case, is the weakest verdict in it, in the
 order `failed`, `not-run`, `tested`, `proven`.  A check whose report is absent
 is `not-run`: nothing is taken as passed because nobody looked.  `groups`
-says what each group of checks established.  P1 to
-P4 are `tested` when the two versions were run on concrete inputs; `proven`
-is accepted only from a KLEE run.
+says what each group of checks established.
 
 Checks and where each verdict is read from:
 
@@ -41,9 +39,6 @@ Checks and where each verdict is read from:
 | integrity | `rewritten-bindings` | `bindings.rewritten.json`, or `bindings.json` when it covers the rewritten image |
 | static | `calling-convention`, `code-size-budget`, `stack-budget` | `static.json` |
 | runtime | `runtime-transcript` | `case.json` (`runtime`), written by the suite |
-| equivalence | `P1`, `P2`, `P3`, `P4` | `equivalence.json` (check_equivalence.py) |
-| firmware | `mmio-order`, `lock-balance`, `reject-hygiene` | `equivalence.json` |
-| cross-check | `relift` | `relift.json` |
 
 `case.json` is what the suite knows and no report holds: the case, the image
 and its digest, the patch, where the fixture came from, the outcome of running
@@ -56,17 +51,6 @@ used, `compiler-faithful` when bytes were compared against a recompilation,
 confirm them, `plt-stubs-from-fixture`, `addresses-outside-image`,
 `fixtures-hand-written`, `fixtures-not-regenerated`, and
 `validation-block-absent` while the patch specification declares no intent.
-From a run of the equivalence harness: `inputs-sampled`, one
-`stubbed-callee:<name>` or `modelled-callee:<name>` per external function,
-`variadic-arguments:<name>`, `memory-scope`, `locals-by-kind`,
-`globals-as-lifted`, `layout-adopted`, and `retargeted-layout` when the
-harness was not run in the image's own layout.  Each declaration that relaxes
-the call comparison is one too: `pure-callee:<name>` and
-`substitution:<original>-><patched>`, the latter with its condition.  So is
-each declaration of how the patch rejects and what the firmware checks look
-at: `reject-path:handler:<name>`, `reject-path:return:<value>`,
-`reject-path:skipped:<name>`, `noreturn-handler:<name>`,
-`reject-effect:<name>`, `device-registers` and `balanced-pair:<a>/<b>`.
 
 Only the standard library is needed.
 
@@ -99,14 +83,6 @@ CHECKS = (
     ("code-size-budget", "static"),
     ("stack-budget", "static"),
     ("runtime-transcript", "runtime"),
-    ("P1", "equivalence"),
-    ("P2", "equivalence"),
-    ("P3", "equivalence"),
-    ("P4", "equivalence"),
-    ("mmio-order", "firmware"),
-    ("lock-balance", "firmware"),
-    ("reject-hygiene", "firmware"),
-    ("relift", "cross-check"),
 )
 
 CLAIMS = {
@@ -125,14 +101,6 @@ CLAIMS = {
     "code-size-budget": "the inserted code fits the declared code budget",
     "stack-budget": "the inserted functions' frames fit the declared stack budget",
     "runtime-transcript": "the rewritten image, run, produces the expected output",
-    "P1": "any input the patched function accepts, the original accepted",
-    "P2": "on accepted inputs, the final non-local memory is the same",
-    "P3": "on accepted inputs, the return value is the same",
-    "P4": "on accepted inputs, the external calls and their arguments are the same",
-    "mmio-order": "writes to declared device regions keep their order",
-    "lock-balance": "locks and interrupt masks are balanced on every exit",
-    "reject-hygiene": "a reject path writes nothing it did not declare",
-    "relift": "the function lifted back from the rewritten image matches the intended code",
 }
 
 BINDING_FAILURES = {
@@ -143,7 +111,7 @@ SUITE_RUNTIME_VERDICTS = ("tested", "failed", "not-run")
 REPORT_FILES = (
     "bindings.json", "bindings.rewritten.json", "dependencies.json", "abi.json",
     "trampoline.json", "patch_record.json", "patch_record_check.json", "applied_bytes.json",
-    "static.json", "equivalence.json", "relift.json",
+    "static.json",
 )
 
 
@@ -314,58 +282,6 @@ def _calling_convention(reports: Reports) -> dict:
     return _row("proven", "static.json", facts=facts)
 
 
-def _equivalence(reports: Reports, name: str) -> dict:
-    """P1 to P4 or a firmware check, from a run of the product harness."""
-    report = reports.get("equivalence.json")
-    if report is None:
-        return _row("not-run", reason="equivalence.json was not written: the original and "
-                                      "the patched version were not compared")
-    if name not in report.get("properties", {}):
-        raise ValueError(f"equivalence.json: no verdict for {name}")
-    judged = report["properties"][name]
-    # Concrete inputs test; only a complete symbolic exploration proves.
-    if judged["verdict"] not in ("tested", "failed", "not-run") and not (
-        judged["verdict"] == "proven" and report.get("engine") == "klee"
-    ):
-        raise ValueError(
-            f"equivalence.json: verdict {judged['verdict']!r} from engine "
-            f"{report.get('engine')!r} is not accepted"
-        )
-    kinds = sorted({row["kind"] for row in report["violations"] if row["property"] == name})
-    facts = {
-        "engine": report.get("engine"),
-        "inputs": report.get("inputs"),
-        "outcomes": {key: count for key, count in report.get("outcomes", {}).items() if count},
-    }
-    if judged["verdict"] == "failed":
-        seeds = [row["seed"] for row in report["violations"] if row["property"] == name]
-        facts["first_seeds"] = seeds[:5]
-        where = sorted({
-            str(row[key]) for row in report["violations"]
-            for key in ("region", "call")
-            if row["property"] == name and row.get(key) is not None
-        })
-        if where:
-            facts["memory_regions" if name == "P2" else "calls"] = where
-        return _row("failed", "equivalence.json", kinds, facts=facts)
-    return _row(judged["verdict"], "equivalence.json", reason=judged.get("reason"), facts=facts)
-
-
-def _relift(reports: Reports) -> dict:
-    """The function lifted back from the rewritten image, against the intended code."""
-    report = reports.get("relift.json")
-    if report is None:
-        return _row("not-run", reason="relift.json was not written: the rewritten image "
-                                      "was not lifted again")
-    if report["verdict"] not in ("tested", "failed", "not-run"):
-        raise ValueError(f"relift.json: verdict {report['verdict']!r} is not accepted")
-    facts = {"lifted": report.get("lifted", []), "outcomes": report.get("outcomes", {})}
-    if report["verdict"] == "failed":
-        kinds = sorted({f"{row['property']}:{row['kind']}" for row in report["violations"]})
-        return _row("failed", "relift.json", kinds, facts=facts)
-    return _row(report["verdict"], "relift.json", reason=report.get("reason"), facts=facts)
-
-
 def _budget(reports: Reports, key: str) -> dict:
     report = reports.get("static.json")
     if report is None:
@@ -409,8 +325,7 @@ def _assumptions(reports: Reports, context: dict) -> list[dict]:
     bindings = reports.get("bindings.json")
     trampoline = reports.get("trampoline.json")
     fixture = context.get("fixture") or {}
-    if (bindings is not None or reports.get("dependencies.json") is not None
-            or reports.get("equivalence.json") is not None):
+    if bindings is not None or reports.get("dependencies.json") is not None:
         assume("lift-faithful", "pipeline",
                "the lifted code is taken as the meaning of the function's machine code; "
                "the lifter and the decompiler are not checked")
@@ -450,80 +365,6 @@ def _assumptions(reports: Reports, context: dict) -> list[dict]:
     assume("validation-block-absent", "patch specification",
            "the patch specification declares no reject paths, strict callees, device "
            "regions or budgets; every check that needs declared intent is not-run")
-    equivalence = reports.get("equivalence.json")
-    harness = (equivalence or {}).get("harness") or {}
-    if equivalence is not None and equivalence.get("inputs"):
-        assume("inputs-sampled", "equivalence.json",
-               f"the versions were compared on {equivalence['inputs']} concrete inputs "
-               "derived from seeds, not on every input; a difference on another input "
-               "is not excluded")
-    for stub in harness.get("stubs", []):
-        if stub["kind"] in ("values", "void"):
-            assume(f"stubbed-callee:{stub['name']}", "equivalence.json",
-                   f"{stub['name']} is not run; it returns the same value at the same call "
-                   "index in both versions, whatever its arguments, and writes nothing")
-        if stub["kind"] == "model":
-            assume(f"modelled-callee:{stub['name']}", "equivalence.json",
-                   f"{stub['name']} is run from the harness's own implementation, not the "
-                   "image's")
-        if stub.get("variadic") and not stub.get("pure"):
-            assume(f"variadic-arguments:{stub['name']}", "equivalence.json",
-                   f"only the fixed arguments of {stub['name']} are compared")
-    for name in (equivalence or {}).get("pure_callees", []):
-        assume(f"pure-callee:{name}", "equivalence.json",
-               f"declared: calls of {name} are left out of the call comparison")
-    for swap in (equivalence or {}).get("substitutions", []):
-        assume(f"substitution:{swap['original']}->{swap['patched']}", "equivalence.json",
-               f"declared: a call of {swap['patched']} by the patched version counts as a "
-               f"call of {swap['original']}, compared on the first {swap['compare_args']} "
-               f"arguments, when {swap['condition']}; the condition is not checked")
-    declared = equivalence or {}
-    for name in declared.get("reject_handlers", []):
-        assume(f"reject-path:handler:{name}", "equivalence.json",
-               f"declared: a call of {name} means the input was rejected")
-    for value in declared.get("reject_returns", []):
-        assume(f"reject-path:return:{value}", "equivalence.json",
-               f"declared: a return of {value} means the input was rejected")
-    for name in declared.get("reject_skips", []):
-        assume(f"reject-path:skipped:{name}", "equivalence.json",
-               f"declared: the patched version rejects an input by not calling {name}; "
-               "on such an input only the other calls are compared")
-    for name in declared.get("noreturn_handlers", []):
-        assume(f"noreturn-handler:{name}", "equivalence.json",
-               f"declared: {name} does not return")
-    for name in declared.get("reject_effects", []):
-        assume(f"reject-effect:{name}", "equivalence.json",
-               f"declared: {name} may be called before a rejection")
-    if declared.get("mmio_regions"):
-        assume("device-registers", "equivalence.json",
-               "declared: the device registers are "
-               + ", ".join(f"{low:#x} to {high:#x}" for low, high in declared["mmio_regions"])
-               + "; a write there is recorded and not performed, a read returns a value "
-               "from a series both versions share, and no other address is a device")
-    for acquire, release in declared.get("balance", []):
-        assume(f"balanced-pair:{acquire}/{release}", "equivalence.json",
-               f"declared: calls of {acquire} and {release} must balance; neither is run")
-    if "memory_regions" in harness:
-        assume("memory-scope", "equivalence.json",
-               "P2 compares " + (", ".join(harness["memory_regions"]) or "nothing")
-               + "; writes through an address computed from a constant, and globals that "
-               "hold pointers, are not compared")
-    if any(stub["kind"] not in ("reject", "reject-noreturn")
-           for stub in harness.get("stubs", [])):
-        assume("locals-by-kind", "equivalence.json",
-               "the address of a local passed to an external function is compared only "
-               "as the address of a local; what the local holds is not compared")
-    if harness.get("concrete_globals"):
-        assume("globals-as-lifted", "equivalence.json",
-               "these globals keep their lifted initial value instead of an arbitrary one: "
-               + ", ".join(harness["concrete_globals"]))
-    if harness.get("retargeted"):
-        assume("retargeted-layout", "equivalence.json",
-               "the versions were compared in a 64-bit layout, not the image's own")
-    if harness.get("layout_adopted"):
-        assume("layout-adopted", "equivalence.json",
-               "the patched module was given the original's data layout; the two agree on "
-               "endianness, pointer size and the alignment of 64-bit values")
     for row in context.get("assumptions", []):
         assume(row["name"], "case.json", row["detail"])
     return rows
@@ -549,9 +390,6 @@ def build_evidence(directory: Path) -> dict:
         "stack-budget": _budget(reports, "stack_bytes"),
         "runtime-transcript": _runtime(context),
     }
-    for name in ("P1", "P2", "P3", "P4", "mmio-order", "lock-balance", "reject-hygiene"):
-        checks[name] = _equivalence(reports, name)
-    checks["relift"] = _relift(reports)
 
     stopped = context.get("stopped")
     if stopped:
@@ -610,13 +448,6 @@ def build_evidence(directory: Path) -> dict:
             "stack_scope": "the inserted functions' own frames; frames of the image's "
                            "functions they call are not included",
             "compiler": record.get("compiler"),
-            "equivalence": None if reports.get("equivalence.json") is None else {
-                "engine": reports.get("equivalence.json").get("engine"),
-                **reports.get("equivalence.json").get("bounds", {}),
-                "arguments": (reports.get("equivalence.json").get("harness") or {})
-                .get("arguments"),
-                "cut_short": reports.get("equivalence.json").get("cut_short"),
-            },
         },
         "assumptions": assumptions,
         "warnings": warnings,

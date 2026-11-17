@@ -10,7 +10,7 @@
 # triple+layout differ. Always target x86_64-unknown-linux-gnu regardless
 # of the host build platform.
 
-set(MODEL_SOURCES libc_models.c usb_hal_models.c compare_models.c)
+set(MODEL_SOURCES libc_models.c usb_hal_models.c)
 set(MODEL_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR})
 set(MODEL_TARGET_TRIPLE x86_64-unknown-linux-gnu)
 

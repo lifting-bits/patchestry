@@ -58,62 +58,6 @@ The `static` check analyzes the new body in the rewritten binary and, for compar
 
 The sizes are measured, not judged: no budget is declared for these binaries. No copy of half a body or more was found elsewhere in either image.
 
-## Equivalence of a patched version
-
-`scripts/patch-runtime/check_equivalence.py` compares a patched version of a lifted function with the lifted original. `patchir-klee-verifier --compare-original` builds a product harness: one module with both versions, each with its own copy of every global, and a `main` that runs them on the same input. The runner compiles that harness for ARM and runs it under `qemu-system-arm` (machine `virt`, bare metal) on inputs derived from seeds. The modules keep their 32-bit ARM layout.
-
-| Property | Holds when | Violations |
-| --- | --- | --- |
-| P1 | an input the patched version accepts is one the original accepts | `original-rejects`, `original-faults`, `original-aborts` |
-| P2 | when both accept, they leave the same memory behind | `memory-differs` (with the region) |
-| P3 | when both accept, they return the same value | `return-differs`, `patched-faults`, `patched-aborts` |
-| P4 | when both accept, they make the same calls to external functions | `calls-differ` (with the index of the first differing call) |
-
-P2 compares each side's copy of every global that holds no pointer, and the contents of every argument buffer. P4 compares the calls in order, callee and arguments. The address of a global is compared as global and offset, the address of constant data by the bytes it points at, and the address of a local only as "a local". Only the fixed arguments of a variadic function are compared.
-
-Three declarations relax P4, and each becomes a named assumption in the evidence. `--pure-callee NAME` leaves calls of the function out. `--substitution ORIGINAL:PATCHED:ARGS:CONDITION` counts the patched version's call of one function as a call of the one it replaces, compared on the first ARGS arguments; the condition is recorded and not checked, and a substitution without one is refused. `--strict-callee NAME` refuses either relaxation of that function.
-
-An external function is a stub that returns the same value at the same call index on both sides. The C library functions listed in `MODELS` of `check_equivalence.py` are run instead, from `equivalence_runtime/models.c`, so what they write is part of P2. A substitution therefore relaxes the call comparison and nothing else: `strcpy` replaced by `strncpy` into a global fails P2, because `strncpy` pads the destination with zeros.
-
-A version rejects an input when it calls a declared reject handler (`--reject-handler`) or returns a declared reject value (`--reject-return`). `--arg-buffer INDEX:SIZE` says an argument points at a buffer, which lifted code often passes as an integer; `--arg-range INDEX:LOW:HIGH` bounds an integer argument. These stand in for the patch specification's validation block, which is not designed yet. A handler the module does not mark as such is declared not to return with `--noreturn-handler`. `--reject-skip NAME` declares a third way: the patched version rejects an input by not calling NAME where the original does; the other calls must agree, and memory and return value are not compared on such an input.
-
-A property is `failed` when a violation was seen, `tested` when none was seen and at least one input reached the comparison, and `not-run` otherwise. `tested` covers the inputs that were run. `proven` needs the same harness under KLEE.
-
-Three firmware checks use the same runs. They are `not-run` unless something is declared for them, or, for reject hygiene, unless an input was rejected.
-
-| Check | Declared with | Holds when | Violations |
-| --- | --- | --- | --- |
-| `mmio-order` | `--mmio-region LOW:HIGH` | when both accept, they write the same values to the device registers in the same order | `writes-differ` |
-| `lock-balance` | `--balance ACQUIRE:RELEASE` | the calls balance the same way in both, and are balanced when the patched version rejects | `balance-differs`, `unbalanced-on-reject` |
-| `reject-hygiene` | `--reject-effect NAME` allows a call | before it rejects, the patched version writes no compared memory and no device register, and calls nothing but reject effects and balanced callees | `memory-written`, `device-written`, `call-made` |
-
-With a device range declared, every load and store of either version that is not plainly of a local or a global asks the runner first. Inside a range a write is recorded and not performed, and a read returns the next of a series of values both versions share. A device register nobody declared is not seen. The serial-qemu suite runs these checks on its `send`, `length` and `forward` cases (see `qemu_firmware_runtime.md`).
-
-The cases file gives three reinserted functions patched versions, each its own row in `summary.tsv` and its own evidence. None is reinserted, so their integrity checks are `not-run`. A variant is either C written from the lifted C (`test/identity-reinsertion/patches/`) or the lifted IR with lines replaced (`"source": "@lifted"` with `edits`; each `find` must match exactly one place).
-
-| Function | Variant | What it is | Fails |
-| --- | --- | --- | --- |
-| `httpd` `FUN_0007ae8c` | `rewritten` | the lifted C written out by hand, no patch | nothing |
-| | `limit-8` | rejects a path token of 8 bytes or more with a null pointer, from inside the copy loop | reject-hygiene (`memory-written`: the output buffer is written before the rejection) |
-| | `limit-8-first` | the same limit, checked before anything is written | nothing |
-| | `limit-8-undeclared` | the same patch, reject value not declared | P2, P3 |
-| | `widened` | limit 24 replacing limit 8 | P1 |
-| | `extra-write` | stores a byte at offset 100 of the output buffer | P2 |
-| | `extra-call` | calls an external function the original does not call | P4 |
-| | `changed-return` | returns the buffer address plus one | P3 |
-| | `printed-c` | the C `-print-tu` printed, compiled as is | P2 |
-| `httpd` `FUN_00067c0c` | `unchanged` | the lifted IR against itself | nothing (P2 `not-run`: no memory to compare) |
-| | `dropped-call` | the first `SetValue` call removed | P4 |
-| | `altered-argument` | `get_wlan_mac` called with 28 instead of 27 | P4 |
-| | `other-format` | one `sprintf` given another format string | P4 |
-| `cgibin` `FUN_00026534` | `unchanged` | the lifted IR against itself | nothing |
-| | `extra-global-write` | stores a byte into `DAT_00000005` on entry | P2 |
-| | `shorter-compare` | one `strncasecmp` compares 5 bytes instead of 6 | P4 |
-
-`printed-c` pins a known defect: the printer writes `*(signed char *)param_2 + local_c` where the IR loads from `param_2 + local_c`, so the printed C is not the lifted function. The expectation changes when the printer is fixed. The printed C of the other two functions does not compile at all, which is why their variants edit the IR.
-
-Limits: writes through an address the function computes from a constant are not compared, and neither are globals that hold pointers. What a local passed to a callee holds is not compared. An external function that returns a pointer and has no model ends the path as inconclusive; every input of `formGetUpnpLists` ends that way, so it has no variants. An input on which a version never returns costs a 5-second timeout, and the run stops after 8 of them.
-
 ## Known rejection: `builtin_strncpy`
 
 `cgibin` `FUN_00011708` is rejected with `unresolved-dependency`, and the cases file expects that. The function fills a local buffer with a string constant using inline instructions. Ghidra represents the idiom as a pseudo-call to an intrinsic named `builtin_strncpy`, and `patchir-decomp` emits it as a call to an external function of that name. Nothing in the image provides one, so the code to insert cannot be linked. The rejection is correct. The fix belongs in the lifter: lower Ghidra's `builtin_*` intrinsics to an inline copy. When that lands, the expected status of the case becomes `pass`.
@@ -126,7 +70,7 @@ Limits: writes through an address the function computes from a constant are not 
 
 Per case under the output directory: `function.json`, the lifted `.c`, `.cir` and `.ll`, `bindings.json`, `dependencies.json`, `abi.json`, `trampoline.json`, `patch_record.json`, `applied_bytes.json`, `bindings.rewritten.json`, `static.json`, `rewritten.elf`, and `validation.json`. `summary.tsv` has one row per case.
 
-`validation.json` is the evidence `evidence.py` builds from those reports (see the Evidence section of `qemu_firmware_runtime.md`): a verdict per check (`proven`, `tested`, `failed`, `not-run`), the bounds, the assumptions by name, and the reports with their digests. `case.json` holds what the driver knows and no report does. On the four passing cases `integrity` is `proven` and the calling convention is `proven`; the budgets, the run, P1 to P4, the firmware checks and the re-lift are `not-run`, so the overall verdict is `not-run`. The driver fails a case whose status and evidence disagree.
+`validation.json` is the evidence `evidence.py` builds from those reports (see the Evidence section of `qemu_firmware_runtime.md`): a verdict per check (`proven`, `tested`, `failed`, `not-run`), the bounds, the assumptions by name, and the reports with their digests. `case.json` holds what the driver knows and no report does. On the four passing cases `integrity` is `proven` and the calling convention is `proven`; the budgets and the run are `not-run`, so the overall verdict is `not-run`. The driver fails a case whose status and evidence disagree.
 
 ## What a pass does not mean
 

@@ -1,8 +1,0 @@
-target datalayout = "e-m:e-p:32:32-Fi8-i64:64-v128:64:128-a:0:32-n32-S64"
-target triple = "armv7-none-unknown-eabi"
-
-define ptr @pick(ptr %buf, i32 %n) {
-  %bad = icmp ugt i32 %n, 8
-  %r = select i1 %bad, ptr null, ptr %buf
-  ret ptr %r
-}

@@ -19,7 +19,6 @@ from patcherex2.targets.elf_arm_bare import ElfArmBare
 
 import check_applied_bytes
 import check_bindings
-import check_equivalence
 import check_static
 import check_trampoline
 import evidence
@@ -73,11 +72,6 @@ class Case:
     # case.  Such a function has not passed them; the case says so in advance,
     # and any other outcome of the static checks fails it.
     static_not_run: tuple[str, ...] = ()
-    # What the patch declares, for the comparison of the patched function with
-    # the lifted original: keywords of check_equivalence.check_equivalence
-    # under "declare", and "variants", seeded harms made by editing the
-    # patched IR, each with the checks it must fail.
-    equivalence: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -87,9 +81,6 @@ class SymbolInfo:
     size: int
     kind: str
 
-
-UART = (0x4000C000, 0x4000CFFF)
-EQUIVALENCE_INPUTS = 200
 
 CASES: tuple[Case, ...] = (
     Case(
@@ -486,24 +477,6 @@ CASES: tuple[Case, ...] = (
             "z",
             "DONE",
         ),
-        equivalence={
-            "declare": {"reject_returns": [-1]},
-            "tested": ("P1", "P2", "P3", "P4", "reject-hygiene"),
-            "variants": (
-                {"name": "writes-before-reject",
-                 "description": "the reject path clears qemu_length_last first",
-                 "edits": [{"find": "  store i32 -1, ptr %5, align 4\n",
-                            "replace": "  store volatile i32 0, ptr @qemu_length_last, align 4\n"
-                                       "  store i32 -1, ptr %5, align 4\n"}],
-                 "fails": ("reject-hygiene",)},
-                {"name": "changed-result",
-                 "description": "an accepted input returns one more",
-                 "edits": [{"find": "  %20 = add i32 %18, %19\n  store i32 %20, ptr %5",
-                            "replace": "  %20 = add i32 %18, %19\n  %harm = add i32 %20, 1\n"
-                                       "  store i32 %harm, ptr %5"}],
-                 "fails": ("P3",)},
-            ),
-        },
     ),
     # Skipped operation: the second call is not made for a value over 32.
     Case(
@@ -530,23 +503,6 @@ CASES: tuple[Case, ...] = (
             "z",
             "DONE",
         ),
-        equivalence={
-            "declare": {"reject_skips": ["forward_second"]},
-            # P2 is not run: the function has no memory to compare.
-            "tested": ("P1", "P3", "P4"),
-            "variants": (
-                {"name": "skip-not-declared",
-                 "description": "the same patch with no declared way of rejecting",
-                 "edits": [],
-                 "declare": {"reject_skips": []},
-                 "fails": ("P4",)},
-                {"name": "first-call-altered",
-                 "description": "forward_first gets the value plus two",
-                 "edits": [{"find": "  %4 = add i32 %3, 1\n",
-                            "replace": "  %4 = add i32 %3, 2\n"}],
-                 "fails": ("P4",)},
-            ),
-        },
     ),
     # Call to a handler that does not return: the run ends at REJECT.
     Case(
@@ -573,43 +529,6 @@ CASES: tuple[Case, ...] = (
             "S",
             "REJECT",
         ),
-        equivalence={
-            "declare": {
-                "reject_handlers": ["qemu_reject"],
-                "noreturn_handlers": ["qemu_reject"],
-                "mmio_regions": [UART],
-                "balance": [("qemu_irq_disable", "qemu_irq_enable")],
-            },
-            "tested": ("P1", "P3", "P4", "mmio-order", "lock-balance", "reject-hygiene"),
-            "variants": (
-                {"name": "reordered-writes",
-                 "description": "the newline is written before the byte",
-                 "edits": [{"find": "  store i32 %3, ptr inttoptr (i32 1073790976 to ptr), align 4\n"
-                                    "  store i32 10, ptr inttoptr (i32 1073790976 to ptr), align 4\n",
-                            "replace": "  store i32 10, ptr inttoptr (i32 1073790976 to ptr), align 4\n"
-                                       "  store i32 %3, ptr inttoptr (i32 1073790976 to ptr), align 4\n"}],
-                 "fails": ("mmio-order",)},
-                {"name": "rejects-with-interrupts-off",
-                 "description": "the check runs after interrupts are disabled, "
-                                "so a rejected input leaves them off",
-                 "edits": [{"find": "  call void @patch__entry__qemu_target_send(i32 %0), "
-                                    "!patchestry !1, !mlir_loc !2\n"
-                                    "  call void @qemu_irq_disable()\n",
-                            "replace": "  call void @qemu_irq_disable()\n"
-                                       "  call void @patch__entry__qemu_target_send(i32 %0)\n"}],
-                 "fails": ("lock-balance",)},
-                {"name": "enable-dropped",
-                 "description": "interrupts are not enabled again",
-                 "edits": [{"find": "  call void @qemu_irq_enable()\n", "replace": ""}],
-                 "fails": ("P4", "lock-balance")},
-                {"name": "writes-before-reject",
-                 "description": "the reject path writes the device before the handler",
-                 "edits": [{"find": "  call void @qemu_reject()\n",
-                            "replace": "  store i32 33, ptr inttoptr (i32 1073790976 to ptr), "
-                                       "align 4\n  call void @qemu_reject()\n"}],
-                 "fails": ("reject-hygiene",)},
-            ),
-        },
     ),
 )
 
@@ -1138,68 +1057,6 @@ def main() -> int:
     summary_rows = ["case\tstatus\tartifact"]
     statuses: dict[str, str] = {}
 
-    try:
-        equivalence_tools = check_equivalence.Tools.from_environment()
-    except check_equivalence.MissingTool as error:
-        # The comparison is then not run, and the evidence says so.
-        equivalence_tools = None
-        print(f"warning: the equivalence comparison is skipped: {error}", file=sys.stderr)
-
-    def run_variants(case: Case, context: dict) -> None:
-        """Seeded harms: the patched IR with lines replaced, never reinserted."""
-        case_dir = output_dir / case.name
-        patched = (case_dir / f"{case.function_name}.patched.ll").read_text(encoding="utf-8")
-        checks = check_equivalence.PROPERTIES + check_equivalence.FIRMWARE
-        for variant in case.equivalence.get("variants", ()):
-            name = f"{case.name}--{variant['name']}"
-            out = output_dir / name
-            out.mkdir(parents=True, exist_ok=True)
-            for stale in ("case.json", "validation.json", *evidence.REPORT_FILES):
-                (out / stale).unlink(missing_ok=True)
-            module = out / "patched.ll"
-            module.write_text(
-                check_equivalence.apply_edits(patched, variant["edits"], name), encoding="utf-8"
-            )
-            report = check_equivalence.check_equivalence(
-                case_dir / f"{case.function_name}.ll", module, case.function_name, out,
-                equivalence_tools, inputs=EQUIVALENCE_INPUTS,
-                **check_equivalence.declarations({**case.equivalence["declare"],
-                                                  **variant.get("declare", {})}),
-            )
-            (out / "equivalence.json").write_text(
-                json.dumps(report, indent=2) + "\n", encoding="utf-8"
-            )
-            failed = sorted(
-                key for key in checks if report["properties"][key]["verdict"] == "failed"
-            )
-            unreached = sorted(
-                key for key in variant["fails"] if report["properties"][key]["verdict"] != "failed"
-            )
-            status = "failed:" + ",".join(failed) if failed else "no-failure"
-            expected = "failed:" + ",".join(sorted(variant["fails"]))
-            (out / "case.json").write_text(
-                json.dumps({
-                    **{key: context[key] for key in ("suite", "function", "binary",
-                                                    "binary_sha256", "fixture")},
-                    "case": name,
-                    "patch": f"{case.spec_name}, then: {variant['description']}",
-                    "runtime": {"verdict": "not-run",
-                                "detail": "the seeded version was not reinserted or executed"},
-                    "status": status,
-                    "expected": expected,
-                }, indent=2) + "\n",
-                encoding="utf-8",
-            )
-            evidence.write_evidence(out)
-            statuses[name] = status
-            summary_rows.append(f"{name}\t{status}\t-")
-            if status != expected:
-                raise RuntimeError(
-                    f"Seeded harm {name} gave {status}, expected {expected}"
-                    + (f" ({', '.join(unreached)} did not fail)" if unreached else "")
-                    + f" (see {out / 'equivalence.json'})."
-                )
-
     def run_case(case: Case, context: dict) -> None:
         case_dir = output_dir / case.name
         case_dir.mkdir(parents=True, exist_ok=True)
@@ -1282,20 +1139,6 @@ def main() -> int:
                 str(patched_ll_path),
             ]
         )
-
-        if case.equivalence is not None and equivalence_tools is not None:
-            # The patched function against the lifted original, as ARM code
-            # on generated inputs.  The evidence reads the report.
-            original_ll_path = case_dir / f"{case.function_name}.ll"
-            run([str(patchir_cir2llvm), "-S", str(cir_path), "-o", str(original_ll_path)])
-            report = check_equivalence.check_equivalence(
-                original_ll_path, patched_ll_path, case.function_name, case_dir,
-                equivalence_tools, inputs=EQUIVALENCE_INPUTS,
-                **check_equivalence.declarations(case.equivalence["declare"]),
-            )
-            (case_dir / "equivalence.json").write_text(
-                json.dumps(report, indent=2) + "\n", encoding="utf-8"
-            )
 
         if case.function_name not in original_symbols:
             raise RuntimeError(f"Original ELF is missing function symbol {case.function_name}.")
@@ -1453,17 +1296,6 @@ def main() -> int:
                 f"Case {case.name} passed but its evidence does not say so: "
                 f"failed {failed or 'nothing'} (see {case_dir / 'validation.json'})."
             )
-        if case.equivalence is not None and equivalence_tools is not None:
-            untested = [
-                key for key in case.equivalence.get("tested", ())
-                if built["checks"][key]["verdict"] != "tested"
-            ]
-            if untested:
-                raise RuntimeError(
-                    f"Case {case.name}: {', '.join(untested)} not tested by the comparison "
-                    f"with the original (see {case_dir / 'equivalence.json'})."
-                )
-            run_variants(case, context)
         if statuses[case.name].startswith("rejected:") and not failed:
             raise RuntimeError(
                 f"Case {case.name} was rejected but no check in its evidence failed "

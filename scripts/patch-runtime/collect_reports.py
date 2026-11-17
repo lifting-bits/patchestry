@@ -50,7 +50,7 @@ REPORTS = (
 
 CASE_COLUMNS = (
     "suite", "case", "status", "expected", "detail", "verdict", "integrity", "static",
-    "runtime", "equivalence", "firmware", "cross_check", "binary", "function", "mode",
+    "runtime", "binary", "function", "mode",
     "placement", "destination", "original_code_bytes", "new_code_bytes", "inserted_functions",
     "inserted_code_bytes", "original_frame_bytes", "new_frame_bytes", "frame_growth",
     "inserted_frame_bytes", "static_verdict", "static_not_run", "inlined_copies",
@@ -125,9 +125,6 @@ def collect_case(suite: str, directory: Path, summary: dict) -> dict:
         "integrity": groups["integrity"],
         "static": groups["static"],
         "runtime": groups["runtime"],
-        "equivalence": groups["equivalence"],
-        "firmware": groups["firmware"],
-        "cross_check": groups["cross-check"],
         "binary": validation["target"]["binary"] or trampoline.get("original"),
         "function": validation["target"]["function"],
         "mode": trampoline.get("mode") or record.get("target", {}).get("mode"),

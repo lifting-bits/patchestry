@@ -69,7 +69,6 @@ from patcherex2.targets.elf_arm_linux import ElfArmLinux
 import check_abi
 import check_applied_bytes
 import check_bindings
-import check_equivalence
 import check_static
 import check_trampoline
 import evidence
@@ -101,9 +100,6 @@ class Case:
     fixture: str  # relative to the repository root
     function: str
     expect: str = "pass"
-    # Patched versions of the lifted function to compare with the original:
-    # {"pointer_size", "arg_buffers", "arg_ranges", "inputs", "variants": [...]}.
-    equivalence: dict | None = None
 
 
 class Rejected(Exception):
@@ -342,99 +338,6 @@ def run_case(case: Case, args, repo_root: Path, summary: dict) -> None:
     passed("static", **measured)
 
 
-def run_variants(case: Case, args, repo_root: Path, digest: str | None) -> list[tuple]:
-    """Compare patched versions of the case's lifted function with the original.
-
-    A variant is C written from the lifted C, with a patch in it.  It is not
-    reinserted: its evidence has the equivalence checks and nothing else.
-    Returns summary rows (name, status, expected, detail).
-    """
-    settings = case.equivalence
-    case_dir = args.output_dir / case.name
-    lifted = case_dir / f"{case.function}.ll"
-    declared = check_abi.abi_attributes(args.binary_root / case.binary)
-    tools = check_equivalence.Tools.from_environment()
-    rows = []
-    for variant in settings["variants"]:
-        name = f"{case.name}--{variant['name']}"
-        out = args.output_dir / name
-        out.mkdir(parents=True, exist_ok=True)
-        for stale in ("case.json", "validation.json", *evidence.REPORT_FILES):
-            (out / stale).unlink(missing_ok=True)
-
-        def compiled(defines: list[str], stem: str) -> Path:
-            if variant["source"] == "@lifted":
-                # The lifted IR with lines replaced: a patch at the level the
-                # patcher works at.  Each `find` must name exactly one place.
-                text = check_equivalence.apply_edits(
-                    lifted.read_text(encoding="utf-8"), variant["edits"], name
-                )
-                module = out / f"{stem}.ll"
-                module.write_text(text, encoding="utf-8")
-                return module
-            # "@printed" is the C the decompiler printed for the case.
-            source = (case_dir / f"{case.function}.c" if variant["source"] == "@printed"
-                      else repo_root / variant["source"])
-            module = out / f"{stem}.ll"
-            runtime.run(
-                [str(tools.clang), "--target=armv7a-none-eabi",
-                 *check_abi.compiler_flags(declared), "-O0", "-w", "-S", "-emit-llvm",
-                 *[f"-D{define}" for define in defines], str(source), "-o", str(module)],
-                capture_output=True,
-            )
-            return module
-
-        patched = compiled(variant.get("defines", []), "patched")
-        # The original is the lifted function, unless the variant compares
-        # two patched versions with each other.
-        original = (compiled(variant["original_defines"], "original")
-                    if "original_defines" in variant else lifted)
-        report = check_equivalence.check_equivalence(
-            original, patched, case.function, out, tools,
-            arg_buffers={int(k): v for k, v in settings.get("arg_buffers", {}).items()},
-            arg_ranges={int(k): tuple(v) for k, v in settings.get("arg_ranges", {}).items()},
-            inputs=settings.get("inputs", 200),
-            pointer_size=settings.get("pointer_size", 64),
-            **check_equivalence.declarations(variant),
-        )
-        write_json(out / "equivalence.json", report)
-        # The firmware checks a variant names are part of what it expects.
-        properties = check_equivalence.PROPERTIES + tuple(
-            key for key in check_equivalence.FIRMWARE if key in variant["expect"]
-        )
-        status = ",".join(
-            f"{key}={report['properties'][key]['verdict']}" for key in properties
-        )
-        expected = ",".join(f"{key}={variant['expect'][key]}" for key in properties)
-        write_json(out / "case.json", {
-            "suite": "identity-reinsertion",
-            "case": name,
-            "function": case.function,
-            "binary": case.binary,
-            "binary_sha256": digest,
-            "patch": variant["description"],
-            "fixture": {"path": case.fixture, "hand_written": False, "regenerated": False},
-            "runtime": {"verdict": "not-run",
-                        "detail": "the patched version was not reinserted or executed"},
-            "status": status,
-            "expected": expected,
-        })
-        built = evidence.write_evidence(out)
-        detail = "; ".join(sorted({
-            f"{row['property']} {row['kind']}"
-            + "".join(f" {row[key]}" for key in ("region", "call") if row.get(key) is not None)
-            for row in report["violations"]
-        })) or (report["properties"]["P1"]["reason"] or "")
-        if [built["checks"][key]["verdict"] for key in properties] != [
-            report["properties"][key]["verdict"] for key in properties
-        ]:
-            status, detail = "error", "evidence disagrees with equivalence.json"
-        rows.append((name, status, expected, detail))
-        print(f"{name}: {status}" + ("" if status == expected else f" (expected {expected})"),
-              file=sys.stderr)
-    return rows
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--cases", type=Path, required=True, help="JSON list of cases")
@@ -509,15 +412,6 @@ def main() -> int:
                       f"groups {built['groups']}")
         unexpected += not ok
         rows.append((case.name, status, case.expect, detail))
-        if case.equivalence and status == "pass":
-            try:
-                variants = run_variants(case, args, repo_root, summary.get("binary_sha256"))
-            except Exception as error:  # the comparison could not be run at all
-                variants = [(f"{case.name}--variants", "error", "",
-                             f"{type(error).__name__}: {error}")]
-                (out / "error.txt").write_text(traceback.format_exc(), encoding="utf-8")
-            rows.extend(variants)
-            unexpected += sum(1 for row in variants if row[1] != row[2])
         print(f"{case.name}: {status}" + ("" if ok else f" (expected {case.expect})"),
               file=sys.stderr)
 

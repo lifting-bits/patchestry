@@ -18,11 +18,26 @@ import unittest
 from pathlib import Path
 
 import claripy
+from elftools.elf.elffile import ELFFile
 
 import check_binary_equivalence as cbe
-from relift_cases import with_byte
 
 FIRMWARE = Path(__file__).resolve().parents[2] / "firmwares/serial-qemu/build/serial.elf"
+
+
+def with_byte(image: Path, address: int, value: int, output: Path) -> int:
+    """Copy `image` with the byte at virtual `address` set to `value`; returns the old byte."""
+    data = bytearray(image.read_bytes())
+    with image.open("rb") as handle:
+        for segment in ELFFile(handle).iter_segments():
+            start = segment["p_vaddr"]
+            if segment["p_type"] == "PT_LOAD" and start <= address < start + segment["p_filesz"]:
+                offset = segment["p_offset"] + address - start
+                old = data[offset]
+                data[offset] = value
+                output.write_bytes(data)
+                return old
+    raise ValueError(f"{image}: no loaded file byte at {address:#x}")
 
 
 class Pieces(unittest.TestCase):

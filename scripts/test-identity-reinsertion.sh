@@ -12,7 +12,6 @@
 #
 # Environment, as for scripts/test-qemu-firmware-runtime.sh:
 #   PATCHESTRY_LLVM_PREFIX  bin directory of the patched LLVM (clang, ld.lld, ...)
-#   QEMU_SYSTEM_ARM         qemu-system-arm, for the equivalence comparison (default: on PATH)
 #   PATCHESTRY_LD_LLD       ld.lld to use (default: the one in that directory)
 #   PATCHESTRY_PYTHON       Python 3.11 for the Patcherex2 environment
 #   PATCHESTRY_KEYSTONE_LIB_DIR  macOS only: directory with libkeystone.dylib
@@ -87,11 +86,8 @@ ln -sf "$llvm_prefix/clang" "$shim_dir/clang-19"
 ln -sf "$ld_lld" "$shim_dir/ld.lld-19"
 export PATH="$shim_dir:$PATH"
 export PATCHESTRY_LLVM_PREFIX="$llvm_prefix" PATCHESTRY_LD_LLD="$ld_lld"
-# The equivalence comparison builds a harness with patchir-klee-verifier and
-# runs it under qemu-system-arm (QEMU_SYSTEM_ARM, or the one on PATH).
-export PATCHESTRY_KLEE_VERIFIER="${PATCHESTRY_KLEE_VERIFIER:-$repo_root/builds/default/tools/patchir-klee-verifier/$build_type/patchir-klee-verifier}"
 
-for test in test_linux_arm_images.py test_check_abi.py test_check_static.py test_evidence.py test_check_equivalence.py; do
+for test in test_linux_arm_images.py test_check_abi.py test_check_static.py test_evidence.py; do
   uv run --python "$python_bin" "${patcherex_env[@]}" \
     python "$repo_root/scripts/patch-runtime/$test"
 done
