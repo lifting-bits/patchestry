@@ -78,9 +78,11 @@ then `incomplete`).
 
 CLI: check_binary_equivalence.py --original ELF --rewritten ELF
      --function NAME | --address ADDR [--mode arm|thumb]
-     [--prototypes IR] [--arg-buffer INDEX:SIZE] [--arg-range INDEX:LOW:HIGH]
+     [--prototypes IR] [--arg-buffer INDEX:SIZE] [--arg-suffix INDEX:HEX]
+     [--arg-range INDEX:LOW:HIGH]
      [--reject-handler NAME]
      [--reject-return VALUE] [--reject-skip NAME] [--pure-callee NAME]
+     [--follow-callee NAME]
      [--no-models]
      [--mmio-region LOW:HIGH] [--globals symbolic|image]
      [--max-paths N] [--max-steps N] [--max-seconds N] [--output FILE]
@@ -122,10 +124,12 @@ SYMBOLIC_WRITE_SPAN = 256
 class Settings:
     arg_buffers: dict = field(default_factory=dict)  # index -> size
     arg_ranges: dict = field(default_factory=dict)  # index -> (low, high), unsigned, inclusive
+    arg_suffixes: dict = field(default_factory=dict)  # index -> bytes that follow the buffer
     reject_handlers: tuple = ()
     reject_returns: tuple = ()
     reject_skips: tuple = ()
     pure_callees: tuple = ()
+    followed_callees: tuple = ()  # executed on both sides instead of replaced
     mmio_regions: tuple = ()  # (low, high), inclusive
     symbolic_globals: bool = True
     models: bool = True  # compute the result of the functions in MODELS
@@ -139,6 +143,14 @@ class Settings:
 
 # A modelled string function looks at this many bytes at most.
 MODEL_BYTES = 64
+
+# angr 9.2.213 fails on the scalar saturating add and subtract (ARM `qadd` and
+# `qsub`): its implementation walks vector lanes and a scalar has none. One
+# 32-bit lane gives the scalar result.
+for _name in ("Iop_QAdd32S", "Iop_QSub32S"):
+    _operation = angr.engines.vex.claripy.irop.operations.get(_name)
+    if _operation is not None and _operation._vector_count is None:
+        _operation._vector_count, _operation._vector_size = 1, 32
 
 
 def _fixed(state, value):
@@ -325,7 +337,7 @@ class Side:
 
     def name(self, address: int) -> str:
         """The callee at `address`, named from the original image."""
-        return self.known.names.get(address, f"sub_{address:x}")
+        return self.known.names.get(address, f"FUN_{address:08x}")
 
     def initial(self):
         options = angr.options
@@ -344,6 +356,9 @@ class Side:
             address = BUFFER_BASE + index * BUFFER_STEP
             state.memory.store(address, self.shared.buffer(index, size))
             setattr(state.regs, ARGUMENT_REGISTERS[index], claripy.BVV(address, 32))
+            suffix = self.settings.arg_suffixes.get(index)
+            if suffix:
+                state.memory.store(address + size, claripy.BVV(suffix))
         for index, (low, high) in sorted(self.settings.arg_ranges.items()):
             state.solver.add(claripy.UGE(self.shared.arguments[index], low),
                              claripy.ULE(self.shared.arguments[index], high))
@@ -486,7 +501,8 @@ class Side:
             self.steps += 1
             try:
                 successors = self.project.factory.successors(state)
-            except (angr.errors.AngrError, claripy.errors.ClaripyError) as error:
+            except (angr.errors.AngrError, angr.errors.SimError,
+                    claripy.errors.ClaripyError) as error:
                 self.notes.add(f"a path stopped: {type(error).__name__}: {str(error)[:120]}")
                 continue
             if successors.unconstrained_successors:
@@ -496,7 +512,8 @@ class Side:
                 if target == RETURN_ADDRESS:
                     self.finish(after, "returned")
                 elif after.history.jumpkind == "Ijk_Call" and self.known.mapped(target):
-                    if self.call(after, target):
+                    if (self.name(target) in self.settings.followed_callees
+                            or self.call(after, target)):
                         pending.append((after, depth + 1))
                 elif after.history.jumpkind.startswith("Ijk_Sys"):
                     self.notes.add("a system call")
@@ -643,6 +660,8 @@ def check_binary_equivalence(original: Path, rewritten: Path, entry: int, thumb:
         "seconds": round(time.time() - started, 1),
         "assumptions": {
             "arg_buffers": {str(index): size for index, size in settings.arg_buffers.items()},
+            "arg_suffixes": {str(index): suffix.hex()
+                             for index, suffix in settings.arg_suffixes.items()},
             "arg_ranges": {str(index): list(bounds)
                            for index, bounds in settings.arg_ranges.items()},
             "globals": "symbolic" if settings.symbolic_globals else "image",
@@ -656,6 +675,7 @@ def check_binary_equivalence(original: Path, rewritten: Path, entry: int, thumb:
             "reject_returns": list(settings.reject_returns),
             "reject_skips": list(settings.reject_skips),
             "pure_callees": list(settings.pure_callees),
+            "followed_callees": list(settings.followed_callees),
             "mmio_regions": [[low, high] for low, high in settings.mmio_regions],
             "limits": {"paths": settings.max_paths, "blocks_per_path": settings.max_steps,
                        "seconds_per_side": settings.max_seconds,
@@ -675,6 +695,8 @@ def main() -> int:
                         help="LLVM IR whose declarations give each callee's argument count")
     parser.add_argument("--prototype-function", help="name of the function in --prototypes")
     parser.add_argument("--arg-buffer", action="append", default=[], metavar="INDEX:SIZE")
+    parser.add_argument("--arg-suffix", action="append", default=[], metavar="INDEX:HEX",
+                        help="fixed bytes that follow the buffer of argument INDEX")
     parser.add_argument("--arg-range", action="append", default=[], metavar="INDEX:LOW:HIGH",
                         help="an integer argument takes values LOW to HIGH inclusive")
     parser.add_argument("--reject-handler", action="append", default=[])
@@ -682,6 +704,8 @@ def main() -> int:
                         type=lambda text: int(text, 0))
     parser.add_argument("--reject-skip", action="append", default=[])
     parser.add_argument("--pure-callee", action="append", default=[])
+    parser.add_argument("--follow-callee", action="append", default=[],
+                        help="execute this callee on both sides instead of replacing it")
     parser.add_argument("--no-models", action="store_true",
                         help="leave the string functions in MODELS uninterpreted")
     parser.add_argument("--mmio-region", action="append", default=[], metavar="LOW:HIGH")
@@ -700,12 +724,15 @@ def main() -> int:
         settings = Settings(
             arg_buffers={int(index): int(size, 0) for index, size in
                          (text.split(":") for text in args.arg_buffer)},
+            arg_suffixes={int(index): bytes.fromhex(text) for index, text in
+                          (text.split(":") for text in args.arg_suffix)},
             arg_ranges={int(index): (int(low, 0), int(high, 0)) for index, low, high in
                         (text.split(":") for text in args.arg_range)},
             reject_handlers=tuple(args.reject_handler),
             reject_returns=tuple(args.reject_return),
             reject_skips=tuple(args.reject_skip),
             pure_callees=tuple(args.pure_callee),
+            followed_callees=tuple(args.follow_callee),
             mmio_regions=tuple(tuple(int(part, 0) for part in text.split(":"))
                                for text in args.mmio_region),
             symbolic_globals=args.globals == "symbolic",

@@ -114,6 +114,12 @@ both sides. `--arg-range INDEX:LOW:HIGH` bounds an integer argument so that
 such an address stays in range. An address with more possible values leaves
 the run `incomplete`.
 
+A callee is replaced by a record of the call and an unknown result, and is
+assumed to write no memory. That is wrong for a helper that returns a second
+result through a pointer. `--follow-callee NAME` executes such a callee on
+both sides instead. `--arg-suffix INDEX:HEX` sets the bytes that follow an
+argument's buffer; without it they are zero.
+
 Both sides start from the same symbolic arguments, argument buffers and
 writable globals. Calls are not followed: each is recorded and returns a
 symbol shared by both sides. The result of a read-only string function
@@ -148,7 +154,10 @@ Patcherex2 environment of the suites already has.
 | `httpd` `FUN_0007ae8c` reinserted unchanged, 3-byte buffers, offset argument 0 to 8 | proven, 16 and 16 paths |
 | the same with the offset argument not bounded | incomplete: the write address can be anywhere |
 | the same with one byte changed (a stored `/` becomes `.`) | failed P2 |
-| `cgibin` `FUN_00026534` reinserted unchanged, 2-byte buffer, `strncasecmp` and `strchr` modelled | incomplete: 160 and 1,788 paths finished in 150 seconds per side, hundreds unfinished; the branches on the results of its own helper functions remain |
+| `cgibin` `FUN_00026534` reinserted unchanged, 2-byte buffer followed by `99;`, `FUN_0002609c` and `FUN_0002619c` followed | proven, 17 and 17 paths, 7 seconds |
+| the same with one byte changed (a compared character, `;` to `:`) | failed P4 |
+| the same unchanged, without following the two helpers | incomplete: the loop never advances, because the helper's length result is lost |
+| the same unchanged, 4-byte buffer | incomplete: 108 and 111 paths explored in 20 seconds, 6,590 of 11,988 path pairs compared in 100 seconds |
 
 Limits of the prototype: callees are assumed to write no memory; stack and
 floating-point arguments are not compared; memory that is read before it is

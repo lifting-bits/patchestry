@@ -253,5 +253,58 @@ class Models(unittest.TestCase):
         self.assertEqual(report["assumptions"]["modelled_callees"], [])
 
 
+# The helper comes first in the link, so it and `put` sit at the same addresses
+# in both images. It hands back a second result through a pointer.
+TAKE = """
+__attribute__((noinline)) int take(const char *s, int *used) { *used = 1; return s[0]; }
+"""
+THROUGH_TAKE = """
+int take(const char *s, int *used);
+int put(const char *s) { int used = 0; int value = take(s, &used); return value + used; }
+"""
+WITHOUT_TAKE = "int put(const char *s) { return s[0] + 1; }\n"
+AFTER_BUFFER = "int put(const char *s) { return s[1]; }\n"
+SEMICOLON = "int put(const char *s) { return ';'; }\n"
+
+
+@unittest.skipUnless((LLVM / "clang").is_file() and LLD.is_file(),
+                     "PATCHESTRY_LLVM_PREFIX has no clang and ld.lld")
+class Inputs(unittest.TestCase):
+    """Callees that are executed, and the bytes that follow a buffer."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.directory = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_check(self, first: list[str], second: list[str], **settings) -> dict:
+        import angr
+        original = build(self.directory, "first", first)
+        rewritten = build(self.directory, "second", second)
+        symbol = angr.Project(str(original), auto_load_libs=False).loader.find_symbol("put")
+        return cbe.check_binary_equivalence(
+            original, rewritten, symbol.rebased_addr & ~1, bool(symbol.rebased_addr & 1),
+            cbe.Settings(arg_buffers={0: 1}, returns_value=True, **settings))
+
+    def test_followed_callee_writes_through_its_argument(self):
+        report = self.run_check([TAKE, THROUGH_TAKE], [TAKE, WITHOUT_TAKE],
+                                followed_callees=("take",))
+        self.assertEqual(report["verdict"], "proven", report)
+
+    def test_replaced_callee_leaves_the_result_unknown(self):
+        report = self.run_check([TAKE, THROUGH_TAKE], [TAKE, WITHOUT_TAKE])
+        self.assertEqual(report["verdict"], "failed", report)
+
+    def test_suffix_is_what_follows_the_buffer(self):
+        report = self.run_check([AFTER_BUFFER], [SEMICOLON], arg_suffixes={0: b";"})
+        self.assertEqual(report["verdict"], "proven", report)
+
+    def test_without_a_suffix_zero_follows_the_buffer(self):
+        report = self.run_check([AFTER_BUFFER], [SEMICOLON])
+        self.assertEqual(report["checks"]["P3"], "failed", report)
+
+
 if __name__ == "__main__":
     unittest.main()
