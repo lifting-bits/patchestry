@@ -32,7 +32,10 @@ How it works:
    one that is the address of read-only data as the bytes found there,
    because the two images lay both out differently.  A
    call into code the rewrite added is followed, since that code is part of
-   the patch.  Writes outside the stack are recorded; writes to a declared
+   the patch.  The read-only string functions in MODELS (`strncmp`,
+   `strncasecmp`, `strchr`, ...) are recorded the same way, but their result
+   is computed from the bytes they are given when the pointers and the
+   length are fixed on the path; `--no-models` turns that off.  Writes outside the stack are recorded; writes to a declared
    device range are recorded in order.  A write through an address that
    depends on the input is made to every address it can reach (at most
    SYMBOLIC_WRITE_SPAN of them), each under its own condition, and the whole
@@ -78,6 +81,7 @@ CLI: check_binary_equivalence.py --original ELF --rewritten ELF
      [--prototypes IR] [--arg-buffer INDEX:SIZE] [--arg-range INDEX:LOW:HIGH]
      [--reject-handler NAME]
      [--reject-return VALUE] [--reject-skip NAME] [--pure-callee NAME]
+     [--no-models]
      [--mmio-region LOW:HIGH] [--globals symbolic|image]
      [--max-paths N] [--max-steps N] [--max-seconds N] [--output FILE]
 Exit 0 when proven, 1 when failed, 3 when incomplete, 2 on usage errors.
@@ -124,12 +128,118 @@ class Settings:
     pure_callees: tuple = ()
     mmio_regions: tuple = ()  # (low, high), inclusive
     symbolic_globals: bool = True
+    models: bool = True  # compute the result of the functions in MODELS
     prototypes: dict = field(default_factory=dict)  # callee -> argument count
     returns_value: bool = True
     default_args: int = 4
     max_paths: int = 256
     max_steps: int = 4000
     max_seconds: float = 300.0  # per side, and again for the comparison
+
+
+# A modelled string function looks at this many bytes at most.
+MODEL_BYTES = 64
+
+
+def _fixed(state, value):
+    """The value when the path fixes it, else None."""
+    return None if state.solver.symbolic(value) else state.solver.eval(value)
+
+
+def _bytes(state, address: int, count: int) -> list:
+    return [state.memory.load(address + index, 1) for index in range(count)]
+
+
+def _string(state, address: int):
+    """The bytes at `address` up to and including the first byte that is
+    zero on every input, or None when there is none within MODEL_BYTES."""
+    found = []
+    for byte in _bytes(state, address, MODEL_BYTES):
+        found.append(byte)
+        if _fixed(state, byte) == 0:
+            return found
+    return None
+
+
+def _lower(byte):
+    return claripy.If(claripy.And(claripy.UGE(byte, 0x41), claripy.ULE(byte, 0x5A)),
+                      byte + 0x20, byte)
+
+
+def _difference(first: list, second: list, fold: bool, strings: bool):
+    """What a comparison function returns: the difference of the first pair
+    of bytes that differ, zero when none does (or, for strings, when both
+    end first)."""
+    result = claripy.BVV(0, 32)
+    for one, other in reversed(list(zip(first, second))):
+        if fold:
+            one, other = _lower(one), _lower(other)
+        rest = claripy.If(one == 0, claripy.BVV(0, 32), result) if strings else result
+        result = claripy.If(one != other, one.zero_extend(24) - other.zero_extend(24), rest)
+    return result
+
+
+def _compare_counted(fold: bool, strings: bool):
+    def model(state, first, second, count):
+        first, second, count = (_fixed(state, value) for value in (first, second, count))
+        if first is None or second is None or count is None or count > MODEL_BYTES:
+            return None
+        return _difference(_bytes(state, first, count), _bytes(state, second, count),
+                           fold, strings)
+    return model
+
+
+def _compare_strings(fold: bool):
+    def model(state, first, second):
+        first, second = _fixed(state, first), _fixed(state, second)
+        if first is None or second is None:
+            return None
+        ends = [len(found) for found in (_string(state, first), _string(state, second))
+                if found is not None]
+        if not ends:
+            return None
+        return _difference(_bytes(state, first, min(ends)), _bytes(state, second, min(ends)),
+                           fold, True)
+    return model
+
+
+def _model_strlen(state, address):
+    address = _fixed(state, address)
+    found = _string(state, address) if address is not None else None
+    if found is None:
+        return None
+    result = claripy.BVV(len(found) - 1, 32)
+    for index in reversed(range(len(found) - 1)):
+        result = claripy.If(found[index] == 0, claripy.BVV(index, 32), result)
+    return result
+
+
+def _model_strchr(state, address, wanted):
+    address = _fixed(state, address)
+    found = _string(state, address) if address is not None else None
+    if found is None:
+        return None
+    wanted = wanted[7:0]
+    last = len(found) - 1
+    result = claripy.If(wanted == 0, claripy.BVV(address + last, 32), claripy.BVV(0, 32))
+    for index in reversed(range(last)):
+        result = claripy.If(found[index] == wanted, claripy.BVV(address + index, 32),
+                            claripy.If(found[index] == 0, claripy.BVV(0, 32), result))
+    return result
+
+
+# Functions that read memory and write none: name -> (argument count, model).
+# A model returns None when it cannot compute the result on this path, and
+# the call is then uninterpreted like any other.
+MODELS = {
+    "strncmp": (3, _compare_counted(fold=False, strings=True)),
+    "strncasecmp": (3, _compare_counted(fold=True, strings=True)),
+    "memcmp": (3, _compare_counted(fold=False, strings=False)),
+    "strcmp": (2, _compare_strings(fold=False)),
+    "strcasecmp": (2, _compare_strings(fold=True)),
+    "strlen": (1, _model_strlen),
+    "strchr": (2, _model_strchr),
+}
 
 
 @dataclass
@@ -205,6 +315,7 @@ class Side:
         self.names.update({address & ~1: name
                            for address, name in getattr(self.main, "reverse_plt", {}).items()})
         self.notes: set[str] = set()
+        self.modelled: set[str] = set()
         self.paths: list[Path_] = []
         self.steps = 0
 
@@ -335,6 +446,13 @@ class Side:
         """Replace a call by its record and result; False when the path ends."""
         callee = self.name(target)
         count = self.settings.prototypes.get(callee, self.settings.default_args)
+        result = None
+        if self.settings.models and callee in MODELS:
+            count, model = MODELS[callee]
+            result = model(state, *[getattr(state.regs, register)
+                                    for register in ARGUMENT_REGISTERS[:count]])
+            if result is not None:
+                self.modelled.add(callee)
         arguments = tuple(self.argument(state, getattr(state.regs, register))
                           for register in ARGUMENT_REGISTERS[:count])
         if callee in self.settings.reject_handlers:
@@ -346,7 +464,7 @@ class Side:
         index = counts.get(callee, 0)
         counts[callee] = index + 1
         state.globals["counts"] = tuple(sorted(counts.items()))
-        state.regs.r0 = self.shared.returned(callee, index)
+        state.regs.r0 = result if result is not None else self.shared.returned(callee, index)
         state.regs.pc = state.regs.lr
         return True
 
@@ -530,6 +648,7 @@ def check_binary_equivalence(original: Path, rewritten: Path, entry: int, thumb:
             "globals": "symbolic" if settings.symbolic_globals else "image",
             "callees": "uninterpreted; they write no memory; the result depends on the "
                        "callee and the call index",
+            "modelled_callees": sorted(before.modelled | after.modelled),
             "callee_arguments": {"known": settings.prototypes,
                                  "otherwise": settings.default_args},
             "unwritten_memory": "zero",
@@ -563,6 +682,8 @@ def main() -> int:
                         type=lambda text: int(text, 0))
     parser.add_argument("--reject-skip", action="append", default=[])
     parser.add_argument("--pure-callee", action="append", default=[])
+    parser.add_argument("--no-models", action="store_true",
+                        help="leave the string functions in MODELS uninterpreted")
     parser.add_argument("--mmio-region", action="append", default=[], metavar="LOW:HIGH")
     parser.add_argument("--globals", choices=("symbolic", "image"), default="symbolic")
     parser.add_argument("--default-args", type=int, default=4)
@@ -588,6 +709,7 @@ def main() -> int:
             mmio_regions=tuple(tuple(int(part, 0) for part in text.split(":"))
                                for text in args.mmio_region),
             symbolic_globals=args.globals == "symbolic",
+            models=not args.no_models,
             default_args=args.default_args, max_paths=args.max_paths,
             max_steps=args.max_steps, max_seconds=args.max_seconds,
         )

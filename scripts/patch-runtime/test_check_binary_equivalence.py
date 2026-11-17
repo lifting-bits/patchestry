@@ -28,6 +28,36 @@ FIRMWARE = Path(__file__).resolve().parents[2] / "firmwares/serial-qemu/build/se
 LLVM = Path(os.environ.get("PATCHESTRY_LLVM_PREFIX", "/nonexistent"))
 LLD = Path(os.environ.get("PATCHESTRY_LD_LLD", LLVM / "ld.lld"))
 
+def build(directory: Path, name: str, sources: list[str], flags: list[str] = ()) -> Path:
+    """A Thumb ELF from C sources, each its own object; the entry is `put`."""
+    objects = []
+    for index, source in enumerate(sources):
+        path = directory / f"{name}{index}.c"
+        path.write_text(source, encoding="utf-8")
+        objects.append(directory / f"{name}{index}.o")
+        subprocess.run([str(LLVM / "clang"), "--target=thumbv7m-none-eabi", "-O1",
+                        "-ffreestanding", "-fno-builtin", *flags, "-c", str(path),
+                        "-o", str(objects[-1])], check=True)
+    elf = directory / f"{name}.elf"
+    subprocess.run([str(LLD), "-Ttext=0x8000", "-e", "put", *map(str, objects),
+                    "-o", str(elf)], check=True)
+    return elf
+
+
+# Stands for the library function: the comparison never runs a callee.
+STRNCASECMP = "int strncasecmp(const char *a, const char *b, unsigned n) { return 0; }\n"
+BY_CALL = """
+int strncasecmp(const char *a, const char *b, unsigned n);
+int put(const char *s) { return strncasecmp(s, "&amp;", 5) == 0; }
+"""
+BY_HAND = """
+int put(const char *s) {
+    return s[0] == '&' && (s[1] | 32) == 'a' && (s[2] | 32) == LETTER
+        && (s[3] | 32) == 'p' && s[4] == ';';
+}
+"""
+
+
 # Stores one byte at an index taken from the input.
 INDEXED_STORE = """
 void put(unsigned char *out, unsigned index, unsigned char value) {
@@ -144,14 +174,7 @@ class SymbolicAddress(unittest.TestCase):
         self.tmp.cleanup()
 
     def image(self, name: str, addend: int, source: str = INDEXED_STORE) -> Path:
-        (self.directory / "put.c").write_text(source, encoding="utf-8")
-        obj, elf = self.directory / f"{name}.o", self.directory / f"{name}.elf"
-        subprocess.run([str(LLVM / "clang"), "--target=thumbv7m-none-eabi", "-O1",
-                        "-ffreestanding", f"-DADDEND={addend}", "-c",
-                        str(self.directory / "put.c"), "-o", str(obj)], check=True)
-        subprocess.run([str(LLD), "-Ttext=0x8000", "-e", "put", str(obj), "-o", str(elf)],
-                       check=True)
-        return elf
+        return build(self.directory, name, [source], [f"-DADDEND={addend}"])
 
     def run_check(self, original: Path, rewritten: Path, **settings) -> dict:
         import angr
@@ -190,6 +213,44 @@ class SymbolicAddress(unittest.TestCase):
                                 arg_buffers={0: 8})
         self.assertEqual(report["verdict"], "incomplete", report)
         self.assertTrue(any("possible values" in note for note in report["incomplete"]))
+
+
+@unittest.skipUnless((LLVM / "clang").is_file() and LLD.is_file(),
+                     "PATCHESTRY_LLVM_PREFIX has no clang and ld.lld")
+class Models(unittest.TestCase):
+    """A call of strncasecmp against the same test written out by hand."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.directory = Path(self.tmp.name)
+        self.called = build(self.directory, "called", [BY_CALL, STRNCASECMP])
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_check(self, letter: str, **settings) -> dict:
+        import angr
+        by_hand = build(self.directory, "hand", [BY_HAND, STRNCASECMP],
+                        [f"-DLETTER='{letter}'"])
+        symbol = angr.Project(str(self.called), auto_load_libs=False).loader.find_symbol("put")
+        return cbe.check_binary_equivalence(
+            self.called, by_hand, symbol.rebased_addr & ~1, bool(symbol.rebased_addr & 1),
+            cbe.Settings(arg_buffers={0: 8}, pure_callees=("strncasecmp",),
+                         prototypes={"strncasecmp": 3}, **settings))
+
+    def test_modelled_call_equals_the_test_by_hand(self):
+        report = self.run_check("m")
+        self.assertEqual(report["verdict"], "proven", report)
+        self.assertEqual(report["assumptions"]["modelled_callees"], ["strncasecmp"])
+
+    def test_another_letter_fails_p3(self):
+        report = self.run_check("n")
+        self.assertEqual(report["checks"]["P3"], "failed", report)
+
+    def test_without_the_model_the_result_is_unknown(self):
+        report = self.run_check("m", models=False)
+        self.assertEqual(report["checks"]["P3"], "failed", report)
+        self.assertEqual(report["assumptions"]["modelled_callees"], [])
 
 
 if __name__ == "__main__":

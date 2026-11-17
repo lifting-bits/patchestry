@@ -116,7 +116,10 @@ the run `incomplete`.
 
 Both sides start from the same symbolic arguments, argument buffers and
 writable globals. Calls are not followed: each is recorded and returns a
-symbol shared by both sides. Each side is explored path by path, and for
+symbol shared by both sides. The result of a read-only string function
+(`strncmp`, `strncasecmp`, `strcmp`, `strcasecmp`, `memcmp`, `strlen`,
+`strchr`) is computed from the bytes it is given when its pointers and length
+are fixed on the path. Each side is explored path by path, and for
 every pair of paths one input can take, the solver is asked for an input that
 violates P1, P2, P3, P4 or the device write order. The verdict is `proven`
 when no such input exists and every path of both sides was explored, `failed`
@@ -145,7 +148,7 @@ Patcherex2 environment of the suites already has.
 | `httpd` `FUN_0007ae8c` reinserted unchanged, 3-byte buffers, offset argument 0 to 8 | proven, 16 and 16 paths |
 | the same with the offset argument not bounded | incomplete: the write address can be anywhere |
 | the same with one byte changed (a stored `/` becomes `.`) | failed P2 |
-| `cgibin` `FUN_00026534` reinserted unchanged | incomplete: more than 150 paths |
+| `cgibin` `FUN_00026534` reinserted unchanged, 2-byte buffer, `strncasecmp` and `strchr` modelled | incomplete: 160 and 1,788 paths finished in 150 seconds per side, hundreds unfinished; the branches on the results of its own helper functions remain |
 
 Limits of the prototype: callees are assumed to write no memory; stack and
 floating-point arguments are not compared; memory that is read before it is
