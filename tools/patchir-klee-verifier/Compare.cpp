@@ -22,6 +22,9 @@
 //
 //    0  both versions accepted the input and agree on everything compared
 //    1  the patched version rejected the input
+//    2  the patched version rejected the input by leaving out a call the
+//       original makes, of a callee declared for that; the calls agree
+//       otherwise, and nothing else is compared
 //   10  P1: the patched version accepted an input the original rejects
 //   20  inconclusive: a version called an external function the harness
 //       cannot model (one that returns a pointer or a non-integer and has no
@@ -29,7 +32,19 @@
 //   30  the original, run alone, accepted the input
 //   31  the original, run alone, rejected the input
 //   64 + bits  both accepted and differ: 1 the return value (P3), 2 the
-//       final memory (P2), 4 the external calls (P4)
+//       final memory (P2), 4 the external calls (P4), 8 the writes to
+//       device registers, 16 the balance of acquire and release calls
+//  128 + bits  the patched version rejected the input, and before that:
+//       1 wrote memory, 2 called a function that is not a declared reject
+//       effect, 4 wrote a device register, 8 left an acquire unreleased
+//
+// Device registers are the declared address ranges (`__patchestry_mmio`).
+// Every load and store of either version that is not plainly of a local or a
+// global asks the runner first (`__patchestry_mmio_read`,
+// `__patchestry_mmio_write`): inside a range the write is recorded and not
+// performed, and a read returns the next of a series of values both sides
+// share.  A declared (acquire, release) pair is counted per side
+// (`__patchestry_balance`).
 //
 // P2 compares, after both runs, each side's copy of every global that started
 // symbolic, and the contents of every argument buffer.  P4 compares the calls
@@ -64,6 +79,8 @@
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DataLayout.h>
 #include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/Instructions.h>
+#include <llvm/IR/Operator.h>
 #include <llvm/IR/Module.h>
 #include <llvm/Linker/Linker.h>
 #include <llvm/Support/FileSystem.h>
@@ -84,12 +101,25 @@ namespace patchestry::klee_verifier {
 
         constexpr unsigned kAccepted        = 0;
         constexpr unsigned kPatchedRejected = 1;
+        constexpr unsigned kPatchedSkipped  = 2;
+        constexpr unsigned kTraceSkipped    = 3;
+        // Marks the id of a callee whose call the patched version may leave out.
+        constexpr unsigned kSkipBit         = 0x20000000;
         constexpr unsigned kP1Violation     = 10;
         constexpr unsigned kViolation       = 64;
         constexpr unsigned kReturnDiffers   = 1;
         constexpr unsigned kMemoryDiffers   = 2;
         constexpr unsigned kCallsDiffer     = 4;
         constexpr unsigned kTraceOverflow   = 2;
+        constexpr unsigned kDeviceDiffers   = 8;
+        constexpr unsigned kBalanceDiffers  = 16;
+        constexpr unsigned kRejectViolation = 128;
+        constexpr unsigned kRejectWrote     = 1;
+        constexpr unsigned kRejectCalled    = 2;
+        constexpr unsigned kRejectDevice    = 4;
+        constexpr unsigned kRejectUnbalanced = 8;
+        // Marks the id of a callee that is a declared reject effect.
+        constexpr unsigned kEffectBit       = 0x40000000;
         constexpr unsigned kUnmodelled      = 20;
         constexpr unsigned kOriginalAloneAccepted = 30;
         constexpr unsigned kOriginalAloneRejected = 31;
@@ -155,6 +185,12 @@ namespace patchestry::klee_verifier {
             llvm::FunctionCallee path_end;
             llvm::FunctionCallee trace_call;
             llvm::FunctionCallee trace_arg;
+            llvm::FunctionCallee balance;
+            // Ends a path on which the patched version rejected its input.
+            llvm::Function *reject_end;
+            std::set< std::string > effects;
+            std::set< std::string > skips;
+            std::map< std::string, std::pair< unsigned, int > > balance_of;
             std::map< std::string, unsigned > callee_ids;
             std::map< std::string, std::pair< llvm::GlobalVariable *, llvm::GlobalVariable * > >
                 tables;
@@ -186,6 +222,22 @@ namespace patchestry::klee_verifier {
                 trace_arg = M.getOrInsertFunction(
                     "__patchestry_trace_arg", llvm::FunctionType::get(nothing, { size_ty }, false)
                 );
+                balance = M.getOrInsertFunction(
+                    "__patchestry_balance", llvm::FunctionType::get(nothing, { i32, i32 }, false)
+                );
+                reject_end = llvm::Function::Create(
+                    llvm::FunctionType::get(nothing, false), llvm::GlobalValue::InternalLinkage,
+                    "__patchestry_reject_end", M
+                );
+                reject_end->setDoesNotReturn();
+                effects.insert(opts.reject_effects.begin(), opts.reject_effects.end());
+                skips.insert(opts.reject_skips.begin(), opts.reject_skips.end());
+                unsigned pair = 0;
+                for (const auto &[acquire, release] : opts.balance) {
+                    balance_of[acquire] = { pair, 1 };
+                    balance_of[release] = { pair, -1 };
+                    ++pair;
+                }
             }
 
             unsigned calleeId(const std::string &name) {
@@ -193,7 +245,15 @@ namespace patchestry::klee_verifier {
                 if (found != callee_ids.end()) {
                     return found->second;
                 }
-                const auto id     = static_cast< unsigned >(callee_ids.size()) + 1;
+                auto id = static_cast< unsigned >(callee_ids.size()) + 1;
+                // A balanced callee may be called before a rejection: what is
+                // checked there is that the calls balance.
+                if (effects.count(name) != 0U || balance_of.count(name) != 0U) {
+                    id |= kEffectBit;
+                }
+                if (skips.count(name) != 0U) {
+                    id |= kSkipBit;
+                }
                 callee_ids[name] = id;
                 return id;
             }
@@ -263,7 +323,8 @@ namespace patchestry::klee_verifier {
                 builder.SetInsertPoint(original);
                 endPath(builder, kP1Violation);
                 builder.SetInsertPoint(patched);
-                endPath(builder, kPatchedRejected);
+                builder.CreateCall(reject_end);
+                builder.CreateUnreachable();
             }
 
             // The table of values a stub returns, and its call counter.  Null
@@ -293,6 +354,20 @@ namespace patchestry::klee_verifier {
             ) {
                 const std::string name = function.getName().str();
                 llvm::IRBuilder<> builder(llvm::BasicBlock::Create(context, "entry", &function));
+                auto counted = balance_of.find(name);
+                if (counted != balance_of.end()) {
+                    builder.CreateCall(
+                        balance,
+                        { llvm::ConstantInt::get(i32, counted->second.first),
+                          llvm::ConstantInt::get(
+                              i32, static_cast< uint64_t >(counted->second.second), true
+                          ) }
+                    );
+                    row["balance"] = counted->second.second > 0 ? "acquire" : "release";
+                }
+                if (effects.count(name) != 0U) {
+                    row["reject_effect"] = true;
+                }
                 if (substitution != nullptr) {
                     // In the patched version this call stands for a call of
                     // the function it replaces.
@@ -404,6 +479,15 @@ namespace patchestry::klee_verifier {
                 std::set< std::string > pures(
                     options.pure_callees.begin(), options.pure_callees.end()
                 );
+                for (const auto &name : options.noreturn_handlers) {
+                    auto *function = module.getFunction(name);
+                    if (handlers.count(name) == 0U || function == nullptr) {
+                        LOG(ERROR) << "'" << name
+                                   << "' is declared not to return and is not a reject handler\n";
+                        return false;
+                    }
+                    function->setDoesNotReturn();
+                }
                 std::map< std::string, const Substitution * > swaps;
                 for (const auto &swap : options.substitutions) {
                     if (pures.count(swap.original) != 0U || pures.count(swap.patched) != 0U
@@ -451,6 +535,33 @@ namespace patchestry::klee_verifier {
                         return false;
                     }
                 }
+                for (const auto &skip : options.reject_skips) {
+                    if (seen.count(skip) == 0U || handlers.count(skip) != 0U
+                        || pures.count(skip) != 0U)
+                    {
+                        LOG(ERROR) << "skipped callee '" << skip
+                                   << "' is not called by either version, or is also declared "
+                                      "a reject handler or pure\n";
+                        return false;
+                    }
+                }
+                for (const auto &effect : options.reject_effects) {
+                    if (seen.count(effect) == 0U || handlers.count(effect) != 0U) {
+                        LOG(ERROR) << "reject effect '" << effect
+                                   << "' is not called by either version, or is a reject handler\n";
+                        return false;
+                    }
+                }
+                for (const auto &[name, counted] : balance_of) {
+                    if (seen.count(name) == 0U || handlers.count(name) != 0U
+                        || pures.count(name) != 0U || swaps.count(name) != 0U)
+                    {
+                        LOG(ERROR) << "balanced callee '" << name
+                                   << "' is not called by either version, or is also declared "
+                                      "a reject handler, pure or a substitute\n";
+                        return false;
+                    }
+                }
                 for (const auto &pure : options.pure_callees) {
                     if (seen.count(pure) == 0U) {
                         LOG(ERROR) << "pure callee '" << pure
@@ -468,6 +579,108 @@ namespace patchestry::klee_verifier {
                 return true;
             }
         };
+
+        // The object a pointer is computed from, through casts and offsets.
+        const llvm::Value *baseOf(const llvm::Value *pointer) {
+            for (;;) {
+                pointer = pointer->stripPointerCasts();
+                if (const auto *offset = llvm::dyn_cast< llvm::GEPOperator >(pointer)) {
+                    pointer = offset->getPointerOperand();
+                    continue;
+                }
+                return pointer;
+            }
+        }
+
+        // Route every load and store of `function` that may reach a device
+        // register through the runner.  Returns how many were routed.
+        unsigned instrumentDevice(llvm::Function &function, llvm::IntegerType *size_ty) {
+            auto &context = function.getContext();
+            auto &module  = *function.getParent();
+            const auto &dl = module.getDataLayout();
+            auto *i32     = llvm::Type::getInt32Ty(context);
+            auto *i64     = llvm::Type::getInt64Ty(context);
+            auto *pointer = llvm::PointerType::getUnqual(context);
+            auto write    = module.getOrInsertFunction(
+                "__patchestry_mmio_write", llvm::FunctionType::get(i32, { size_ty, i64, i32 }, false)
+            );
+            auto read = module.getOrInsertFunction(
+                "__patchestry_mmio_read", llvm::FunctionType::get(i32, { size_ty, i32, pointer }, false)
+            );
+            auto routable = [&](llvm::Type *type) {
+                return type->isPointerTy()
+                    || (type->isIntegerTy() && type->getIntegerBitWidth() <= 64);
+            };
+            auto local = [&](const llvm::Value *address) {
+                const auto *base = baseOf(address);
+                return llvm::isa< llvm::AllocaInst >(base) || llvm::isa< llvm::GlobalValue >(base);
+            };
+            std::vector< llvm::Instruction * > accesses;
+            for (auto &block : function) {
+                for (auto &instruction : block) {
+                    if (auto *store = llvm::dyn_cast< llvm::StoreInst >(&instruction)) {
+                        if (!local(store->getPointerOperand())
+                            && routable(store->getValueOperand()->getType())) {
+                            accesses.push_back(store);
+                        }
+                    } else if (auto *load = llvm::dyn_cast< llvm::LoadInst >(&instruction)) {
+                        if (!local(load->getPointerOperand()) && routable(load->getType())) {
+                            accesses.push_back(load);
+                        }
+                    }
+                }
+            }
+            if (accesses.empty()) {
+                return 0;
+            }
+            auto *slot = new llvm::AllocaInst(
+                i64, dl.getAllocaAddrSpace(), "device.value",
+                function.getEntryBlock().getFirstInsertionPt()
+            );
+            auto *zero = llvm::ConstantInt::get(i32, 0);
+            for (auto *access : accesses) {
+                auto *head = access->getParent();
+                auto *real = head->splitBasicBlock(access->getIterator(), "device.real");
+                auto *done = real->splitBasicBlock(std::next(access->getIterator()), "device.done");
+                head->getTerminator()->eraseFromParent();
+                llvm::IRBuilder<> builder(head);
+                if (auto *store = llvm::dyn_cast< llvm::StoreInst >(access)) {
+                    auto *value = store->getValueOperand();
+                    const auto bytes = dl.getTypeStoreSize(value->getType()).getFixedValue();
+                    if (value->getType()->isPointerTy()) {
+                        value = builder.CreatePtrToInt(value, size_ty);
+                    }
+                    auto *handled = builder.CreateCall(
+                        write,
+                        { builder.CreatePtrToInt(store->getPointerOperand(), size_ty),
+                          builder.CreateZExtOrTrunc(value, i64), llvm::ConstantInt::get(i32, bytes) }
+                    );
+                    builder.CreateCondBr(builder.CreateICmpNE(handled, zero), done, real);
+                    continue;
+                }
+                auto *load       = llvm::cast< llvm::LoadInst >(access);
+                auto *type       = load->getType();
+                const auto bytes = dl.getTypeStoreSize(type).getFixedValue();
+                auto *modelled   = llvm::BasicBlock::Create(context, "device.read", &function, done);
+                auto *handled    = builder.CreateCall(
+                    read,
+                    { builder.CreatePtrToInt(load->getPointerOperand(), size_ty),
+                      llvm::ConstantInt::get(i32, bytes), slot }
+                );
+                builder.CreateCondBr(builder.CreateICmpNE(handled, zero), modelled, real);
+                builder.SetInsertPoint(modelled);
+                llvm::Value *value = builder.CreateLoad(i64, slot);
+                value = type->isPointerTy()
+                    ? builder.CreateIntToPtr(builder.CreateZExtOrTrunc(value, size_ty), type)
+                    : builder.CreateZExtOrTrunc(value, type);
+                builder.CreateBr(done);
+                auto *merged = llvm::PHINode::Create(type, 2, "", done->begin());
+                load->replaceAllUsesWith(merged);
+                merged->addIncoming(value, modelled);
+                merged->addIncoming(load, real);
+            }
+            return static_cast< unsigned >(accesses.size());
+        }
 
     } // namespace
 
@@ -561,6 +774,17 @@ namespace patchestry::klee_verifier {
         const auto &dl = module.getDataLayout();
         auto *i32      = harness.i32;
         auto *size_ty  = harness.size_ty;
+        unsigned device_accesses = 0;
+        if (!options.mmio_regions.empty()) {
+            for (auto &function : module) {
+                if (!function.isDeclaration()
+                    && (function.getName().ends_with(".orig")
+                        || function.getName().ends_with(".patched")))
+                {
+                    device_accesses += instrumentDevice(function, size_ty);
+                }
+            }
+        }
         auto *main_fn  = llvm::Function::Create(
             llvm::FunctionType::get(i32, false), llvm::GlobalValue::ExternalLinkage, "main",
             module
@@ -581,6 +805,10 @@ namespace patchestry::klee_verifier {
             llvm::Value *original;
             llvm::Value *patched;
             uint64_t size;
+            // For an argument buffer: where its address and the address of
+            // its initial contents are kept, for the reject-path check.
+            llvm::GlobalVariable *live_slot    = nullptr;
+            llvm::GlobalVariable *initial_slot = nullptr;
         };
         std::vector< Region > regions;
         llvm::json::Array region_names;
@@ -622,8 +850,47 @@ namespace patchestry::klee_verifier {
                 llvm::ConstantInt::get(size_ty, size)
             );
             symbolic_globals.push_back(name);
-            regions.push_back({ ours, theirs, size });
+            regions.push_back({ ours, theirs, size, nullptr, nullptr });
             region_names.push_back(name);
+        }
+        {
+            // The declared device ranges, and the values a read of one returns.
+            auto *range_ty = llvm::StructType::get(context, { size_ty, size_ty });
+            std::vector< llvm::Constant * > ranges;
+            for (const auto &[low, high] : options.mmio_regions) {
+                ranges.push_back(llvm::ConstantStruct::get(
+                    range_ty,
+                    { llvm::ConstantInt::get(size_ty, low), llvm::ConstantInt::get(size_ty, high) }
+                ));
+            }
+            const auto range_count = static_cast< unsigned >(ranges.size());
+            if (ranges.empty()) {
+                ranges.push_back(llvm::Constant::getNullValue(range_ty));
+            }
+            auto *ranges_ty = llvm::ArrayType::get(range_ty, ranges.size());
+            new llvm::GlobalVariable(
+                module, ranges_ty, true, llvm::GlobalValue::ExternalLinkage,
+                llvm::ConstantArray::get(ranges_ty, ranges), "__patchestry_mmio"
+            );
+            new llvm::GlobalVariable(
+                module, i32, true, llvm::GlobalValue::ExternalLinkage,
+                llvm::ConstantInt::get(i32, range_count), "__patchestry_mmio_count"
+            );
+            auto *values_ty =
+                llvm::ArrayType::get(llvm::Type::getInt64Ty(context), options.stub_values);
+            auto *values = new llvm::GlobalVariable(
+                module, values_ty, false, llvm::GlobalValue::ExternalLinkage,
+                llvm::Constant::getNullValue(values_ty), "__patchestry_mmio_values"
+            );
+            new llvm::GlobalVariable(
+                module, i32, true, llvm::GlobalValue::ExternalLinkage,
+                llvm::ConstantInt::get(i32, options.stub_values), "__patchestry_mmio_value_count"
+            );
+            if (range_count != 0) {
+                symbolic(
+                    values, dl.getTypeAllocSize(values_ty).getFixedValue(), "device.values"
+                );
+            }
         }
         {
             const auto count = static_cast< unsigned >(pairs.size());
@@ -729,7 +996,12 @@ namespace patchestry::klee_verifier {
                 );
                 auto *after = copies_after[index];
                 buffers.push_back({ live, initial, after, size });
-                regions.push_back({ live, after, size });
+                auto *live_slot    = newGlobal(module, pointer, "__patchestry_buffer." + name);
+                auto *initial_slot =
+                    newGlobal(module, pointer, "__patchestry_initial." + name);
+                builder.CreateStore(live, live_slot);
+                builder.CreateStore(initial, initial_slot);
+                regions.push_back({ live, after, size, live_slot, initial_slot });
                 region_names.push_back(name);
                 arguments.push_back(
                     type->isPointerTy() ? static_cast< llvm::Value * >(live)
@@ -788,6 +1060,59 @@ namespace patchestry::klee_verifier {
             "__patchestry_memory_differs",
             llvm::FunctionType::get(i32, { pointer, pointer, size_ty, i32 }, false)
         );
+        auto count_of = [&](const char *name) {
+            return module.getOrInsertFunction(name, llvm::FunctionType::get(i32, false));
+        };
+        {
+            // The patched version rejected the input.  Until then it must
+            // have changed nothing: the original has not run, so its copy of
+            // every global, and the initial contents of every buffer, still
+            // hold what the patched version started from.
+            llvm::IRBuilder<> end(llvm::BasicBlock::Create(context, "entry", harness.reject_end));
+            auto *none         = llvm::ConstantInt::get(i32, 0);
+            llvm::Value *dirty = none;
+            auto flag          = [&](llvm::Value *count, unsigned bit) {
+                dirty = end.CreateOr(
+                    dirty, end.CreateSelect(
+                               end.CreateICmpNE(count, none), llvm::ConstantInt::get(i32, bit), none
+                           )
+                );
+            };
+            unsigned index = 0;
+            for (const auto &region : regions) {
+                auto *bytes  = llvm::ConstantInt::get(size_ty, region.size);
+                auto *number = llvm::ConstantInt::get(i32, index++);
+                if (region.live_slot == nullptr) {
+                    flag(
+                        end.CreateCall(
+                            memory_differs, { region.original, region.patched, bytes, number }
+                        ),
+                        kRejectWrote
+                    );
+                } else {
+                    flag(
+                        end.CreateCall(
+                            memory_differs,
+                            { end.CreateLoad(pointer, region.initial_slot),
+                              end.CreateLoad(pointer, region.live_slot), bytes, number }
+                        ),
+                        kRejectWrote
+                    );
+                }
+            }
+            flag(end.CreateCall(count_of("__patchestry_reject_calls")), kRejectCalled);
+            flag(end.CreateCall(count_of("__patchestry_reject_device")), kRejectDevice);
+            flag(end.CreateCall(count_of("__patchestry_reject_unbalanced")), kRejectUnbalanced);
+            end.CreateCall(
+                harness.path_end,
+                { end.CreateSelect(
+                    end.CreateICmpNE(dirty, none),
+                    end.CreateOr(dirty, llvm::ConstantInt::get(i32, kRejectViolation)),
+                    llvm::ConstantInt::get(i32, kPatchedRejected)
+                ) }
+            );
+            end.CreateUnreachable();
+        }
         auto begin_side = [&](unsigned which) {
             builder.CreateStore(llvm::ConstantInt::get(i32, which), harness.phase);
             // The runner gives both sides the same heap.
@@ -852,10 +1177,17 @@ namespace patchestry::klee_verifier {
         if (patched_slot != nullptr) {
             builder.CreateStore(patched_result, patched_slot);
         }
-        branch_to_end(
-            did_reject(result_type->isVoidTy() ? nullptr : patched_result), kPatchedRejected,
-            "patched.rejected"
-        );
+        {
+            auto *stop = llvm::BasicBlock::Create(context, "patched.rejected", main_fn);
+            auto *next = llvm::BasicBlock::Create(context, "continue", main_fn);
+            builder.CreateCondBr(
+                did_reject(result_type->isVoidTy() ? nullptr : patched_result), stop, next
+            );
+            builder.SetInsertPoint(stop);
+            builder.CreateCall(harness.reject_end);
+            builder.CreateUnreachable();
+            builder.SetInsertPoint(next);
+        }
         for (const auto &buffer : buffers) {
             auto *bytes = llvm::ConstantInt::get(size_ty, buffer.size);
             builder.CreateMemCpy(
@@ -906,6 +1238,10 @@ namespace patchestry::klee_verifier {
             builder.CreateICmpEQ(traced, llvm::ConstantInt::get(i32, kTraceOverflow)),
             kUnmodelled, "trace.overflow"
         );
+        branch_to_end(
+            builder.CreateICmpEQ(traced, llvm::ConstantInt::get(i32, kTraceSkipped)),
+            kPatchedSkipped, "patched.skipped"
+        );
         bits = builder.CreateOr(
             bits, builder.CreateSelect(
                       builder.CreateICmpNE(traced, zero),
@@ -926,6 +1262,22 @@ namespace patchestry::klee_verifier {
                       )
             );
         }
+        bits = builder.CreateOr(
+            bits, builder.CreateSelect(
+                      builder.CreateICmpNE(
+                          builder.CreateCall(count_of("__patchestry_mmio_differs")), zero
+                      ),
+                      llvm::ConstantInt::get(i32, kDeviceDiffers), zero, "device.differs"
+                  )
+        );
+        bits = builder.CreateOr(
+            bits, builder.CreateSelect(
+                      builder.CreateICmpNE(
+                          builder.CreateCall(count_of("__patchestry_balance_differs")), zero
+                      ),
+                      llvm::ConstantInt::get(i32, kBalanceDiffers), zero, "balance.differs"
+                  )
+        );
         {
             auto *stop = llvm::BasicBlock::Create(context, "violation", main_fn);
             auto *next = llvm::BasicBlock::Create(context, "agree", main_fn);
@@ -958,6 +1310,28 @@ namespace patchestry::klee_verifier {
                                                     { "patched", swap.patched },
                                                     { "compare_args", swap.compare_args } });
         }
+        llvm::json::Array device_rows;
+        for (const auto &[low, high] : options.mmio_regions) {
+            device_rows.push_back(llvm::json::Array{ static_cast< int64_t >(low),
+                                                     static_cast< int64_t >(high) });
+        }
+        llvm::json::Array balance_rows;
+        for (const auto &[acquire, release] : options.balance) {
+            balance_rows.push_back(llvm::json::Array{ acquire, release });
+        }
+        llvm::json::Array effect_rows;
+        for (const auto &effect : options.reject_effects) {
+            effect_rows.push_back(effect);
+        }
+        llvm::json::Array skip_rows;
+        for (const auto &skip : options.reject_skips) {
+            skip_rows.push_back(skip);
+        }
+        info["reject_skips"]     = std::move(skip_rows);
+        info["mmio_regions"]     = std::move(device_rows);
+        info["device_accesses"]  = device_accesses;
+        info["balance"]          = std::move(balance_rows);
+        info["reject_effects"]   = std::move(effect_rows);
         info["memory_regions"]   = std::move(region_names);
         info["pure_callees"]     = std::move(pure_rows);
         info["substitutions"]    = std::move(swap_rows);

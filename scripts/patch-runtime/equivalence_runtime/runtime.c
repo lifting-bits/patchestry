@@ -17,8 +17,8 @@
  *     I <seed> fault <phase>   an exception while <phase> ran (1 original, 2 patched)
  *     I <seed> abort <phase>   an abort-like call while <phase> ran
  *     I <seed> discard 0       klee_assume was false for this input
- *     I <seed> memory <n>      before `end`: memory region <n> differs
- *     I <seed> call <n>        before `end`: the <n>-th calls differ
+ *     I <seed> memory <n>      before `end`: memory region <n> differs, or was written
+ *     I <seed> call <n>        before `end`: the <n>-th calls differ, or is not allowed
  *
  * After a fault or abort in the patched version the same input is run again
  * with the original alone; that line carries the same seed and code 30 or 31,

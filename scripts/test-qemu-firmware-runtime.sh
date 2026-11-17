@@ -190,6 +190,15 @@ PATCHESTRY_LLVM_PREFIX="$llvm_prefix" PATCHESTRY_LD_LLD="$ld_lld" \
   uv run --python "$python_bin" "${patcherex_env[@]}" \
   python "$repo_root/scripts/patch-runtime/test_evidence.py"
 
+# The comparison of a patched function with the lifted original builds a
+# harness with patchir-klee-verifier and runs it under qemu-system-arm.
+export QEMU_SYSTEM_ARM="$qemu_system_arm"
+export PATCHESTRY_KLEE_VERIFIER="${PATCHESTRY_KLEE_VERIFIER:-$repo_root/builds/default/tools/patchir-klee-verifier/$build_type/patchir-klee-verifier}"
+
+PATCHESTRY_LLVM_PREFIX="$llvm_prefix" PATCHESTRY_LD_LLD="$ld_lld" \
+  uv run --python "$python_bin" "${patcherex_env[@]}" \
+  python "$repo_root/scripts/patch-runtime/test_check_equivalence.py"
+
 runtime_args=(
   "$repo_root/scripts/patch-runtime/qemu_firmware_runtime.py"
   --repo-root "$repo_root"

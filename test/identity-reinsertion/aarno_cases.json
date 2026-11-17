@@ -32,7 +32,7 @@
         },
         {
           "name": "limit-8",
-          "description": "reject a path token of 8 bytes or more by returning a null pointer",
+          "description": "reject a path token of 8 bytes or more by returning a null pointer, from inside the copy loop: the output buffer is written before the rejection",
           "source": "test/identity-reinsertion/patches/httpd_fun_0007ae8c.c",
           "defines": [
             "LIMIT=8"
@@ -44,7 +44,27 @@
             "P1": "tested",
             "P2": "tested",
             "P3": "tested",
-            "P4": "tested"
+            "P4": "tested",
+            "reject-hygiene": "failed"
+          }
+        },
+        {
+          "name": "limit-8-first",
+          "description": "the same limit, checked before anything is written",
+          "source": "test/identity-reinsertion/patches/httpd_fun_0007ae8c.c",
+          "defines": [
+            "LIMIT=8",
+            "LIMIT_FIRST"
+          ],
+          "reject_returns": [
+            0
+          ],
+          "expect": {
+            "P1": "tested",
+            "P2": "tested",
+            "P3": "tested",
+            "P4": "tested",
+            "reject-hygiene": "tested"
           }
         },
         {

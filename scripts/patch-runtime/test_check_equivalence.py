@@ -27,6 +27,7 @@ int state;
 int other;
 extern int read_reg(int);
 extern void note(int);
+extern void other_note(int);
 void reject(void) __attribute__((noreturn));
 void soft_reject(void);
 """
@@ -48,6 +49,27 @@ extern unsigned strlen(const char *);
 """
 SWAP = {"original": "strcpy", "patched": "strncpy", "compare_args": 2,
         "condition": "strlen(src) < n"}
+
+# A device register written twice with interrupts off.
+DEVICE = """
+#define REG (*(volatile unsigned *) 0x4000C000u)
+#define STATUS (*(volatile unsigned *) 0x4000C004u)
+extern void irq_off(void);
+extern void irq_on(void);
+extern void log_reject(int);
+void reject(void);
+int state;
+"""
+SEND = """
+    irq_off();
+    REG = byte;
+    REG = 10;
+    irq_on();
+    return 0;
+}
+"""
+UART = [(0x4000C000, 0x4000CFFF)]
+IRQ = [("irq_off", "irq_on")]
 
 # Accepts any length from 0 up; returns -1 for a negative one.
 ORIGINAL = COMMON + """
@@ -159,6 +181,73 @@ int target(const char *text, int unused) {
     if (strlen(text) >= 16) return -1;
     strncpy(kept, text, 16);
     return kept[0];
+}
+""",
+    # A reject by leaving out the second call.
+    "forward_original": COMMON + """
+int target(unsigned char *buf, int len) {
+    note(len + 1);
+    other_note(len * 2);
+    return 0;
+}
+""",
+    "forward_patched": COMMON + """
+int target(unsigned char *buf, int len) {
+    note(len + 1);
+    if ((unsigned) len * 2 <= 32) other_note(len * 2);
+    return 0;
+}
+""",
+    "send_original": DEVICE + "int target(int byte) {" + SEND,
+    "send_patched": DEVICE + "int target(int byte) { if (byte >= 97) reject();" + SEND,
+    "send_reordered": DEVICE + """
+int target(int byte) {
+    irq_off();
+    REG = 10;
+    REG = byte;
+    irq_on();
+    return 0;
+}
+""",
+    "send_missing_enable": DEVICE + """
+int target(int byte) {
+    irq_off();
+    REG = byte;
+    REG = 10;
+    return 0;
+}
+""",
+    "send_reject_inside": DEVICE + """
+int target(int byte) {
+    irq_off();
+    if (byte >= 97) { irq_on(); return -1; }
+    REG = byte;
+    REG = 10;
+    irq_on();
+    return 0;
+}
+""",
+    "send_skips_enable": DEVICE + """
+int target(int byte) {
+    irq_off();
+    if (byte >= 97) return -1;
+    REG = byte;
+    REG = 10;
+    irq_on();
+    return 0;
+}
+""",
+    "send_reject_writes_device": DEVICE
+    + "int target(int byte) { if (byte >= 97) { REG = 33; reject(); }" + SEND,
+    "send_reject_writes_memory": DEVICE
+    + "int target(int byte) { if (byte >= 97) { state = 1; return -1; }" + SEND,
+    "send_reject_logs": DEVICE
+    + "int target(int byte) { if (byte >= 97) { log_reject(byte); return -1; }" + SEND,
+    "status_read": DEVICE + """
+int target(int byte) {
+    if (STATUS & 1) return 1;
+    REG = byte;
+    return 0;
 }
 """,
     "always_faults": COMMON + """
@@ -365,6 +454,112 @@ class Equivalence(unittest.TestCase):
         report = self.compare("identical", "identical", pure_callees=["absent"])
         self.assertEqual(self.all_verdicts(report), ["not-run"] * 4)
         self.assertIn("absent", report["properties"]["P1"]["reason"])
+
+    def test_reject_by_skipping_a_declared_call(self):
+        report = self.compare("forward_original", "forward_patched",
+                              reject_skips=["other_note"])
+        self.assertEqual(self.all_verdicts(report), ["tested"] * 4, report["outcomes"])
+        self.assertGreater(report["outcomes"]["patched-skipped"], 0)
+        self.assertGreater(report["outcomes"]["accepted"], 0)
+        self.assertTrue(report["reject_exercised"])
+
+    def test_skipped_call_that_is_not_declared_fails_p4(self):
+        report = self.compare("forward_original", "forward_patched")
+        self.assertEqual(self.all_verdicts(report), ["tested", "tested", "tested", "failed"],
+                         report["outcomes"])
+        other = self.compare("forward_original", "forward_patched", reject_skips=["note"])
+        self.assertEqual(other["properties"]["P4"]["verdict"], "failed", other["outcomes"])
+
+    # Firmware checks.
+
+    def firmware(self, report: dict) -> list[str]:
+        return [report["properties"][name]["verdict"]
+                for name in ("mmio-order", "lock-balance", "reject-hygiene")]
+
+    def send(self, patched: str, **options) -> dict:
+        options.setdefault("mmio_regions", UART)
+        options.setdefault("balance", IRQ)
+        return self.compare("send_original", patched, **options)
+
+    def test_same_device_writes(self):
+        report = self.send("send_original")
+        self.assertEqual(self.all_verdicts(report), ["tested"] * 4, report["outcomes"])
+        self.assertEqual(self.firmware(report), ["tested", "tested", "not-run"])
+        self.assertEqual(report["harness"]["device_accesses"], 4)
+
+    def test_restricting_patch_passes_the_firmware_checks(self):
+        report = self.send("send_patched", reject_handlers=["reject"],
+                           noreturn_handlers=["reject"])
+        self.assertEqual(self.all_verdicts(report), ["tested"] * 4, report["outcomes"])
+        self.assertEqual(self.firmware(report), ["tested"] * 3, report["outcomes"])
+        self.assertGreater(report["outcomes"]["patched-rejected"], 0)
+
+    def test_reordered_register_writes_fail_mmio_order(self):
+        report = self.send("send_reordered")
+        self.assertEqual(self.all_verdicts(report), ["tested"] * 4, report["outcomes"])
+        self.assertEqual(report["properties"]["mmio-order"]["verdict"], "failed")
+        self.assertEqual(self.kinds(report, "mmio-order"), {"writes-differ"})
+
+    def test_undeclared_device_is_not_seen(self):
+        report = self.send("send_reordered", mmio_regions=[])
+        self.assertEqual(self.all_verdicts(report), ["tested"] * 4, report["outcomes"])
+        self.assertEqual(report["properties"]["mmio-order"]["verdict"], "not-run")
+        self.assertIn("declared", report["properties"]["mmio-order"]["reason"])
+
+    def test_missing_enable_fails_lock_balance(self):
+        report = self.send("send_missing_enable")
+        self.assertEqual(report["properties"]["lock-balance"]["verdict"], "failed")
+        self.assertEqual(self.kinds(report, "lock-balance"), {"balance-differs"})
+        self.assertEqual(report["properties"]["P4"]["verdict"], "failed")
+
+    def test_reject_that_restores_the_balance_passes(self):
+        report = self.send("send_reject_inside", reject_returns=[-1])
+        self.assertEqual(self.firmware(report), ["tested"] * 3, report["outcomes"])
+
+    def test_early_return_that_skips_the_enable_fails_lock_balance(self):
+        report = self.send("send_skips_enable", reject_returns=[-1])
+        self.assertEqual(report["properties"]["lock-balance"]["verdict"], "failed",
+                         report["outcomes"])
+        self.assertEqual(self.kinds(report, "lock-balance"), {"unbalanced-on-reject"})
+        # The reject paths were seen, and wrote and called nothing else.
+        self.assertEqual(report["properties"]["reject-hygiene"]["verdict"], "tested")
+        self.assertGreater(report["outcomes"]["reject-violation"], 0)
+
+    def test_device_write_on_a_reject_path_fails_reject_hygiene(self):
+        report = self.send("send_reject_writes_device", reject_handlers=["reject"],
+                           noreturn_handlers=["reject"])
+        self.assertEqual(report["properties"]["reject-hygiene"]["verdict"], "failed",
+                         report["outcomes"])
+        self.assertEqual(self.kinds(report, "reject-hygiene"), {"device-written"})
+        self.assertEqual(self.all_verdicts(report), ["tested"] * 4)
+
+    def test_memory_write_on_a_reject_path_fails_reject_hygiene(self):
+        report = self.send("send_reject_writes_memory", reject_returns=[-1])
+        self.assertEqual(self.kinds(report, "reject-hygiene"), {"memory-written"})
+        self.assertEqual({row.get("region") for row in report["violations"]}, {"state"})
+
+    def test_call_on_a_reject_path_fails_unless_declared(self):
+        report = self.send("send_reject_logs", reject_returns=[-1])
+        self.assertEqual(self.kinds(report, "reject-hygiene"), {"call-made"})
+        declared = self.send("send_reject_logs", reject_returns=[-1],
+                             reject_effects=["log_reject"])
+        self.assertEqual(self.firmware(declared), ["tested"] * 3, declared["outcomes"])
+
+    def test_handler_that_returns_runs_on(self):
+        # Declared as a handler but not as one that does not return: the
+        # patched version goes on to write the device after rejecting.
+        report = self.send("send_patched", reject_handlers=["reject"])
+        self.assertEqual(report["properties"]["reject-hygiene"]["verdict"], "failed")
+
+    def test_device_read_returns_the_same_series_to_both(self):
+        report = self.compare("status_read", "status_read", mmio_regions=UART)
+        self.assertEqual(self.all_verdicts(report), ["tested"] * 4, report["outcomes"])
+        self.assertEqual(report["properties"]["mmio-order"]["verdict"], "tested")
+
+    def test_balanced_callee_nobody_calls_is_refused(self):
+        report = self.compare("identical", "identical", balance=[("lock", "unlock")])
+        self.assertEqual(self.firmware(report), ["not-run"] * 3)
+        self.assertIn("lock", report["properties"]["P1"]["reason"])
 
     # What cannot be decided.
 

@@ -11,7 +11,9 @@
  * The function copies the path token of a request line (param_2) into
  * param_1 and has no bound on the copy.  With LIMIT defined, a token of LIMIT
  * bytes or more is rejected by returning a null pointer; the original never
- * returns one.  RETURN_OFFSET, when defined, is added to the returned pointer:
+ * returns one.  That check sits in the copy loop, so a rejected token has
+ * already been copied in part.  With LIMIT_FIRST defined as well, the token
+ * is measured before anything is written.  RETURN_OFFSET, when defined, is added to the returned pointer:
  * a change no input-restricting patch may make.  So are EXTRA_WRITE, which
  * stores a byte at that offset of the output buffer, and EXTRA_CALL, which
  * calls an external function the original does not call.
@@ -43,6 +45,25 @@ undefined1 *FUN_0007ae8c(undefined1 *param_1, int param_2, int param_3) {
     int local_c;
     local_10 = 0;
     local_c = 0;
+#if defined(LIMIT) && defined(LIMIT_FIRST)
+    {
+        /* The length of the token the loops below copy. */
+        int at = 0;
+        int count = 0;
+        while (BYTE_AT(param_2 + at) == 32)
+            at = at + 1;
+        while (BYTE_AT(param_2 + at) != 32 && BYTE_AT(param_2 + at) != 0)
+            at = at + 1;
+        while (BYTE_AT(param_2 + at) == 32)
+            at = at + 1;
+        while (BYTE_AT(param_2 + at) != 32 && BYTE_AT(param_2 + at) != 0) {
+            at = at + 1;
+            count = count + 1;
+        }
+        if (count > LIMIT)
+            return (undefined1 *)0;
+    }
+#endif
 #ifdef EXTRA_WRITE
     param_1[EXTRA_WRITE] = 1U;
 #endif

@@ -75,16 +75,27 @@ Three declarations relax P4, and each becomes a named assumption in the evidence
 
 An external function is a stub that returns the same value at the same call index on both sides. The C library functions listed in `MODELS` of `check_equivalence.py` are run instead, from `equivalence_runtime/models.c`, so what they write is part of P2. A substitution therefore relaxes the call comparison and nothing else: `strcpy` replaced by `strncpy` into a global fails P2, because `strncpy` pads the destination with zeros.
 
-A version rejects an input when it calls a declared reject handler (`--reject-handler`) or returns a declared reject value (`--reject-return`). `--arg-buffer INDEX:SIZE` says an argument points at a buffer, which lifted code often passes as an integer; `--arg-range INDEX:LOW:HIGH` bounds an integer argument. These stand in for the patch specification's validation block, which is not designed yet.
+A version rejects an input when it calls a declared reject handler (`--reject-handler`) or returns a declared reject value (`--reject-return`). `--arg-buffer INDEX:SIZE` says an argument points at a buffer, which lifted code often passes as an integer; `--arg-range INDEX:LOW:HIGH` bounds an integer argument. These stand in for the patch specification's validation block, which is not designed yet. A handler the module does not mark as such is declared not to return with `--noreturn-handler`. `--reject-skip NAME` declares a third way: the patched version rejects an input by not calling NAME where the original does; the other calls must agree, and memory and return value are not compared on such an input.
 
 A property is `failed` when a violation was seen, `tested` when none was seen and at least one input reached the comparison, and `not-run` otherwise. `tested` covers the inputs that were run. `proven` needs the same harness under KLEE.
+
+Three firmware checks use the same runs. They are `not-run` unless something is declared for them, or, for reject hygiene, unless an input was rejected.
+
+| Check | Declared with | Holds when | Violations |
+| --- | --- | --- | --- |
+| `mmio-order` | `--mmio-region LOW:HIGH` | when both accept, they write the same values to the device registers in the same order | `writes-differ` |
+| `lock-balance` | `--balance ACQUIRE:RELEASE` | the calls balance the same way in both, and are balanced when the patched version rejects | `balance-differs`, `unbalanced-on-reject` |
+| `reject-hygiene` | `--reject-effect NAME` allows a call | before it rejects, the patched version writes no compared memory and no device register, and calls nothing but reject effects and balanced callees | `memory-written`, `device-written`, `call-made` |
+
+With a device range declared, every load and store of either version that is not plainly of a local or a global asks the runner first. Inside a range a write is recorded and not performed, and a read returns the next of a series of values both versions share. A device register nobody declared is not seen. The serial-qemu suite runs these checks on its `send`, `length` and `forward` cases (see `qemu_firmware_runtime.md`).
 
 The cases file gives three reinserted functions patched versions, each its own row in `summary.tsv` and its own evidence. None is reinserted, so their integrity checks are `not-run`. A variant is either C written from the lifted C (`test/identity-reinsertion/patches/`) or the lifted IR with lines replaced (`"source": "@lifted"` with `edits`; each `find` must match exactly one place).
 
 | Function | Variant | What it is | Fails |
 | --- | --- | --- | --- |
 | `httpd` `FUN_0007ae8c` | `rewritten` | the lifted C written out by hand, no patch | nothing |
-| | `limit-8` | rejects a path token of 8 bytes or more with a null pointer, declared | nothing |
+| | `limit-8` | rejects a path token of 8 bytes or more with a null pointer, from inside the copy loop | reject-hygiene (`memory-written`: the output buffer is written before the rejection) |
+| | `limit-8-first` | the same limit, checked before anything is written | nothing |
 | | `limit-8-undeclared` | the same patch, reject value not declared | P2, P3 |
 | | `widened` | limit 24 replacing limit 8 | P1 |
 | | `extra-write` | stores a byte at offset 100 of the output buffer | P2 |

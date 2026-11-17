@@ -25,7 +25,10 @@ Four properties are judged per input:
 | P4 | when both accept, they make the same calls to external functions |
 
 A version rejects an input when it calls a declared reject handler or returns
-a declared reject value.  Violations:
+a declared reject value.  The patched version also rejects one by leaving out
+a call the original makes, when the callee is declared for that
+(`reject_skips`) and the calls agree otherwise; memory and return value are
+not compared on such an input.  Violations:
 
 | Property | Kind | Meaning |
 | --- | --- | --- |
@@ -54,6 +57,22 @@ a global is compared as (global, offset) and the address of a local only as
 | `substitutions` | the patched version's call of one function counts as a call of the one it replaces, compared on their leading arguments; needs a condition in words |
 | `strict_callees` | naming one of these in the two above is refused |
 
+Three firmware checks use the same runs:
+
+| Check | Holds when | Violations |
+| --- | --- | --- |
+| `mmio-order` | when both accept, they write the same values to the declared device registers in the same order | `writes-differ` |
+| `lock-balance` | acquire and release calls balance the same way in both, and are balanced when the patched version rejects | `balance-differs`, `unbalanced-on-reject` |
+| `reject-hygiene` | before it rejects, the patched version writes no compared memory and no device register, and calls nothing but declared reject effects and balanced callees | `memory-written`, `device-written`, `call-made` |
+
+`mmio_regions` are inclusive address ranges.  Every load and store of either
+version that is not plainly of a local or a global is routed through the
+runner; inside a range a write is recorded and not performed, and a read
+returns the next of a series of values both sides share.  A device register
+nobody declared is not seen.  `balance` is a list of (acquire, release) callee
+pairs.  `mmio-order` and `lock-balance` are `not-run` when nothing is declared
+for them, and `reject-hygiene` when no input was rejected.
+
 An external function returns the same value at the same call index on both
 sides.  The C library functions in MODELS are run instead (equivalence_runtime/
 models.c), so what they write is part of P2: a substitution relaxes the call
@@ -64,6 +83,8 @@ CLI: check_equivalence.py --original original.ll --patched patched.ll
      [--reject-return VALUE]... [--arg-buffer INDEX:SIZE]...
      [--arg-range INDEX:LOW:HIGH]... [--inputs N] [--pure-callee NAME]...
      [--substitution ORIGINAL:PATCHED:ARGS:CONDITION]... [--strict-callee NAME]...
+     [--noreturn-handler NAME]... [--reject-effect NAME]... [--reject-skip NAME]...
+     [--mmio-region LOW:HIGH]... [--balance ACQUIRE:RELEASE]...
 Tools come from PATCHESTRY_LLVM_PREFIX, PATCHESTRY_LD_LLD, QEMU_SYSTEM_ARM and
 PATCHESTRY_KLEE_VERIFIER (default: the Debug build in this repository).
 Exit 0 when no property failed, 1 when one did, 2 on usage errors.
@@ -87,15 +108,22 @@ BATCH_TIMEOUT = 5  # seconds; a boot of 50 inputs takes a fraction of one
 MAX_TIMEOUTS = 8  # inputs that never end, before the run is cut short
 
 # Path-end codes of the harness (tools/patchir-klee-verifier/Compare.cpp).
-ACCEPTED, PATCHED_REJECTED, P1_VIOLATION, UNMODELLED = 0, 1, 10, 20
+ACCEPTED, PATCHED_REJECTED, PATCHED_SKIPPED, P1_VIOLATION, UNMODELLED = 0, 1, 2, 10, 20
 ORIGINAL_ALONE_ACCEPTED, ORIGINAL_ALONE_REJECTED = 30, 31
 VIOLATION, RETURN_DIFFERS, MEMORY_DIFFERS, CALLS_DIFFER = 64, 1, 2, 4
+DEVICE_DIFFERS, BALANCE_DIFFERS = 8, 16
+REJECT_VIOLATION, REJECT_WROTE, REJECT_CALLED, REJECT_DEVICE, REJECT_UNBALANCED = 128, 1, 2, 4, 8
 ORIGINAL, PATCHED = 1, 2
 PROPERTIES = ("P1", "P2", "P3", "P4")
+FIRMWARE = ("mmio-order", "lock-balance", "reject-hygiene")
+# Violations found by comparing two accepted runs.
+COMPARED_KINDS = ("memory-differs", "return-differs", "calls-differ", "writes-differ",
+                  "balance-differs")
 
 OUTCOMES = (
-    "accepted", "patched-rejected", "p1-violation", "p2-violation", "p3-violation",
-    "p4-violation", "unmodelled", "both-fail", "discarded", "timeout", "unknown",
+    "accepted", "patched-rejected", "patched-skipped", "p1-violation", "p2-violation", "p3-violation",
+    "p4-violation", "mmio-order-violation", "lock-balance-violation", "reject-violation",
+    "unmodelled", "both-fail", "discarded", "timeout", "unknown",
 )
 
 # Functions equivalence_runtime/models.c implements.
@@ -146,7 +174,8 @@ def _run(command: list[str], **options) -> subprocess.CompletedProcess:
 def build_harness(
     original: Path, patched: Path, function: str, out: Path, tools: Tools,
     reject_handlers=(), reject_returns=(), arg_buffers=None, pointer_size: int = 64,
-    arg_ranges=None, pure_callees=(), substitutions=(),
+    arg_ranges=None, pure_callees=(), substitutions=(), noreturn_handlers=(),
+    reject_effects=(), mmio_regions=(), balance=(), reject_skips=(),
 ) -> tuple[dict | None, str]:
     """Write `harness.ll` and `harness.json` into `out`; (info, error text)."""
     command = [
@@ -162,6 +191,16 @@ def build_harness(
         command += ["--arg-buffer", f"{index}:{size}"]
     for index, (low, high) in sorted((arg_ranges or {}).items()):
         command += [f"--arg-range={index}:{low}:{high}"]
+    for name in noreturn_handlers:
+        command += ["--noreturn-handler", name]
+    for name in reject_effects:
+        command += ["--reject-effect", name]
+    for name in reject_skips:
+        command += ["--reject-skip", name]
+    for low, high in mmio_regions:
+        command += ["--mmio-region", f"{low}:{high}"]
+    for acquire, release in balance:
+        command += ["--balance", f"{acquire}:{release}"]
     for name in pure_callees:
         command += ["--pure-callee", name]
     for swap in substitutions:
@@ -239,10 +278,25 @@ def classify(events: list[tuple[str, int]]) -> tuple[str, list[dict]]:
             return "accepted", []
         if detail == PATCHED_REJECTED:
             return "patched-rejected", []
+        if detail == PATCHED_SKIPPED:
+            return "patched-skipped", []
         if detail == P1_VIOLATION:
             return "p1-violation", [{"property": "P1", "kind": "original-rejects"}]
         if detail == UNMODELLED:
             return "unmodelled", []
+        if detail > REJECT_VIOLATION:
+            rows = []
+            if detail & REJECT_WROTE:
+                rows.append({"property": "reject-hygiene", "kind": "memory-written",
+                             "region": where.get("memory")})
+            if detail & REJECT_CALLED:
+                rows.append({"property": "reject-hygiene", "kind": "call-made",
+                             "call": where.get("call")})
+            if detail & REJECT_DEVICE:
+                rows.append({"property": "reject-hygiene", "kind": "device-written"})
+            if detail & REJECT_UNBALANCED:
+                rows.append({"property": "lock-balance", "kind": "unbalanced-on-reject"})
+            return "reject-violation", rows
         if VIOLATION < detail < 2 * VIOLATION:
             rows = []
             if detail & MEMORY_DIFFERS:
@@ -253,6 +307,10 @@ def classify(events: list[tuple[str, int]]) -> tuple[str, list[dict]]:
             if detail & CALLS_DIFFER:
                 rows.append({"property": "P4", "kind": "calls-differ",
                              "call": where.get("call")})
+            if detail & DEVICE_DIFFERS:
+                rows.append({"property": "mmio-order", "kind": "writes-differ"})
+            if detail & BALANCE_DIFFERS:
+                rows.append({"property": "lock-balance", "kind": "balance-differs"})
             return f"{rows[0]['property'].lower()}-violation", rows
         return "unknown", []
     if kind == "discard":
@@ -283,7 +341,8 @@ def check_equivalence(
     original: Path, patched: Path, function: str, out: Path, tools: Tools,
     reject_handlers=(), reject_returns=(), arg_buffers=None, inputs: int = 200,
     pointer_size: int = 64, arg_ranges=None, pure_callees=(), substitutions=(),
-    strict_callees=(),
+    strict_callees=(), noreturn_handlers=(), reject_effects=(), mmio_regions=(), balance=(),
+    reject_skips=(),
 ) -> dict:
     """Build, run and judge; the report is also what `equivalence.json` holds."""
     out.mkdir(parents=True, exist_ok=True)
@@ -300,6 +359,11 @@ def check_equivalence(
         "pure_callees": list(pure_callees),
         "substitutions": [dict(swap) for swap in substitutions],
         "strict_callees": list(strict_callees),
+        "noreturn_handlers": list(noreturn_handlers),
+        "reject_effects": list(reject_effects),
+        "reject_skips": list(reject_skips),
+        "mmio_regions": [list(region) for region in mmio_regions],
+        "balance": [list(pair) for pair in balance],
         "inputs": 0,
         "compared": 0,
         "outcomes": {name: 0 for name in OUTCOMES},
@@ -311,7 +375,7 @@ def check_equivalence(
 
     def not_run(reason: str) -> dict:
         report["properties"] = {
-            name: {"verdict": "not-run", "reason": reason} for name in PROPERTIES
+            name: {"verdict": "not-run", "reason": reason} for name in PROPERTIES + FIRMWARE
         }
         return report
 
@@ -333,7 +397,8 @@ def check_equivalence(
 
     info, error = build_harness(
         original, patched, function, out, tools, reject_handlers, reject_returns, arg_buffers,
-        pointer_size, arg_ranges, pure_callees, substitutions,
+        pointer_size, arg_ranges, pure_callees, substitutions, noreturn_handlers,
+        reject_effects, mmio_regions, balance, reject_skips,
     )
     if info is None:
         return not_run(f"the product harness could not be built: {error}")
@@ -357,8 +422,7 @@ def check_equivalence(
             outcome, violations = classify(by_seed[number])
             report["outcomes"][outcome] += 1
             if outcome == "accepted" or any(
-                row["kind"] in ("memory-differs", "return-differs", "calls-differ")
-                for row in violations
+                row["kind"] in COMPARED_KINDS for row in violations
             ):
                 report["compared"] += 1
             for row in violations:
@@ -396,14 +460,48 @@ def check_equivalence(
         "P3": _verdict("P3" in kinds, compared, outcomes, both),
         "P4": _verdict("P4" in kinds, compared, outcomes, both),
     }
+    rejected = outcomes["patched-rejected"] + outcomes["reject-violation"]
+    undeclared = lambda what: {"verdict": "not-run", "reason": f"no {what} is declared"}
+    report["properties"].update({
+        "mmio-order": _verdict("mmio-order" in kinds, compared, outcomes, both)
+        if mmio_regions else undeclared("device register range"),
+        "lock-balance": _verdict("lock-balance" in kinds, compared + rejected, outcomes,
+                                 "reached an exit of the patched version")
+        if balance else undeclared("acquire and release pair"),
+        "reject-hygiene": _verdict("reject-hygiene" in kinds, rejected, outcomes,
+                                   "was rejected by the patched version"),
+    })
     if not info.get("memory_regions") and report["properties"]["P2"]["verdict"] == "tested":
         report["properties"]["P2"] = {
             "verdict": "not-run",
             "reason": "no memory is compared: the function has no pointer argument and "
                       "the module no writable global without pointers",
         }
-    report["reject_exercised"] = outcomes["patched-rejected"] > 0
+    report["reject_exercised"] = rejected + outcomes["patched-skipped"] > 0
     return report
+
+
+# What a caller may declare about a patch; each is a keyword of check_equivalence.
+DECLARATIONS = (
+    "reject_handlers", "reject_returns", "noreturn_handlers", "reject_effects", "reject_skips",
+    "pure_callees", "substitutions", "strict_callees", "mmio_regions", "balance",
+)
+
+
+def declarations(settings: dict) -> dict:
+    """The declarations among `settings`, as keywords of check_equivalence."""
+    return {name: settings[name] for name in DECLARATIONS if name in settings}
+
+
+def apply_edits(text: str, edits: list[dict], label: str) -> str:
+    """`text` with each `find` replaced by its `replace`; each must match once."""
+    for edit in edits:
+        if text.count(edit["find"]) != 1:
+            raise ValueError(
+                f"{label}: edit {edit['find']!r} matches {text.count(edit['find'])} places"
+            )
+        text = text.replace(edit["find"], edit["replace"])
+    return text
 
 
 def failures(report: dict) -> list[str]:
@@ -424,6 +522,11 @@ def main() -> int:
     parser.add_argument("--substitution", action="append", default=[],
                         metavar="ORIGINAL:PATCHED:ARGS:CONDITION")
     parser.add_argument("--strict-callee", action="append", default=[])
+    parser.add_argument("--noreturn-handler", action="append", default=[])
+    parser.add_argument("--reject-effect", action="append", default=[])
+    parser.add_argument("--reject-skip", action="append", default=[])
+    parser.add_argument("--mmio-region", action="append", default=[], metavar="LOW:HIGH")
+    parser.add_argument("--balance", action="append", default=[], metavar="ACQUIRE:RELEASE")
     parser.add_argument("--inputs", type=int, default=200)
     parser.add_argument("--pointer-size", type=int, default=64)
     args = parser.parse_args()
@@ -438,6 +541,11 @@ def main() -> int:
             for first, second, count, condition in
             (text.split(":", 3) for text in args.substitution)
         ]
+        regions = [(int(low, 0), int(high, 0)) for low, high in
+                   (text.split(":", 1) for text in args.mmio_region)]
+        pairs = [tuple(text.split(":", 1)) for text in args.balance]
+        if any(len(pair) != 2 for pair in pairs):
+            raise ValueError("--balance expects ACQUIRE:RELEASE")
         tools = Tools.from_environment()
     except (ValueError, MissingTool) as error:
         print(f"error: {error}", file=sys.stderr)
@@ -445,7 +553,8 @@ def main() -> int:
     report = check_equivalence(
         args.original, args.patched, args.function, args.output_dir, tools,
         args.reject_handler, args.reject_return, buffers, args.inputs, args.pointer_size,
-        ranges, args.pure_callee, swaps, args.strict_callee,
+        ranges, args.pure_callee, swaps, args.strict_callee, args.noreturn_handler,
+        args.reject_effect, regions, pairs, args.reject_skip,
     )
     (args.output_dir / "equivalence.json").write_text(
         json.dumps(report, indent=2) + "\n", encoding="utf-8"

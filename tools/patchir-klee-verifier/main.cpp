@@ -132,6 +132,38 @@ namespace patchestry::klee_verifier {
         llvm::cl::value_desc("index:low:high")
     );
 
+    llvm::cl::list< std::string > noreturn_handlers(
+        "noreturn-handler",
+        llvm::cl::desc("Reject handler that does not return (compare mode)"),
+        llvm::cl::value_desc("name")
+    );
+
+    llvm::cl::list< std::string > reject_skips(
+        "reject-skip",
+        llvm::cl::desc("Function the patched version rejects an input by not calling "
+                       "(compare mode)"),
+        llvm::cl::value_desc("name")
+    );
+
+    llvm::cl::list< std::string > reject_effects(
+        "reject-effect",
+        llvm::cl::desc("Function a version may call before it rejects (compare mode)"),
+        llvm::cl::value_desc("name")
+    );
+
+    llvm::cl::list< std::string > mmio_regions(
+        "mmio-region",
+        llvm::cl::desc("Device registers LOW to HIGH inclusive; writes are compared in order "
+                       "(compare mode)"),
+        llvm::cl::value_desc("low:high")
+    );
+
+    llvm::cl::list< std::string > balance(
+        "balance",
+        llvm::cl::desc("Calls of ACQUIRE and RELEASE must balance on every exit (compare mode)"),
+        llvm::cl::value_desc("acquire:release")
+    );
+
     llvm::cl::list< std::string > pure_callees(
         "pure-callee",
         llvm::cl::desc("External function whose calls are not compared (compare mode)"),
@@ -209,6 +241,27 @@ namespace patchestry::klee_verifier {
                 return EXIT_FAILURE;
             }
             options.arg_ranges[index] = { low, high };
+        }
+        options.noreturn_handlers.assign(noreturn_handlers.begin(), noreturn_handlers.end());
+        options.reject_effects.assign(reject_effects.begin(), reject_effects.end());
+        options.reject_skips.assign(reject_skips.begin(), reject_skips.end());
+        for (const auto &text : mmio_regions) {
+            unsigned long long low  = 0;
+            unsigned long long high = 0;
+            auto [left, right]      = llvm::StringRef(text).split(':');
+            if (left.getAsInteger(0, low) || right.getAsInteger(0, high) || low > high) {
+                LOG(ERROR) << "--mmio-region expects LOW:HIGH, got '" << text << "'\n";
+                return EXIT_FAILURE;
+            }
+            options.mmio_regions.emplace_back(low, high);
+        }
+        for (const auto &text : balance) {
+            auto [left, right] = llvm::StringRef(text).split(':');
+            if (left.empty() || right.empty() || left == right) {
+                LOG(ERROR) << "--balance expects ACQUIRE:RELEASE, got '" << text << "'\n";
+                return EXIT_FAILURE;
+            }
+            options.balance.emplace_back(left.str(), right.str());
         }
         options.pure_callees.assign(pure_callees.begin(), pure_callees.end());
         options.models.insert(models.begin(), models.end());

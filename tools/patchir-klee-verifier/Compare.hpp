@@ -34,6 +34,16 @@ namespace patchestry::klee_verifier {
     {
         // Functions whose call means the caller rejected its input.
         std::vector< std::string > reject_handlers;
+        // Reject handlers that do not return, whatever their declaration says.
+        std::vector< std::string > noreturn_handlers;
+        // Callees the patched version rejects an input by not calling.
+        std::vector< std::string > reject_skips;
+        // Callees a version may call on a path that ends in a rejection.
+        std::vector< std::string > reject_effects;
+        // Address ranges [low, high] whose writes are compared in order.
+        std::vector< std::pair< uint64_t, uint64_t > > mmio_regions;
+        // (acquire, release) callees that must balance on every exit.
+        std::vector< std::pair< std::string, std::string > > balance;
         // Return values of the target that mean it rejected its input.
         std::vector< int64_t > reject_returns;
         // Argument index -> size of the buffer the argument points at.

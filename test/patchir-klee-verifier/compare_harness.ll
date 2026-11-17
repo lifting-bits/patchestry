@@ -69,14 +69,15 @@ ok:
 ; CHECK: getelementptr inbounds [8 x i32], ptr @__patchestry_values.read_sensor
 
 ; A reject handler that does not return ends the path: accepted by the patch
-; and rejected by the original is a P1 violation (10), rejected by the patch is 1.
+; and rejected by the original is a P1 violation (10); rejected by the patch
+; goes through the reject-path check.
 ; CHECK: define internal void @log_event()
 ; CHECK: call void @__patchestry_trace_call(i32 2, i32 0)
 ; CHECK: define internal void @reject_request()
 ; CHECK-NOT: __patchestry_trace_call
 ; CHECK: load i32, ptr @__patchestry_phase
 ; CHECK: call void @__patchestry_path_end(i32 10)
-; CHECK: call void @__patchestry_path_end(i32 1)
+; CHECK: call void @__patchestry_reject_end()
 
 ; Both versions of the target and of the functions they define.
 ; CHECK-DAG: define {{.*}}i32 @checked.orig(ptr %buf, i32 %len)
@@ -102,7 +103,7 @@ ok:
 ; The patched version runs first, then the original on restored buffers.
 ; CHECK: store i32 2, ptr @__patchestry_phase
 ; CHECK: call i32 @checked.patched(
-; CHECK: call void @__patchestry_path_end(i32 1)
+; CHECK: call void @__patchestry_reject_end()
 ; CHECK: store i32 1, ptr @__patchestry_phase
 ; CHECK: call i32 @checked.orig(
 ; Run alone, the original reports only whether it accepted the input.

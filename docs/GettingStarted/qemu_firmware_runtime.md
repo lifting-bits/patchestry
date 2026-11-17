@@ -319,7 +319,7 @@ It gives every check of the validation plan one of four verdicts:
 | `failed` | the check found a problem |
 | `not-run` | the check did not run, could not decide, or does not exist yet |
 
-A check whose report is absent is `not-run`. The verdict of a group and of the case is the weakest one in it (`failed`, then `not-run`, `tested`, `proven`). P1 to P4 come from `check_equivalence.py` (`equivalence.json`, see `identity_reinsertion.md`); this suite does not run it yet. The firmware checks and the re-lift do not exist yet, so no case has an overall verdict better than `not-run`. `groups` says what the implemented checks established: `integrity` (bindings, dependencies, ABI, reinsertion, patch record, link addresses, applied bytes, rewritten bindings), `static` (calling convention, the two budgets), `runtime` (the transcript).
+A check whose report is absent is `not-run`. The verdict of a group and of the case is the weakest one in it (`failed`, then `not-run`, `tested`, `proven`). P1 to P4 and the firmware checks come from `check_equivalence.py` (`equivalence.json`, see the next section). The re-lift does not exist yet, so no case has an overall verdict better than `not-run`. `groups` says what the implemented checks established: `integrity` (bindings, dependencies, ABI, reinsertion, patch record, link addresses, applied bytes, rewritten bindings), `static` (calling convention, the two budgets), `runtime` (the transcript).
 
 The file also has the bounds (the budgets and what was measured against them, the compiler and flags), every assumption with its name, source and statement, warnings (inlined copies), and each report it read with its SHA-256.
 
@@ -339,6 +339,31 @@ The suite writes `case.json` beside the reports with what no report holds: the i
 `scripts/patch-runtime/collect_reports.py RUN_DIR... --output DIR` gathers the evidence and reports of whole runs into CSV tables (`cases`, `functions`, `checks`, `problems`, `assumptions`) and one JSON file.
 
 In this suite the `abi` check does not run, so `integrity` is `not-run` for every case: the patch compiler targets `arm-linux-gnueabihf` while the firmware is a soft-float Cortex-M3 image, and nothing compares the two yet.
+
+## Comparison with the Original
+
+For the cases `length`, `forward` and `send` the suite also lowers the unpatched lifted function to `<function>.ll` and compares the patched IR with it: `check_equivalence.py` builds a product harness of the two and runs it as ARM code under `qemu-system-arm -M virt` on 200 generated inputs. The report is `<case>/equivalence.json`, and the evidence takes P1 to P4, `mmio-order`, `lock-balance` and `reject-hygiene` from it. The properties and what limits them are described in `identity_reinsertion.md`. Without `patchir-klee-verifier` or `qemu-system-arm` the comparison is skipped with a warning and those checks stay `not-run`.
+
+What each case declares, in `qemu_firmware_runtime.py` (`Case.equivalence`), until the patch specification can carry it:
+
+| Case | Declared | Tested |
+| --- | --- | --- |
+| `length` | a return of -1 rejects | P1 to P4, reject hygiene |
+| `forward` | not calling `forward_second` rejects | P1, P3, P4 (no memory to compare) |
+| `send` | `qemu_reject` rejects and does not return; device registers 0x4000C000 to 0x4000CFFF; `qemu_irq_disable` and `qemu_irq_enable` balance | P1, P3, P4, write order, balance, reject hygiene |
+
+Each case then has seeded harms: the patched IR with lines replaced, compared again, never reinserted. Each is a row `<case>--<harm>` in `summary.tsv` with the checks that failed, and the suite fails when they are not the expected ones.
+
+| Seeded harm | What changes | Must fail |
+| --- | --- | --- |
+| `length--writes-before-reject` | the reject path clears `qemu_length_last` | reject-hygiene |
+| `length--changed-result` | an accepted input returns one more | P3 |
+| `forward--skip-not-declared` | the same patch, nothing declared | P4 |
+| `forward--first-call-altered` | `forward_first` gets another argument | P4 |
+| `send--reordered-writes` | the newline is written before the byte | mmio-order |
+| `send--rejects-with-interrupts-off` | the check runs after interrupts are disabled | lock-balance |
+| `send--enable-dropped` | interrupts are not enabled again | P4, lock-balance |
+| `send--writes-before-reject` | the reject path writes the device first | reject-hygiene |
 
 ## Failure Inspection
 

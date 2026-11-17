@@ -428,8 +428,12 @@ class Evidence(unittest.TestCase):
             "engine": "concrete", "inputs": 200,
             "outcomes": {"accepted": 150, "patched-rejected": 50, "timeout": 0},
             "violations": [],
-            "properties": {name: {"verdict": "tested", "reason": None}
-                           for name in ("P1", "P2", "P3", "P4")},
+            "properties": {
+                **{name: {"verdict": "tested", "reason": None}
+                   for name in ("P1", "P2", "P3", "P4")},
+                **{name: {"verdict": "not-run", "reason": "nothing is declared"}
+                   for name in ("mmio-order", "lock-balance", "reject-hygiene")},
+            },
             "pure_callees": [], "substitutions": [],
             "bounds": {"inputs": 200, "pointer_size": 64, "seeds": [0, 200], "stub_values": 8},
             "cut_short": None,
@@ -461,12 +465,15 @@ class Evidence(unittest.TestCase):
         self.assertIn("memory-scope", names)
         self.assertIn("locals-by-kind", names)
 
-    def properties(self, **changed) -> dict:
+    def properties(self, firmware: dict | None = None, **changed) -> dict:
         rows = {name: {"verdict": "tested", "reason": None}
                 for name in ("P1", "P2", "P3", "P4")}
+        for name in ("mmio-order", "lock-balance", "reject-hygiene"):
+            rows[name] = {"verdict": "not-run", "reason": "nothing is declared"}
         for name, verdict in changed.items():
             rows[name] = {"verdict": verdict,
                           "reason": "harness not built" if verdict == "not-run" else None}
+        rows.update(firmware or {})
         return rows
 
     def test_memory_difference_fails_p2(self):
@@ -507,6 +514,40 @@ class Evidence(unittest.TestCase):
         detail = next(row["detail"] for row in built["assumptions"]
                       if row["name"] == "substitution:strcpy->strncpy")
         self.assertIn("strlen(src) < n", detail)
+
+    def test_firmware_checks_come_from_the_equivalence_report(self):
+        def change(reports):
+            reports["equivalence.json"] = self.equivalence(
+                reject_handlers=["qemu_reject"], noreturn_handlers=["qemu_reject"],
+                reject_returns=[-1], reject_effects=["log_reject"], reject_skips=["forward"],
+                mmio_regions=[[0x4000C000, 0x4000CFFF]], balance=[["irq_off", "irq_on"]],
+                violations=[{"seed": 9, "property": "mmio-order", "kind": "writes-differ"}],
+                properties=self.properties(firmware={
+                    "mmio-order": {"verdict": "failed", "reason": None},
+                    "lock-balance": {"verdict": "tested", "reason": None},
+                    "reject-hygiene": {"verdict": "tested", "reason": None},
+                }))
+        built = self.failed(change, "mmio-order", "writes-differ")
+        self.assertEqual(self.verdicts(built, ("lock-balance", "reject-hygiene")),
+                         ["tested", "tested"])
+        self.assertEqual(built["groups"]["firmware"], "failed")
+        names = self.names(built)
+        for name in ("reject-path:handler:qemu_reject", "reject-path:return:-1",
+                     "reject-path:skipped:forward", "noreturn-handler:qemu_reject",
+                     "reject-effect:log_reject", "device-registers",
+                     "balanced-pair:irq_off/irq_on"):
+            self.assertIn(name, names)
+        detail = next(row["detail"] for row in built["assumptions"]
+                      if row["name"] == "device-registers")
+        self.assertIn("0x4000c000 to 0x4000cfff", detail)
+
+    def test_undeclared_firmware_checks_are_not_run(self):
+        def change(reports):
+            reports["equivalence.json"] = self.equivalence()
+        built = self.build(change)
+        self.assertEqual(self.verdicts(built, ("mmio-order", "lock-balance", "reject-hygiene")),
+                         ["not-run"] * 3)
+        self.assertIn("declared", built["checks"]["mmio-order"]["reason"])
 
     def test_report_without_a_property_is_refused(self):
         def change(reports):

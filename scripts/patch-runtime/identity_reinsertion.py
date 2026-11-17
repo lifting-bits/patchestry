@@ -366,14 +366,9 @@ def run_variants(case: Case, args, repo_root: Path, digest: str | None) -> list[
             if variant["source"] == "@lifted":
                 # The lifted IR with lines replaced: a patch at the level the
                 # patcher works at.  Each `find` must name exactly one place.
-                text = lifted.read_text(encoding="utf-8")
-                for edit in variant["edits"]:
-                    if text.count(edit["find"]) != 1:
-                        raise ValueError(
-                            f"{name}: edit {edit['find']!r} matches "
-                            f"{text.count(edit['find'])} places in {lifted.name}"
-                        )
-                    text = text.replace(edit["find"], edit["replace"])
+                text = check_equivalence.apply_edits(
+                    lifted.read_text(encoding="utf-8"), variant["edits"], name
+                )
                 module = out / f"{stem}.ll"
                 module.write_text(text, encoding="utf-8")
                 return module
@@ -396,18 +391,17 @@ def run_variants(case: Case, args, repo_root: Path, digest: str | None) -> list[
                     if "original_defines" in variant else lifted)
         report = check_equivalence.check_equivalence(
             original, patched, case.function, out, tools,
-            reject_handlers=variant.get("reject_handlers", []),
-            reject_returns=variant.get("reject_returns", []),
             arg_buffers={int(k): v for k, v in settings.get("arg_buffers", {}).items()},
             arg_ranges={int(k): tuple(v) for k, v in settings.get("arg_ranges", {}).items()},
             inputs=settings.get("inputs", 200),
             pointer_size=settings.get("pointer_size", 64),
-            pure_callees=variant.get("pure_callees", []),
-            substitutions=variant.get("substitutions", []),
-            strict_callees=variant.get("strict_callees", []),
+            **check_equivalence.declarations(variant),
         )
         write_json(out / "equivalence.json", report)
-        properties = check_equivalence.PROPERTIES
+        # The firmware checks a variant names are part of what it expects.
+        properties = check_equivalence.PROPERTIES + tuple(
+            key for key in check_equivalence.FIRMWARE if key in variant["expect"]
+        )
         status = ",".join(
             f"{key}={report['properties'][key]['verdict']}" for key in properties
         )

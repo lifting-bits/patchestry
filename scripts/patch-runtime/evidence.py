@@ -24,8 +24,8 @@ Verdicts:
 The verdict of a group, and of the case, is the weakest verdict in it, in the
 order `failed`, `not-run`, `tested`, `proven`.  A check whose report is absent
 is `not-run`: nothing is taken as passed because nobody looked.  Until the
-firmware checks and the re-lift exist, no case has an overall verdict better
-than `not-run`; `groups` says what the implemented checks established.  P1 to
+re-lift exists, no case has an overall verdict better than `not-run`;
+`groups` says what the implemented checks established.  P1 to
 P4 are `tested` when the two versions were run on concrete inputs; `proven`
 is accepted only from a KLEE run.
 
@@ -43,7 +43,7 @@ Checks and where each verdict is read from:
 | static | `calling-convention`, `code-size-budget`, `stack-budget` | `static.json` |
 | runtime | `runtime-transcript` | `case.json` (`runtime`), written by the suite |
 | equivalence | `P1`, `P2`, `P3`, `P4` | `equivalence.json` (check_equivalence.py) |
-| firmware | `mmio-order`, `lock-balance`, `reject-hygiene` | none yet |
+| firmware | `mmio-order`, `lock-balance`, `reject-hygiene` | `equivalence.json` |
 | cross-check | `relift` | none yet |
 
 `case.json` is what the suite knows and no report holds: the case, the image
@@ -63,7 +63,11 @@ From a run of the equivalence harness: `inputs-sampled`, one
 `globals-as-lifted`, `layout-adopted`, and `retargeted-layout` when the
 harness was not run in the image's own layout.  Each declaration that relaxes
 the call comparison is one too: `pure-callee:<name>` and
-`substitution:<original>-><patched>`, the latter with its condition.
+`substitution:<original>-><patched>`, the latter with its condition.  So is
+each declaration of how the patch rejects and what the firmware checks look
+at: `reject-path:handler:<name>`, `reject-path:return:<value>`,
+`reject-path:skipped:<name>`, `noreturn-handler:<name>`,
+`reject-effect:<name>`, `device-registers` and `balanced-pair:<a>/<b>`.
 
 Only the standard library is needed.
 
@@ -133,9 +137,6 @@ CLAIMS = {
 }
 
 NOT_IMPLEMENTED = {
-    "mmio-order": "the device write trace does not exist yet (plan phase V8)",
-    "lock-balance": "the lock and interrupt models do not exist yet (plan phase V8)",
-    "reject-hygiene": "the patch specification declares no reject paths (plan phases V1, V8)",
     "relift": "the rewritten image was not lifted again (plan phase V10)",
 }
 
@@ -319,7 +320,7 @@ def _calling_convention(reports: Reports) -> dict:
 
 
 def _equivalence(reports: Reports, name: str) -> dict:
-    """P1 to P4, from a run of the product harness."""
+    """P1 to P4 or a firmware check, from a run of the product harness."""
     report = reports.get("equivalence.json")
     if report is None:
         return _row("not-run", reason="equivalence.json was not written: the original and "
@@ -466,6 +467,32 @@ def _assumptions(reports: Reports, context: dict) -> list[dict]:
                f"declared: a call of {swap['patched']} by the patched version counts as a "
                f"call of {swap['original']}, compared on the first {swap['compare_args']} "
                f"arguments, when {swap['condition']}; the condition is not checked")
+    declared = equivalence or {}
+    for name in declared.get("reject_handlers", []):
+        assume(f"reject-path:handler:{name}", "equivalence.json",
+               f"declared: a call of {name} means the input was rejected")
+    for value in declared.get("reject_returns", []):
+        assume(f"reject-path:return:{value}", "equivalence.json",
+               f"declared: a return of {value} means the input was rejected")
+    for name in declared.get("reject_skips", []):
+        assume(f"reject-path:skipped:{name}", "equivalence.json",
+               f"declared: the patched version rejects an input by not calling {name}; "
+               "on such an input only the other calls are compared")
+    for name in declared.get("noreturn_handlers", []):
+        assume(f"noreturn-handler:{name}", "equivalence.json",
+               f"declared: {name} does not return")
+    for name in declared.get("reject_effects", []):
+        assume(f"reject-effect:{name}", "equivalence.json",
+               f"declared: {name} may be called before a rejection")
+    if declared.get("mmio_regions"):
+        assume("device-registers", "equivalence.json",
+               "declared: the device registers are "
+               + ", ".join(f"{low:#x} to {high:#x}" for low, high in declared["mmio_regions"])
+               + "; a write there is recorded and not performed, a read returns a value "
+               "from a series both versions share, and no other address is a device")
+    for acquire, release in declared.get("balance", []):
+        assume(f"balanced-pair:{acquire}/{release}", "equivalence.json",
+               f"declared: calls of {acquire} and {release} must balance; neither is run")
     if "memory_regions" in harness:
         assume("memory-scope", "equivalence.json",
                "P2 compares " + (", ".join(harness["memory_regions"]) or "nothing")
@@ -512,7 +539,7 @@ def build_evidence(directory: Path) -> dict:
         "stack-budget": _budget(reports, "stack_bytes"),
         "runtime-transcript": _runtime(context),
     }
-    for name in ("P1", "P2", "P3", "P4"):
+    for name in ("P1", "P2", "P3", "P4", "mmio-order", "lock-balance", "reject-hygiene"):
         checks[name] = _equivalence(reports, name)
     for name, reason in NOT_IMPLEMENTED.items():
         checks[name] = _row("not-run", reason=reason)
