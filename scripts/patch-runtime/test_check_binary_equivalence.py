@@ -423,6 +423,80 @@ class OneSidedModel(unittest.TestCase):
         self.assertEqual(report["verdict"], "proven", report)
 
 
+# The ARM saturating subtract, as the `qsub` instruction and written out.
+QSUB = "int put(int a, int b) { return __builtin_arm_qsub(a, b); }\n"
+SATURATING = """
+int put(int a, int b) {
+    long long difference = (long long) a - b;
+    if (difference > 2147483647LL) return 2147483647;
+    if (difference < -2147483648LL) return -2147483647 - 1;
+    return (int) difference;
+}
+"""
+WRAPPING = "int put(int a, int b) { return (int) ((unsigned) a - (unsigned) b); }\n"
+
+
+@unittest.skipUnless((LLVM / "clang").is_file() and LLD.is_file(),
+                     "PATCHESTRY_LLVM_PREFIX has no clang and ld.lld")
+class Saturating(unittest.TestCase):
+    """`qsub` is executed, and is the saturating subtract (angr fails on it unaided)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.directory = Path(self.tmp.name)
+        # The Cortex-M4 has the instruction.  The Cortex-M3 does not, so the
+        # compiler cannot turn the written-out form back into it.
+        self.qsub = build(self.directory, "qsub", [QSUB], ["-mcpu=cortex-m4"])
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_check(self, source: str) -> dict:
+        import angr
+        other = build(self.directory, "other", [source], ["-mcpu=cortex-m3"])
+        symbol = angr.Project(str(self.qsub), auto_load_libs=False).loader.find_symbol("put")
+        return cbe.check_binary_equivalence(
+            self.qsub, other, symbol.rebased_addr & ~1, bool(symbol.rebased_addr & 1),
+            cbe.Settings(returns_value=True))
+
+    def test_the_instruction_is_in_the_image(self):
+        listing = subprocess.run(
+            [str(LLVM / "llvm-objdump"), "-d", str(self.qsub)],
+            check=True, capture_output=True, text=True).stdout
+        self.assertIn("qsub", listing)
+
+    def test_qsub_equals_the_saturating_subtract(self):
+        report = self.run_check(SATURATING)
+        self.assertEqual(report["verdict"], "proven", report)
+
+    def test_qsub_differs_from_the_wrapping_subtract(self):
+        report = self.run_check(WRAPPING)
+        self.assertEqual(report["checks"]["P3"], "failed", report)
+
+
+class Fixed(unittest.TestCase):
+    """Whether a path leaves a value one possibility."""
+
+    def setUp(self):
+        import angr
+        self.state = angr.SimState(arch="ARMEL", mode="symbolic")
+        self.choice = claripy.BVS("choice", 32)
+        # What a conditional move leaves: an expression, not a number.
+        self.value = claripy.If(self.choice == 3, claripy.BVV(0x1000, 32),
+                                claripy.BVV(0x2000, 32))
+
+    def test_a_number_is_fixed(self):
+        self.assertEqual(cbe._fixed(self.state, claripy.BVV(7, 32)), 7)
+
+    def test_an_expression_the_path_decides_is_fixed(self):
+        self.state.solver.add(self.choice == 3)
+        self.assertTrue(self.state.solver.symbolic(self.value))
+        self.assertEqual(cbe._fixed(self.state, self.value), 0x1000)
+
+    def test_an_expression_with_two_values_is_not_fixed(self):
+        self.assertIsNone(cbe._fixed(self.state, self.value))
+
+
 class Declaration(unittest.TestCase):
     """The settings a suite's case file declares."""
 
