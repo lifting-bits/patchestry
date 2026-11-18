@@ -126,6 +126,7 @@ The script writes results under `builds/qemu-firmware-runtime/`:
 - `<case>/patch_record.json`
 - `<case>/applied_bytes.json`
 - `<case>/static.json`
+- `<case>/binary_equivalence.json`
 - `<case>/patch_record_check.json`
 - `<case>/case.json`
 - `<case>/validation.json`
@@ -185,6 +186,28 @@ The last three cases patch targets whose behaviour crosses the function boundary
 Each patch only restricts the accepted inputs. `main` calls every target once with an input the patch accepts and once with one it rejects, and its unpatched callers print what they see (`LEN:ok`, `LEN:error`, `FWD:second:large`, ...), so each transcript shows the accepted input behaving as before and the rejected one being refused. In the `send` case the run ends at `REJECT`.
 
 The fixtures for these three targets are written by hand, like the others; the lifted C matches the firmware source.
+
+## Binary Comparison
+
+After the transcript matches, `check_binary_equivalence.py` compares the patched function in `rewritten.elf` with the function in `serial.elf` by symbolic execution of the machine code of both, and writes `<case>/binary_equivalence.json`. `docs/patch_validation.md` describes the properties P1 to P4 and the verdicts. Every case that gets this far is compared. What a case tells the comparison is in its `Case` entry in `qemu_firmware_runtime.py`:
+
+| Field | Meaning |
+| --- | --- |
+| `compare` | the inputs and the ways the patch rejects an input: `arg_buffers`, `reject_returns`, `reject_skips`, `reject_handlers`, `mmio_regions` and the other keys `check_binary_equivalence.py` accepts |
+| `compare_differs` | the properties the patch is meant to change |
+
+The comparison has to fail in exactly the properties in `compare_differs`, and be `proven` when there are none. Anything else fails the suite.
+
+| Cases | Declared | Result |
+| --- | --- | --- |
+| `length` | a 4-byte buffer for the first argument, rejection by the return value `0xFFFFFFFF` | proven |
+| `forward` | rejection by leaving out the call to `forward_second` | proven |
+| `send` | rejection by a call to `qemu_reject`, the UART registers as a device range | proven, including the order of the device writes |
+| `before`, `after`, `replace`, `contract`, `short`, `pointer`, `handler`, `dispatch`, `switch` | `compare_differs=("P4",)` | differs in P4 only |
+
+The nine patches in the last row add a line to the transcript, so the calls the function makes change by design. For them the evidence gives `binary-comparison` the verdict `not-run`, with the reason that the patch is declared to change P4: a declared change is not a failure, and it is not a proof that the calls changed only in the intended way. A difference in any other property fails the case.
+
+Without its declaration each of the three restricting patches fails the comparison (`forward` in P4, `send` in P4, `length` in P2 and P3), and the suite then exits 1.
 
 ## Globals and Indirect Calls
 
@@ -332,6 +355,8 @@ The file also has the bounds (the budgets and what was measured against them, th
 | `addresses-outside-image` | a name is an address no segment maps |
 | `fixtures-hand-written` | the function JSON was written by hand |
 | `fixtures-not-regenerated` | the function JSON is a checked-in file, not lifted in this run |
+| `comparison-inputs`, `comparison-callees` | the rewritten function was compared with the original |
+| `comparison-declared` | the case declares a rejection, or a property the patch is meant to change |
 | `validation-block-absent` | the patch specification declares no intent |
 
 The suite writes `case.json` beside the reports with what no report holds: the image and its digest, the patch, the fixture's origin, and the outcome of the run. It can call a run `tested`, `failed` or `not-run`, never `proven`. After each case the suite compares its own status with the evidence and fails on a disagreement.

@@ -39,7 +39,7 @@ Checks and where each verdict is read from:
 | integrity | `rewritten-bindings` | `bindings.rewritten.json`, or `bindings.json` when it covers the rewritten image |
 | static | `calling-convention`, `code-size-budget`, `stack-budget` | `static.json` |
 | runtime | `runtime-transcript` | `case.json` (`runtime`), written by the suite |
-| comparison | `binary-comparison` | `binary_equivalence.json`; `incomplete` there is `not-run` here |
+| comparison | `binary-comparison` | `binary_equivalence.json`; `incomplete` there is `not-run` here, and so is a difference the case declares (`comparison` in `case.json`) |
 
 `case.json` is what the suite knows and no report holds: the case, the image
 and its digest, the patch, where the fixture came from, the outcome of running
@@ -320,7 +320,7 @@ def _runtime(context: dict) -> dict:
                 facts={"detail": detail} if verdict == "tested" else None)
 
 
-def _comparison(reports: Reports) -> dict:
+def _comparison(reports: Reports, context: dict) -> dict:
     report = reports.get("binary_equivalence.json")
     if report is None:
         return _row("not-run", reason=reports.absent("binary_equivalence.json"))
@@ -328,6 +328,13 @@ def _comparison(reports: Reports) -> dict:
              "seconds": report["seconds"]}
     if report["verdict"] == "failed":
         problems = [name for name, verdict in report["checks"].items() if verdict == "failed"]
+        intended = (context.get("comparison") or {}).get("declared_differences", [])
+        if set(problems) <= set(intended):
+            # The patch is meant to change this.  That is not a failure, and
+            # it is not a proof that nothing else changed in that property.
+            return _row("not-run", "binary_equivalence.json", facts=facts,
+                        reason="the patch is declared to change " + ", ".join(problems)
+                        + ", and does; the comparison does not decide that property")
         return _row("failed", "binary_equivalence.json", problems, facts=facts)
     if report["verdict"] == "proven":
         return _row("proven", "binary_equivalence.json", facts=facts)
@@ -394,6 +401,16 @@ def _assumptions(reports: Reports, context: dict) -> list[dict]:
                "callees are replaced by a record of the call and an unknown result and "
                "are taken to write no memory, except those executed on both sides: "
                + (", ".join(declared.get("followed_callees", [])) or "none"))
+        rejects = [f"{kind} {', '.join(str(value) for value in declared[key])}"
+                   for key, kind in (("reject_handlers", "a call to"),
+                                     ("reject_returns", "the return value"),
+                                     ("reject_skips", "leaving out the call to"))
+                   if declared.get(key)]
+        intended = (context.get("comparison") or {}).get("declared_differences", [])
+        if rejects or intended:
+            assume("comparison-declared", "case.json",
+                   "the case declares how the patch may differ from the original: "
+                   + "; ".join(rejects + [f"a change of {name}" for name in intended]))
     assume("validation-block-absent", "patch specification",
            "the patch specification declares no reject paths, strict callees, device "
            "regions or budgets; every check that needs declared intent is not-run")
@@ -421,7 +438,7 @@ def build_evidence(directory: Path) -> dict:
         "code-size-budget": _budget(reports, "code_bytes"),
         "stack-budget": _budget(reports, "stack_bytes"),
         "runtime-transcript": _runtime(context),
-        "binary-comparison": _comparison(reports),
+        "binary-comparison": _comparison(reports, context),
     }
 
     stopped = context.get("stopped")

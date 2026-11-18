@@ -444,14 +444,21 @@ class Evidence(unittest.TestCase):
 
     # The comparison of the rewritten function with the original.
 
-    def comparison(self, verdict: str, checks: dict, incomplete=()) -> dict:
+    def comparison(self, verdict: str, checks: dict, incomplete=(), differences=(),
+                   rejects=()) -> dict:
         report = {
             "verdict": verdict, "checks": checks, "incomplete": list(incomplete),
             "paths": {"original": 4, "rewritten": 4}, "seconds": 3.0,
             "assumptions": {"arg_buffers": {"0": 3}, "arg_suffixes": {}, "arg_ranges": {},
-                            "followed_callees": ["FUN_0002609c"]},
+                            "followed_callees": ["FUN_0002609c"],
+                            "reject_handlers": list(rejects)},
         }
-        return self.build(lambda reports: reports.update({"binary_equivalence.json": report}))
+
+        def change(reports: dict) -> None:
+            reports["binary_equivalence.json"] = report
+            reports["case.json"]["comparison"] = {"declared_differences": list(differences)}
+
+        return self.build(change)
 
     def test_comparison_without_a_report_is_not_run(self):
         row = self.build()["checks"]["binary-comparison"]
@@ -473,6 +480,27 @@ class Evidence(unittest.TestCase):
         row = built["checks"]["binary-comparison"]
         self.assertEqual((row["verdict"], row["problems"]), ("failed", ["P2", "P4"]))
         self.assertEqual(built["verdict"], "failed")
+
+    def test_a_declared_difference_is_not_a_failure(self):
+        built = self.comparison("failed", {"P1": "proven", "P2": "proven", "P4": "failed"},
+                                differences=["P4"])
+        row = built["checks"]["binary-comparison"]
+        self.assertEqual(row["verdict"], "not-run")
+        self.assertIn("declared to change P4", row["reason"])
+        detail = next(row["detail"] for row in built["assumptions"]
+                      if row["name"] == "comparison-declared")
+        self.assertIn("a change of P4", detail)
+
+    def test_a_difference_beyond_the_declared_one_fails(self):
+        built = self.comparison("failed", {"P2": "failed", "P4": "failed"}, differences=["P4"])
+        row = built["checks"]["binary-comparison"]
+        self.assertEqual((row["verdict"], row["problems"]), ("failed", ["P2", "P4"]))
+
+    def test_declared_rejections_are_an_assumption(self):
+        built = self.comparison("proven", {"P1": "proven"}, rejects=["qemu_reject"])
+        detail = next(row["detail"] for row in built["assumptions"]
+                      if row["name"] == "comparison-declared")
+        self.assertIn("a call to qemu_reject", detail)
 
     def test_incomplete_comparison_is_not_run(self):
         built = self.comparison("incomplete", {"P1": "incomplete"},

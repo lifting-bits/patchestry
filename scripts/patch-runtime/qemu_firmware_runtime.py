@@ -72,6 +72,13 @@ class Case:
     # case.  Such a function has not passed them; the case says so in advance,
     # and any other outcome of the static checks fails it.
     static_not_run: tuple[str, ...] = ()
+    # What the comparison of the rewritten function with the original is told:
+    # the inputs, and the ways the patch rejects an input (the keys of
+    # check_binary_equivalence.DECLARED).  None declares nothing.
+    compare: dict | None = None
+    # The properties (P1 to P4) the patch is meant to change.  The comparison
+    # has to fail in exactly these and in no other.
+    compare_differs: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -109,6 +116,7 @@ CASES: tuple[Case, ...] = (
             "z",
             "DONE",
         ),
+        compare_differs=("P4",),
     ),
     Case(
         name="after",
@@ -136,6 +144,7 @@ CASES: tuple[Case, ...] = (
             "z",
             "DONE",
         ),
+        compare_differs=("P4",),
     ),
     Case(
         name="replace",
@@ -162,6 +171,7 @@ CASES: tuple[Case, ...] = (
             "z",
             "DONE",
         ),
+        compare_differs=("P4",),
     ),
     Case(
         name="contract",
@@ -189,6 +199,7 @@ CASES: tuple[Case, ...] = (
             "z",
             "DONE",
         ),
+        compare_differs=("P4",),
     ),
     # 4 bytes: the entry branch fills the function exactly.
     Case(
@@ -216,6 +227,7 @@ CASES: tuple[Case, ...] = (
             "z",
             "DONE",
         ),
+        compare_differs=("P4",),
     ),
     # 2 bytes: the entry branch overwrites the start of emit_tiny_base.
     # Rejected by the reinsertion check; the transcript is never compared.
@@ -272,6 +284,7 @@ CASES: tuple[Case, ...] = (
             "z",
             "DONE",
         ),
+        compare_differs=("P4",),
     ),
     # The callee of an indirect call: reached through qemu_callback.
     Case(
@@ -299,6 +312,7 @@ CASES: tuple[Case, ...] = (
             "z",
             "DONE",
         ),
+        compare_differs=("P4",),
     ),
     # The caller: its lifted body reads qemu_callback and calls through it.
     Case(
@@ -327,6 +341,7 @@ CASES: tuple[Case, ...] = (
             "z",
             "DONE",
         ),
+        compare_differs=("P4",),
     ),
     # Inserted code with a switch and string constants of its own; the
     # transcript shows every arm.
@@ -362,6 +377,7 @@ CASES: tuple[Case, ...] = (
             "z",
             "DONE",
         ),
+        compare_differs=("P4",),
     ),
     # Inserted code that calls a compiler runtime helper the firmware does not
     # have.  Rejected before the image is rewritten.
@@ -451,6 +467,7 @@ CASES: tuple[Case, ...] = (
         expect_reject="writable-state",
     ),
     # Validation corpus: input-restricting patches, one per way of rejecting.
+    # Each declares that way, and the comparison with the original then holds.
     # Early return from a replacement body: a length over 16 gets the error value.
     Case(
         name="length",
@@ -477,6 +494,7 @@ CASES: tuple[Case, ...] = (
             "z",
             "DONE",
         ),
+        compare={"arg_buffers": {0: 4}, "reject_returns": [0xFFFFFFFF]},
     ),
     # Skipped operation: the second call is not made for a value over 32.
     Case(
@@ -503,6 +521,7 @@ CASES: tuple[Case, ...] = (
             "z",
             "DONE",
         ),
+        compare={"reject_skips": ["forward_second"]},
     ),
     # Call to a handler that does not return: the run ends at REJECT.
     Case(
@@ -529,6 +548,10 @@ CASES: tuple[Case, ...] = (
             "S",
             "REJECT",
         ),
+        compare={
+            "reject_handlers": ["qemu_reject"],
+            "mmio_regions": [[0x4000C000, 0x4000CFFF]],
+        },
     ),
 )
 
@@ -1075,6 +1098,7 @@ def main() -> int:
         patch_record_path = case_dir / "patch_record.json"
         applied_bytes_path = case_dir / "applied_bytes.json"
         static_path = case_dir / "static.json"
+        comparison_path = case_dir / "binary_equivalence.json"
 
         fixture_json_path = fixture_dir / f"{case.function_name}.json"
         if args.refresh_ghidra_fixtures:
@@ -1252,6 +1276,33 @@ def main() -> int:
                 f"Transcript mismatch for {case.name}.\nExpected: {case.expected_lines}\nObserved: {transcript_lines}"
             )
 
+        # The rewritten function against the original, in machine code.  The
+        # firmware is Thumb only.
+        import check_binary_equivalence  # loads the symbolic execution engine
+
+        comparison = check_binary_equivalence.check_binary_equivalence(
+            firmware_elf,
+            rewritten_elf_path,
+            original_symbols[case.function_name].addr,
+            True,
+            check_binary_equivalence.settings_from_declaration(
+                case.compare or {}, patched_ll_path, case.function_name
+            ),
+        )
+        comparison_path.write_text(json.dumps(comparison, indent=2) + "\n", encoding="utf-8")
+        differing = sorted(
+            name for name, verdict in comparison["checks"].items() if verdict == "failed"
+        )
+        if differing != sorted(case.compare_differs) or (
+            not differing and comparison["verdict"] != "proven"
+        ):
+            raise RuntimeError(
+                f"Binary comparison of {case.name}: {comparison['verdict']}, "
+                f"differs in {', '.join(differing) or 'nothing'} "
+                f"(declared: {', '.join(case.compare_differs) or 'nothing'}; "
+                f"see {comparison_path})."
+            )
+
         statuses[case.name] = "pass"
         summary_rows.append(f"{case.name}\tpass\t{rewritten_elf_path}")
 
@@ -1276,6 +1327,7 @@ def main() -> int:
             "runtime": {"verdict": "not-run",
                         "detail": "the case stopped before the image was run"},
             "expected": f"rejected:{case.expect_reject}" if case.expect_reject else "pass",
+            "comparison": {"declared_differences": list(case.compare_differs)},
         }
         for stale in ("case.json", "validation.json", *evidence.REPORT_FILES):
             (case_dir / stale).unlink(missing_ok=True)

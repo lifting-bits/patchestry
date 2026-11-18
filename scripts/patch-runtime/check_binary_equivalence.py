@@ -792,8 +792,8 @@ def compare(patched: Side, original: Side, settings: Settings, shared: Shared,
 
 
 DECLARED = {"arg_buffers", "arg_suffixes", "arg_ranges", "follow_callees", "pure_callees",
-            "reject_handlers", "reject_returns", "reject_skips", "max_paths", "max_steps",
-            "max_seconds"}
+            "reject_handlers", "reject_returns", "reject_skips", "mmio_regions",
+            "max_paths", "max_steps", "max_seconds"}
 
 
 def settings_from_declaration(declared: dict, prototypes: Path | None = None,
@@ -815,6 +815,8 @@ def settings_from_declaration(declared: dict, prototypes: Path | None = None,
         reject_handlers=tuple(declared.get("reject_handlers", ())),
         reject_returns=tuple(declared.get("reject_returns", ())),
         reject_skips=tuple(declared.get("reject_skips", ())),
+        mmio_regions=tuple((int(low), int(high))
+                           for low, high in declared.get("mmio_regions", ())),
     )
     for limit in ("max_paths", "max_steps", "max_seconds"):
         if limit in declared:
