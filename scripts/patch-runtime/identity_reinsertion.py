@@ -29,7 +29,8 @@ it may be stripped and its code may be ARM-mode.  Per case, in order:
 | `static` | the new code returns with the stack pointer and the callee-saved registers as it found them, to the address it was called from; its size and frame are measured |
 
 A case ends at the first check that fails, with the status
-`rejected:<problem>`.  A case can declare the rejection it expects.  Two
+`rejected:<problem>`.  A case can declare the rejection it expects, and one
+change to the lifted IR (`alter`) that a check is expected to catch.  Two
 rejections come from before any check of the result: `unsupported-image` (a
 shared object or position-independent executable) and `rewriter-no-function`
 (the rewriter's own analysis has no function at the address).
@@ -104,6 +105,11 @@ class Case:
     # Inputs for the comparison of the rewritten function with the original;
     # None when the case declares none, and the comparison is not run.
     compare: dict | None = None
+    # One change to the lifted IR before it is reinserted, as a regular
+    # expression `pattern` that must match once and its `replacement`.  The
+    # reinserted function then differs from the original, and the case declares
+    # the check that has to notice.
+    alter: dict | None = None
 
 
 class Rejected(Exception):
@@ -189,6 +195,22 @@ def run_case(case: Case, args, repo_root: Path, summary: dict) -> None:
          "-S", f"{stem}.cir", "-o", str(module)],
         capture_output=True,
     )
+    if case.alter is not None:
+        lifted = module.read_text(encoding="utf-8")
+        altered, count = re.subn(
+            case.alter["pattern"], case.alter["replacement"], lifted, flags=re.MULTILINE
+        )
+        if count != 1:
+            raise RuntimeError(
+                f"alter pattern {case.alter['pattern']!r} matches {count} times "
+                f"in {module.name}, expected once"
+            )
+        (out / f"{case.function}.lifted.ll").write_text(lifted, encoding="utf-8")
+        module.write_text(altered, encoding="utf-8")
+        summary["patch"] = (
+            f"seeded change to the lifted IR: {case.alter['pattern']!r} "
+            f"replaced by {case.alter['replacement']!r}"
+        )
 
     def passed(check: str, **facts) -> None:
         summary["checks"][check] = {"verdict": "pass", **facts}

@@ -59,6 +59,10 @@ The `static` check analyzes the new body in the rewritten binary and, for compar
 
 The sizes are measured, not judged: no budget is declared for these binaries. No copy of half a body or more was found elsewhere in either image.
 
+## Seeded change: a different separator
+
+`cgibin-fun-00026534--changed-separator` is the control for the comparison. The case declares one change to the lifted IR (`alter` in the cases file, a regular expression that must match exactly once and its replacement): the comparison of a character with `;` (59) becomes a comparison with `:` (58). The changed IR is what gets compiled and reinserted, so every check of where the bytes are and what they link to passes. Only the comparison with the original notices, and the case is rejected with `differs` on P3 and P4 (the value returned and the calls made). The cases file expects that. The IR as lifted is kept next to the changed one as `<function>.lifted.ll`.
+
 ## Known rejection: `builtin_strncpy`
 
 `cgibin` `FUN_00011708` is rejected with `unresolved-dependency`, and the cases file expects that. The function fills a local buffer with a string constant using inline instructions. Ghidra represents the idiom as a pseudo-call to an intrinsic named `builtin_strncpy`, and `patchir-decomp` emits it as a call to an external function of that name. Nothing in the image provides one, so the code to insert cannot be linked. The rejection is correct. The fix belongs in the lifter: lower Ghidra's `builtin_*` intrinsics to an inline copy. When that lands, the expected status of the case becomes `pass`.

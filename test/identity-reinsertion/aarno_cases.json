@@ -69,6 +69,38 @@
     "expect": "pass"
   },
   {
+    "name": "cgibin-fun-00026534--changed-separator",
+    "binary": "cve-2016-6563/ground-truth/binary",
+    "sha256": "e9ce16a2f6ce2f1748a14bbc8dd5c3d95946c5eca88486c054f5dfbd1e746414",
+    "fixture": "test/patchir-decomp/cve_2016_6563_fun_00026534.json",
+    "function": "FUN_00026534",
+    "alter": {
+      "pattern": "(icmp ne i32 %[0-9]+), 59$",
+      "replacement": "\\1, 58"
+    },
+    "compare": {
+      "arg_buffers": {
+        "1": 4
+      },
+      "arg_suffixes": {
+        "1": "39393b"
+      },
+      "arg_ranges": {
+        "2": [
+          0,
+          4
+        ]
+      },
+      "follow_callees": [
+        "FUN_0002609c",
+        "FUN_0002619c"
+      ],
+      "max_paths": 20000,
+      "max_seconds": 120
+    },
+    "expect": "rejected:differs"
+  },
+  {
     "name": "cgibin-fun-00011708",
     "binary": "cve-2016-6563/ground-truth/binary",
     "sha256": "e9ce16a2f6ce2f1748a14bbc8dd5c3d95946c5eca88486c054f5dfbd1e746414",
