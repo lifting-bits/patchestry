@@ -157,12 +157,16 @@ Patcherex2 environment of the suites already has.
 | `cgibin` `FUN_00026534` reinserted unchanged, 2-byte buffer followed by `99;`, `FUN_0002609c` and `FUN_0002619c` followed | proven, 17 and 17 paths, 7 seconds |
 | the same with one byte changed (a compared character, `;` to `:`) | failed P4 |
 | the same unchanged, without following the two helpers | incomplete: the loop never advances, because the helper's length result is lost |
-| the same unchanged, 4-byte buffer | incomplete: 108 and 111 paths explored in 20 seconds, 6,590 of 11,988 path pairs compared in 100 seconds |
+| the same unchanged, 4-byte buffer | proven, 110 and 113 paths, 28 seconds |
+| the same with the changed byte, 4-byte buffer | failed P3 and P4, with inputs such as `&#9;` |
+| the same unchanged, 5-byte buffer | proven, 293 and 308 paths, 119 seconds |
+| the same unchanged, 6-byte buffer | incomplete: 786 and 847 paths explored, the comparison did not finish in 180 seconds |
 
 Limits of the prototype: callees are assumed to write no memory; stack and
 floating-point arguments are not compared; memory that is read before it is
-written is zero; path pairs are compared one by one, so a function with many
-paths runs out of time; a writable segment over 1 MB keeps the image's bytes.
+written is zero; the solver is asked about each pair of paths that share an
+input, so the time grows with the number of paths, which grows with the size
+of the input; a writable segment over 1 MB keeps the image's bytes.
 
 ### Stage 9: evidence
 
@@ -237,8 +241,10 @@ reading. The cost is that someone has to state how the patch rejects.
 Paths are not matched by similarity. VeriBin pairs paths of the two functions
 by block similarity and proves implications between their constraints, which
 needs the pairing to be right. The prototype asks the solver about every pair
-of paths whose constraints one input can satisfy. That avoids a wrong pairing
-and costs a query per pair, which is why large functions do not finish.
+of paths whose constraints one input can satisfy. It finds those pairs from
+inputs: an input of a rewritten path names the original path it follows, and
+the search ends when the solver shows the rewritten path has no other input.
+That avoids a wrong pairing and costs a few queries per path.
 
 The maturity is different. VeriBin has an evaluation on 86 patches. The
 binary comparison here is a prototype that has finished on three firmware

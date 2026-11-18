@@ -71,7 +71,8 @@ unwritten memory is zero, how many arguments each callee takes, and the
 limits on paths and steps.
 
 Not handled: arguments on the stack, floating-point arguments and results,
-callees that write through their pointer arguments, indirect jumps the engine
+callees that write through their pointer arguments (unless followed
+with `--follow-callee`), indirect jumps the engine
 cannot resolve, functions with more paths than the limit, and a read or write
 whose address can take more values than the engine enumerates (the run is
 then `incomplete`).
@@ -154,8 +155,15 @@ for _name in ("Iop_QAdd32S", "Iop_QSub32S"):
 
 
 def _fixed(state, value):
-    """The value when the path fixes it, else None."""
-    return None if state.solver.symbolic(value) else state.solver.eval(value)
+    """The value when the path fixes it, else None.
+
+    A value built from conditions (a conditional move) is an expression even
+    when the path leaves it one possible value, so the solver is asked.
+    """
+    if not state.solver.symbolic(value):
+        return state.solver.eval(value)
+    found = state.solver.eval_upto(value, 2)
+    return found[0] if len(found) == 1 else None
 
 
 def _bytes(state, address: int, count: int) -> list:
@@ -572,6 +580,8 @@ def compare(patched: Side, original: Side, settings: Settings, shared: Shared,
     def ask(check: str, kind: str, conditions: list, detail: dict) -> None:
         if (check, kind) in found and len([v for v in violations if v["check"] == check]) >= 3:
             return
+        if any(claripy.is_false(condition) for condition in conditions):
+            return
         solver = claripy.Solver()
         solver.add(conditions)
         if not solver.satisfiable():
@@ -584,22 +594,60 @@ def compare(patched: Side, original: Side, settings: Settings, shared: Shared,
         found.add((check, kind))
         violations.append({"check": check, "kind": kind, "input": witness, **detail})
 
+    # The paths of the original split its inputs into disjoint sets. So one
+    # input of a rewritten path names the one original path it shares that
+    # input with, and excluding that path's inputs leads to the next. This asks
+    # the solver once per pair that shares an input, not once per pair.
+    symbols = {}
+    for path in patched.paths + original.paths:
+        for leaf in path.constraint.leaf_asts():
+            if leaf.symbolic:
+                symbols[leaf.hash()] = leaf
+    symbols = list(symbols.values())
+
+    def follows(o: Path_, model: dict, solver) -> bool:
+        """Whether the input `model` satisfies the constraint of `o`."""
+        there = claripy.replace_dict(o.constraint, model)
+        if claripy.is_true(there):
+            return True
+        if claripy.is_false(there):
+            return False
+        return solver.satisfiable(extra_constraints=[o.constraint])
+
     for p in patched.paths:
-        for o in original.paths:
+        inputs = claripy.Solver()
+        inputs.add(p.constraint)
+        # A path that made the same calls is the likely partner; try it first.
+        made = [callee for callee, _ in p.calls]
+        remaining = sorted(original.paths,
+                           key=lambda path: [callee for callee, _ in path.calls] != made)
+        while True:
             if time.time() > deadline:
                 notes.append(f"comparison took more than {settings.max_seconds:.0f} seconds "
-                             f"({pairs} of {len(patched.paths) * len(original.paths)} "
-                             "path pairs compared)")
+                             f"({pairs} path pairs compared)")
                 return violations
+            if not inputs.satisfiable():
+                break
+            values = inputs.batch_eval(symbols, 1)[0] if symbols else ()
+            model = {symbol.hash(): claripy.BVV(value, symbol.size())
+                     for symbol, value in zip(symbols, values)}
+            o = next((path for path in remaining if follows(path, model, inputs)), None)
+            if o is None:
+                notes.append("an input of a rewritten path follows no finished path "
+                             "of the original")
+                break
+            remaining.remove(o)
+            inputs.add(claripy.Not(o.constraint))
             pairs += 1
             base = [p.constraint, o.constraint]
             reject_p, reject_o = rejects(p, settings), rejects(o, settings)
             ask("P1", "original-rejects", base + [claripy.Not(reject_p), reject_o], {})
             both = base + [claripy.Not(reject_p), claripy.Not(reject_o)]
-            solver = claripy.Solver()
-            solver.add(both)
-            if not solver.satisfiable():
-                continue
+            if not (claripy.is_false(reject_p) and claripy.is_false(reject_o)):
+                solver = claripy.Solver()
+                solver.add(both)
+                if not solver.satisfiable():
+                    continue
             if skipped(p.calls, o.calls, settings.reject_skips):
                 continue  # the patched function rejected by not calling
             names = {"patched": [c for c, _ in p.calls], "original": [c for c, _ in o.calls]}
