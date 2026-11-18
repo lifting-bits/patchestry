@@ -120,6 +120,12 @@ result through a pointer. `--follow-callee NAME` executes such a callee on
 both sides instead. `--arg-suffix INDEX:HEX` sets the bytes that follow an
 argument's buffer; without it they are zero.
 
+A modelled string function is computed only where the path fixes its
+pointers and length. If one call is computed on some paths and left unknown
+on others, the differences found are listed as `unconfirmed` and the run is
+`incomplete`, not `failed`: an unknown result can separate two paths that
+agree.
+
 `--merge-paths` joins paths that reach the same call or the same return after
 the same calls. Two paths are joined only when every register and memory byte
 that differs between them depends on the input in both, so a pointer or a

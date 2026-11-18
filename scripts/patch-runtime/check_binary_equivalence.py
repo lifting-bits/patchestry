@@ -56,6 +56,11 @@ returns a declared reject value.  With `--reject-skip NAME`, a patched path
 whose calls are those of the original path without some calls of NAME is a
 rejection as well.
 
+A modelled function is computed only where the path fixes its pointers and
+length. When one call is computed on some paths and left unknown on others,
+the differences found are reported as `unconfirmed` and the run is
+`incomplete`, because an unknown result can separate two paths that agree.
+
 Verdicts, per check and for the run (the weakest):
 
 | Verdict | Meaning |
@@ -350,6 +355,10 @@ class Side:
                            for address, name in getattr(self.main, "reverse_plt", {}).items()})
         self.notes: set[str] = set()
         self.modelled: set[str] = set()
+        # Calls of modelled functions, as (callee, call index): where the result
+        # was computed and where it was left unknown.
+        self.computed: set[tuple] = set()
+        self.unknown: set[tuple] = set()
         self.paths: list[Path_] = []
         self.steps = 0
         self.joined = 0
@@ -485,12 +494,14 @@ class Side:
         callee = self.name(target)
         count = self.settings.prototypes.get(callee, self.settings.default_args)
         result = None
+        index = dict(state.globals["counts"]).get(callee, 0)
         if self.settings.models and callee in MODELS:
             count, model = MODELS[callee]
             result = model(state, *[getattr(state.regs, register)
                                     for register in ARGUMENT_REGISTERS[:count]])
             if result is not None:
                 self.modelled.add(callee)
+            (self.unknown if result is None else self.computed).add((callee, index))
         arguments = tuple(self.argument(state, getattr(state.regs, register))
                           for register in ARGUMENT_REGISTERS[:count])
         if callee in self.settings.reject_handlers:
@@ -499,7 +510,6 @@ class Side:
         if callee not in self.settings.pure_callees:
             state.globals["calls"] += ((callee, arguments),)
         counts = dict(state.globals["counts"])
-        index = counts.get(callee, 0)
         counts[callee] = index + 1
         state.globals["counts"] = tuple(sorted(counts.items()))
         state.regs.r0 = result if result is not None else self.shared.returned(callee, index)
@@ -794,6 +804,14 @@ def check_binary_equivalence(original: Path, rewritten: Path, entry: int, thumb:
     violations = compare(after, before, settings, shared, notes)
     if not before.paths or not after.paths:
         notes.append("a side has no finished path")
+    # A call whose result is computed on one path and unknown on another can
+    # separate two paths that agree, so what was found is not a failure.
+    mixed = (before.computed | after.computed) & (before.unknown | after.unknown)
+    unconfirmed: list[dict] = []
+    if mixed:
+        notes.append("the result of " + ", ".join(sorted({callee for callee, _ in mixed}))
+                     + " was computed on some paths and left unknown on others")
+        violations, unconfirmed = [], violations
     failed = {row["check"] for row in violations}
     declared = {"P3": settings.returns_value, "mmio-order": bool(settings.mmio_regions)}
     checks = {}
@@ -814,6 +832,7 @@ def check_binary_equivalence(original: Path, rewritten: Path, entry: int, thumb:
         "verdict": verdict,
         "checks": checks,
         "violations": violations,
+        "unconfirmed": unconfirmed,
         "incomplete": notes,
         "paths": {"original": len(before.paths), "rewritten": len(after.paths)},
         "blocks": {"original": before.steps, "rewritten": after.steps},
@@ -931,6 +950,8 @@ def main() -> int:
           f"in {report['seconds']}s")
     for row in report["violations"][:5]:
         print(f"  {row['check']} {row['kind']} input {row['input']}")
+    for row in report["unconfirmed"][:5]:
+        print(f"  unconfirmed: {row['check']} {row['kind']} input {row['input']}")
     for note in report["incomplete"][:5]:
         print(f"  incomplete: {note}")
     return {"proven": 0, "failed": 1, "incomplete": 3}[report["verdict"]]

@@ -372,5 +372,56 @@ class Merging(unittest.TestCase):
         self.assertEqual(report["checks"]["P4"], "failed", report)
 
 
+# The same test of the text at an offset. The second form calls with a fixed
+# pointer when the offset is zero, so its result is computed on that path
+# only; the first form never has a fixed pointer.
+AT_OFFSET = """
+int strncasecmp(const char *a, const char *b, unsigned n);
+int put(const char *s, unsigned k) { return strncasecmp(s + k, "&amp;", 5) == 0; }
+"""
+AT_OFFSET_SPLIT = """
+int strncasecmp(const char *a, const char *b, unsigned n);
+int put(const char *s, unsigned k) {
+    if (k == 0)
+        return strncasecmp(s, "&amp;", 5) == 0;
+    return strncasecmp(s + k, "&amp;", 5) == 0;
+}
+"""
+
+
+@unittest.skipUnless((LLVM / "clang").is_file() and LLD.is_file(),
+                     "PATCHESTRY_LLVM_PREFIX has no clang and ld.lld")
+class OneSidedModel(unittest.TestCase):
+    """A call computed on one path and unknown on another proves nothing."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.directory = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_check(self, **settings) -> dict:
+        import angr
+        original = build(self.directory, "first", [STRNCASECMP, AT_OFFSET], ["-O0"])
+        rewritten = build(self.directory, "second", [STRNCASECMP, AT_OFFSET_SPLIT], ["-O0"])
+        symbol = angr.Project(str(original), auto_load_libs=False).loader.find_symbol("put")
+        return cbe.check_binary_equivalence(
+            original, rewritten, symbol.rebased_addr & ~1, bool(symbol.rebased_addr & 1),
+            cbe.Settings(arg_buffers={0: 8}, prototypes={"strncasecmp": 3},
+                         returns_value=True, **settings))
+
+    def test_a_difference_from_an_unknown_result_is_not_a_failure(self):
+        report = self.run_check()
+        self.assertEqual(report["verdict"], "incomplete", report)
+        self.assertEqual(report["violations"], [])
+        self.assertTrue(report["unconfirmed"], report)
+        self.assertIn("strncasecmp", " ".join(report["incomplete"]))
+
+    def test_unknown_on_every_path_is_proven(self):
+        report = self.run_check(models=False)
+        self.assertEqual(report["verdict"], "proven", report)
+
+
 if __name__ == "__main__":
     unittest.main()
