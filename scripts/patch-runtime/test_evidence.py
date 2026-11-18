@@ -442,6 +442,45 @@ class Evidence(unittest.TestCase):
         evidence.write_evidence(self.directory)
         self.assertEqual(evidence.build_evidence(self.directory), first)
 
+    # The comparison of the rewritten function with the original.
+
+    def comparison(self, verdict: str, checks: dict, incomplete=()) -> dict:
+        report = {
+            "verdict": verdict, "checks": checks, "incomplete": list(incomplete),
+            "paths": {"original": 4, "rewritten": 4}, "seconds": 3.0,
+            "assumptions": {"arg_buffers": {"0": 3}, "arg_suffixes": {}, "arg_ranges": {},
+                            "followed_callees": ["FUN_0002609c"]},
+        }
+        return self.build(lambda reports: reports.update({"binary_equivalence.json": report}))
+
+    def test_comparison_without_a_report_is_not_run(self):
+        row = self.build()["checks"]["binary-comparison"]
+        self.assertEqual(row["verdict"], "not-run")
+        self.assertIn("binary_equivalence.json was not written", row["reason"])
+
+    def test_proven_comparison(self):
+        built = self.comparison("proven", {"P1": "proven", "P2": "proven"})
+        self.assertEqual(built["checks"]["binary-comparison"]["verdict"], "proven")
+        self.assertEqual(built["groups"]["comparison"], "proven")
+        names = [row["name"] for row in built["assumptions"]]
+        self.assertIn("comparison-inputs", names)
+        detail = next(row["detail"] for row in built["assumptions"]
+                      if row["name"] == "comparison-callees")
+        self.assertIn("FUN_0002609c", detail)
+
+    def test_failed_comparison_names_the_properties(self):
+        built = self.comparison("failed", {"P1": "proven", "P2": "failed", "P4": "failed"})
+        row = built["checks"]["binary-comparison"]
+        self.assertEqual((row["verdict"], row["problems"]), ("failed", ["P2", "P4"]))
+        self.assertEqual(built["verdict"], "failed")
+
+    def test_incomplete_comparison_is_not_run(self):
+        built = self.comparison("incomplete", {"P1": "incomplete"},
+                                ["original: a path longer than 4000 blocks"])
+        row = built["checks"]["binary-comparison"]
+        self.assertEqual(row["verdict"], "not-run")
+        self.assertIn("4000 blocks", row["reason"])
+
 
 if __name__ == "__main__":
     unittest.main()

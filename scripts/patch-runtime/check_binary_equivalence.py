@@ -791,6 +791,39 @@ def compare(patched: Side, original: Side, settings: Settings, shared: Shared,
     return violations
 
 
+DECLARED = {"arg_buffers", "arg_suffixes", "arg_ranges", "follow_callees", "pure_callees",
+            "reject_handlers", "reject_returns", "reject_skips", "max_paths", "max_steps",
+            "max_seconds"}
+
+
+def settings_from_declaration(declared: dict, prototypes: Path | None = None,
+                              function: str = "") -> Settings:
+    """The settings a suite's case file declares, as JSON: argument indexes
+    are keys, suffixes are hex strings."""
+    unknown = sorted(set(declared) - DECLARED)
+    if unknown:
+        raise ValueError(f"unknown comparison settings: {', '.join(unknown)}")
+    settings = Settings(
+        arg_buffers={int(index): int(size)
+                     for index, size in declared.get("arg_buffers", {}).items()},
+        arg_suffixes={int(index): bytes.fromhex(text)
+                      for index, text in declared.get("arg_suffixes", {}).items()},
+        arg_ranges={int(index): (int(low), int(high))
+                    for index, (low, high) in declared.get("arg_ranges", {}).items()},
+        followed_callees=tuple(declared.get("follow_callees", ())),
+        pure_callees=tuple(declared.get("pure_callees", ())),
+        reject_handlers=tuple(declared.get("reject_handlers", ())),
+        reject_returns=tuple(declared.get("reject_returns", ())),
+        reject_skips=tuple(declared.get("reject_skips", ())),
+    )
+    for limit in ("max_paths", "max_steps", "max_seconds"):
+        if limit in declared:
+            setattr(settings, limit, declared[limit])
+    if prototypes is not None:
+        settings.prototypes, settings.returns_value = read_prototypes(prototypes, function)
+    return settings
+
+
 def check_binary_equivalence(original: Path, rewritten: Path, entry: int, thumb: bool,
                              settings: Settings) -> dict:
     started = time.time()

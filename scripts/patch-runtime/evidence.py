@@ -39,6 +39,7 @@ Checks and where each verdict is read from:
 | integrity | `rewritten-bindings` | `bindings.rewritten.json`, or `bindings.json` when it covers the rewritten image |
 | static | `calling-convention`, `code-size-budget`, `stack-budget` | `static.json` |
 | runtime | `runtime-transcript` | `case.json` (`runtime`), written by the suite |
+| comparison | `binary-comparison` | `binary_equivalence.json`; `incomplete` there is `not-run` here |
 
 `case.json` is what the suite knows and no report holds: the case, the image
 and its digest, the patch, where the fixture came from, the outcome of running
@@ -83,6 +84,7 @@ CHECKS = (
     ("code-size-budget", "static"),
     ("stack-budget", "static"),
     ("runtime-transcript", "runtime"),
+    ("binary-comparison", "comparison"),
 )
 
 CLAIMS = {
@@ -101,6 +103,9 @@ CLAIMS = {
     "code-size-budget": "the inserted code fits the declared code budget",
     "stack-budget": "the inserted functions' frames fit the declared stack budget",
     "runtime-transcript": "the rewritten image, run, produces the expected output",
+    "binary-comparison": "on the declared inputs the function in the rewritten image writes "
+                         "the same memory, makes the same calls and returns the same value "
+                         "as the function in the original image",
 }
 
 BINDING_FAILURES = {
@@ -111,7 +116,7 @@ SUITE_RUNTIME_VERDICTS = ("tested", "failed", "not-run")
 REPORT_FILES = (
     "bindings.json", "bindings.rewritten.json", "dependencies.json", "abi.json",
     "trampoline.json", "patch_record.json", "patch_record_check.json", "applied_bytes.json",
-    "static.json",
+    "static.json", "binary_equivalence.json",
 )
 
 
@@ -315,6 +320,21 @@ def _runtime(context: dict) -> dict:
                 facts={"detail": detail} if verdict == "tested" else None)
 
 
+def _comparison(reports: Reports) -> dict:
+    report = reports.get("binary_equivalence.json")
+    if report is None:
+        return _row("not-run", reason=reports.absent("binary_equivalence.json"))
+    facts = {"checks": report["checks"], "paths": report["paths"],
+             "seconds": report["seconds"]}
+    if report["verdict"] == "failed":
+        problems = [name for name, verdict in report["checks"].items() if verdict == "failed"]
+        return _row("failed", "binary_equivalence.json", problems, facts=facts)
+    if report["verdict"] == "proven":
+        return _row("proven", "binary_equivalence.json", facts=facts)
+    return _row("not-run", "binary_equivalence.json", facts=facts,
+                reason="; ".join(report["incomplete"][:3]) or "the comparison is incomplete")
+
+
 def _assumptions(reports: Reports, context: dict) -> list[dict]:
     rows: list[dict] = []
 
@@ -362,6 +382,18 @@ def _assumptions(reports: Reports, context: dict) -> list[dict]:
         assume("fixtures-not-regenerated", "case.json",
                f"the function JSON ({fixture.get('path')}) is a checked-in file; it was "
                "not lifted from the image in this run")
+    comparison = reports.get("binary_equivalence.json")
+    if comparison is not None:
+        declared = comparison["assumptions"]
+        assume("comparison-inputs", "binary_equivalence.json",
+               "the comparison covers these inputs only: buffers "
+               f"{declared.get('arg_buffers')} followed by {declared.get('arg_suffixes')}, "
+               f"argument ranges {declared.get('arg_ranges')}; memory read before it is "
+               "written is zero")
+        assume("comparison-callees", "binary_equivalence.json",
+               "callees are replaced by a record of the call and an unknown result and "
+               "are taken to write no memory, except those executed on both sides: "
+               + (", ".join(declared.get("followed_callees", [])) or "none"))
     assume("validation-block-absent", "patch specification",
            "the patch specification declares no reject paths, strict callees, device "
            "regions or budgets; every check that needs declared intent is not-run")
@@ -389,6 +421,7 @@ def build_evidence(directory: Path) -> dict:
         "code-size-budget": _budget(reports, "code_bytes"),
         "stack-budget": _budget(reports, "stack_bytes"),
         "runtime-transcript": _runtime(context),
+        "binary-comparison": _comparison(reports),
     }
 
     stopped = context.get("stopped")

@@ -423,5 +423,25 @@ class OneSidedModel(unittest.TestCase):
         self.assertEqual(report["verdict"], "proven", report)
 
 
+class Declaration(unittest.TestCase):
+    """The settings a suite's case file declares."""
+
+    def test_json_keys_become_settings(self):
+        settings = cbe.settings_from_declaration({
+            "arg_buffers": {"1": 4}, "arg_suffixes": {"1": "39393b"},
+            "arg_ranges": {"2": [0, 4]}, "follow_callees": ["FUN_0002609c"],
+            "max_paths": 2000,
+        })
+        self.assertEqual(settings.arg_buffers, {1: 4})
+        self.assertEqual(settings.arg_suffixes, {1: b"99;"})
+        self.assertEqual(settings.arg_ranges, {2: (0, 4)})
+        self.assertEqual(settings.followed_callees, ("FUN_0002609c",))
+        self.assertEqual(settings.max_paths, 2000)
+
+    def test_an_unknown_key_is_an_error(self):
+        with self.assertRaisesRegex(ValueError, "arg_buffer"):
+            cbe.settings_from_declaration({"arg_buffer": {"1": 4}})
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -30,6 +30,7 @@ Per case, in order. A case ends at the first check that fails, with the status `
 | `applied-bytes` | the new code equals a fresh compile and link of the same IR; no other loaded byte differs | `check_applied_bytes.py` |
 | `rewritten-bindings` | in the rewritten binary every binding still gets the verdict it had | `check_bindings.py` |
 | `static` | the new code returns with the stack pointer and the callee-saved registers as it found them, to the address it was called from | `check_static.py` |
+| `binary-comparison` | on the inputs the case declares (`compare` in the cases file), the rewritten function writes the same memory, makes the same calls and returns the same value as the original; not run for a case that declares nothing, and an incomplete comparison is recorded as not run | `check_binary_equivalence.py` |
 
 ## What differs from the bare-metal checks
 

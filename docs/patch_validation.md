@@ -149,8 +149,13 @@ data by the bytes there, because the two images lay both out differently.
 Callee argument counts come from the declarations in the lifted IR; that is
 the only thing taken from the lift.
 
-It is not wired into the suites or the evidence. It needs angr, which the
-Patcherex2 environment of the suites already has.
+The identity-reinsertion suite runs it for a case that declares its inputs
+(`compare` in the cases file: buffers, the bytes after them, argument ranges,
+callees to follow, limits) and writes `binary_equivalence.json`. The evidence
+reads that as the check `binary-comparison`: `proven`, `failed`, or `not-run`
+when the comparison is incomplete or the case declares nothing. A failed
+comparison fails the case. The firmware suite does not run it yet. It needs
+angr, which the Patcherex2 environment of the suites already has.
 
 | Case | Result |
 | --- | --- |
@@ -200,12 +205,15 @@ Two suites drive the stages.
 `scripts/test-qemu-firmware-runtime.sh` patches the in-repo Cortex-M3 firmware
 `firmwares/serial-qemu` and runs it under QEMU. `scripts/test-identity-reinsertion.sh`
 lifts functions from prebuilt ARM binaries and reinserts them unchanged.
-Both run stages 1 to 7 and 9. Stage 8 is run by hand; its results are in the
-table above.
+Both run stages 1 to 7 and 9. The second also runs stage 8 on the three cases
+that declare inputs (`httpd` `FUN_0007ae8c` and `FUN_00067c0c`, `cgibin`
+`FUN_00026534` with a 4-byte buffer); all three are proven. The other rows of
+the table above were run by hand.
 
 Known gaps:
 
-- The binary comparison is not wired into the suites or the evidence.
+- The firmware suite does not run the binary comparison; the rejecting patches
+  there were compared by hand.
 - It finishes only on small functions. One of the three functions from the
   prebuilt binaries ends `incomplete`, and another is proven only for 3-byte
   buffers.

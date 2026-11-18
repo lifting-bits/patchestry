@@ -86,6 +86,7 @@ CHECKS = (
     "applied-bytes",
     "rewritten-bindings",
     "static",
+    "binary-comparison",
 )
 
 # The driver's name for a check, where the evidence names it otherwise.
@@ -100,6 +101,9 @@ class Case:
     fixture: str  # relative to the repository root
     function: str
     expect: str = "pass"
+    # Inputs for the comparison of the rewritten function with the original;
+    # None when the case declares none, and the comparison is not run.
+    compare: dict | None = None
 
 
 class Rejected(Exception):
@@ -336,6 +340,25 @@ def run_case(case: Case, args, repo_root: Path, summary: dict) -> None:
         summary["checks"]["static"] = {"verdict": "not-run", "reasons": skipped, **measured}
         raise Rejected("static", f"not-run:{skipped[0]}", ", ".join(skipped))
     passed("static", **measured)
+
+    # 8. The rewritten function against the original, on the declared inputs.
+    if case.compare is not None:
+        import check_binary_equivalence  # loads the symbolic execution engine
+
+        report = check_binary_equivalence.check_binary_equivalence(
+            binary, rewritten, target_address, mode == "thumb",
+            check_binary_equivalence.settings_from_declaration(
+                case.compare, module, case.function),
+        )
+        write_json(out / "binary_equivalence.json", report)
+        differing = [name for name, verdict in report["checks"].items() if verdict == "failed"]
+        if differing:
+            reject("binary-comparison", "differs", ", ".join(differing))
+        # An incomplete comparison is not a failure; the evidence has it as not-run.
+        summary["checks"]["binary-comparison"] = {
+            "verdict": "pass" if report["verdict"] == "proven" else "not-run",
+            "paths": report["paths"], "incomplete": report["incomplete"],
+        }
 
 
 def main() -> int:
