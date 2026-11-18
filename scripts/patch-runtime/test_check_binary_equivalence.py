@@ -306,5 +306,71 @@ class Inputs(unittest.TestCase):
         self.assertEqual(report["checks"]["P3"], "failed", report)
 
 
+# Three bytes, each passed on in upper case: 27 paths that differ only in
+# values that depend on the input.
+SINK = "__attribute__((noinline)) void sink(unsigned c) { }\n"
+UPPER = """
+void sink(unsigned c);
+int put(const unsigned char *s) {
+    for (int i = 0; i < 3; i++) {
+        unsigned c = s[i];
+        if (c >= 'a' && c <= 'z')
+            c -= SHIFT;
+        sink(c);
+    }
+    return 0;
+}
+"""
+UPPER_BY_MASK = """
+void sink(unsigned c);
+int put(const unsigned char *s) {
+    for (int i = 0; i < 3; i++) {
+        unsigned c = s[i];
+        if (c - 'a' < 26u)
+            c &= ~32u;
+        sink(c);
+    }
+    return 0;
+}
+"""
+
+
+@unittest.skipUnless((LLVM / "clang").is_file() and LLD.is_file(),
+                     "PATCHESTRY_LLVM_PREFIX has no clang and ld.lld")
+class Merging(unittest.TestCase):
+    """Paths joined where they differ in input-dependent values alone."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.directory = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_check(self, shift: int, **settings) -> dict:
+        import angr
+        original = build(self.directory, "first", [SINK, UPPER], ["-O0", f"-DSHIFT={shift}"])
+        rewritten = build(self.directory, "second", [SINK, UPPER_BY_MASK], ["-O0"])
+        symbol = angr.Project(str(original), auto_load_libs=False).loader.find_symbol("put")
+        return cbe.check_binary_equivalence(
+            original, rewritten, symbol.rebased_addr & ~1, bool(symbol.rebased_addr & 1),
+            cbe.Settings(arg_buffers={0: 3}, prototypes={"sink": 1}, returns_value=True,
+                         **settings))
+
+    def test_joined_paths_are_proven(self):
+        report = self.run_check(32, merge_paths=True)
+        self.assertEqual(report["verdict"], "proven", report)
+        self.assertEqual(report["paths"], {"original": 1, "rewritten": 1})
+
+    def test_without_joining_there_are_more_paths(self):
+        report = self.run_check(32)
+        self.assertEqual(report["verdict"], "proven", report)
+        self.assertEqual(report["paths"], {"original": 27, "rewritten": 8})
+
+    def test_joined_paths_still_show_a_difference(self):
+        report = self.run_check(31, merge_paths=True)
+        self.assertEqual(report["checks"]["P4"], "failed", report)
+
+
 if __name__ == "__main__":
     unittest.main()

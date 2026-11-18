@@ -120,6 +120,12 @@ result through a pointer. `--follow-callee NAME` executes such a callee on
 both sides instead. `--arg-suffix INDEX:HEX` sets the bytes that follow an
 argument's buffer; without it they are zero.
 
+`--merge-paths` joins paths that reach the same call or the same return after
+the same calls. Two paths are joined only when every register and memory byte
+that differs between them depends on the input in both, so a pointer or a
+loop counter is never turned into an expression. The joined path carries the
+condition of each path it stands for. It is off unless asked for.
+
 Both sides start from the same symbolic arguments, argument buffers and
 writable globals. Calls are not followed: each is recorded and returns a
 symbol shared by both sides. The result of a read-only string function
@@ -161,6 +167,10 @@ Patcherex2 environment of the suites already has.
 | the same with the changed byte, 4-byte buffer | failed P3 and P4, with inputs such as `&#9;` |
 | the same unchanged, 5-byte buffer | proven, 293 and 308 paths, 119 seconds |
 | the same unchanged, 6-byte buffer | incomplete: 786 and 847 paths explored, the comparison did not finish in 180 seconds |
+| the same unchanged, 4-byte buffer, `--merge-paths` | proven, 27 and 30 paths, 11 seconds |
+| the same with the changed byte, 4-byte buffer, `--merge-paths` | failed P3 and P4 |
+| the same unchanged, 6-byte buffer, `--merge-paths` | proven, 108 and 118 paths, 114 seconds |
+| the same unchanged, 8-byte buffer, `--merge-paths` | incomplete: exploration not finished in 120 seconds per side |
 
 Limits of the prototype: callees are assumed to write no memory; stack and
 floating-point arguments are not compared; memory that is read before it is

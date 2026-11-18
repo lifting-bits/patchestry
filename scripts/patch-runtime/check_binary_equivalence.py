@@ -83,7 +83,7 @@ CLI: check_binary_equivalence.py --original ELF --rewritten ELF
      [--arg-range INDEX:LOW:HIGH]
      [--reject-handler NAME]
      [--reject-return VALUE] [--reject-skip NAME] [--pure-callee NAME]
-     [--follow-callee NAME]
+     [--follow-callee NAME] [--merge-paths]
      [--no-models]
      [--mmio-region LOW:HIGH] [--globals symbolic|image]
      [--max-paths N] [--max-steps N] [--max-seconds N] [--output FILE]
@@ -103,6 +103,7 @@ from pathlib import Path
 
 import angr
 import claripy
+from angr.state_plugins.sim_action_object import SimActionObject
 from angr.concretization_strategies import (
     SimConcretizationStrategyAny,
     SimConcretizationStrategyMax,
@@ -117,6 +118,8 @@ STACK_LOW, STACK_HIGH = 0x7FF00000, 0x80000000
 # A writable segment larger than this keeps the image's bytes.
 SYMBOLIC_SEGMENT_LIMIT = 0x100000
 ARGUMENT_REGISTERS = ("r0", "r1", "r2", "r3")
+MERGE_REGISTERS = tuple(f"r{index}" for index in range(13)) + ("sp", "lr")
+MERGE_BYTES = 4096  # two states that differ in more memory than this are not joined
 # A write address that depends on the input is followed to this many places.
 SYMBOLIC_WRITE_SPAN = 256
 
@@ -131,6 +134,7 @@ class Settings:
     reject_skips: tuple = ()
     pure_callees: tuple = ()
     followed_callees: tuple = ()  # executed on both sides instead of replaced
+    merge_paths: bool = False  # join paths that differ in input-dependent values alone
     mmio_regions: tuple = ()  # (low, high), inclusive
     symbolic_globals: bool = True
     models: bool = True  # compute the result of the functions in MODELS
@@ -152,6 +156,16 @@ for _name in ("Iop_QAdd32S", "Iop_QSub32S"):
     _operation = angr.engines.vex.claripy.irop.operations.get(_name)
     if _operation is not None and _operation._vector_count is None:
         _operation._vector_count, _operation._vector_size = 1, 32
+
+
+def _same(a, b) -> bool:
+    """Equality of recorded values: expressions by identity, tuples by item."""
+    if isinstance(a, claripy.ast.Base) or isinstance(b, claripy.ast.Base):
+        return (isinstance(a, claripy.ast.Base) and isinstance(b, claripy.ast.Base)
+                and a.hash() == b.hash())
+    if isinstance(a, tuple) and isinstance(b, tuple):
+        return len(a) == len(b) and all(_same(x, y) for x, y in zip(a, b))
+    return a == b
 
 
 def _fixed(state, value):
@@ -338,6 +352,7 @@ class Side:
         self.modelled: set[str] = set()
         self.paths: list[Path_] = []
         self.steps = 0
+        self.joined = 0
 
     def mapped(self, address: int) -> bool:
         return any(segment.vaddr <= address < segment.vaddr + segment.memsize
@@ -491,14 +506,104 @@ class Side:
         state.regs.pc = state.regs.lr
         return True
 
+    def mergeable(self, one, other, registers: tuple) -> bool:
+        """Whether two states at the same place may be joined into one.
+
+        They may when every register and memory byte that differs between
+        them depends on the input in both. A value that is a fixed number in
+        either, such as a pointer or a loop counter, has to be the same in
+        both, so joining never turns an address into an expression.
+        """
+        def agree(a, b) -> bool:
+            return _same(a, b) or (one.solver.symbolic(a) and other.solver.symbolic(b))
+
+        if not _same(one.globals["device"], other.globals["device"]):
+            return False
+        for (_, first), (_, second) in zip(one.globals["calls"], other.globals["calls"]):
+            if len(first) != len(second):
+                return False
+            for a, b in zip(first, second):
+                both = isinstance(a, claripy.ast.Base) and isinstance(b, claripy.ast.Base)
+                if not (both and a.size() == b.size()) and not _same(a, b):
+                    return False
+        if not all(agree(getattr(one.regs, name), getattr(other.regs, name))
+                   for name in registers):
+            return False
+        low = one.solver.eval(one.regs.sp)
+        changed = [address for address in one.memory.changed_bytes(other.memory)
+                   if not STACK_LOW <= address < low]  # below the stack pointer is dead
+        if len(changed) > MERGE_BYTES:
+            return False
+        return all(agree(one.memory.load(address, 1), other.memory.load(address, 1))
+                   for address in changed)
+
+    def merged(self, states: list):
+        """One state that stands for all of `states`."""
+        if len(states) == 1:
+            return states[0]
+        conditions = [claripy.And(*state.solver.constraints) if state.solver.constraints
+                      else claripy.true() for state in states]
+        state, _, _ = states[0].merge(
+            *states[1:], merge_conditions=[(SimActionObject(condition),)
+                                           for condition in conditions])
+
+        def choose(values):
+            if all(_same(values[0], value) for value in values[1:]):
+                return values[0]
+            chosen = values[-1]
+            for condition, value in zip(conditions[-2::-1], values[-2::-1]):
+                chosen = claripy.If(condition, value, chosen)
+            return chosen
+
+        records = [each.globals["calls"] for each in states]
+        state.globals["calls"] = tuple(
+            (calls[0][0], tuple(choose(list(values)) for values in zip(*(c[1] for c in calls))))
+            for calls in zip(*records))
+        state.globals["writes"] = frozenset().union(*(each.globals["writes"] for each in states))
+        self.joined += len(states) - 1
+        return state
+
+    def release(self, waiting: dict, pending: list) -> None:
+        """Join the states that wait at one place and let them go on. The place
+        with the fewest recorded calls goes first, so later places see every
+        state that will reach them."""
+        key = min(waiting, key=lambda key: len(key[1]))
+        target = key[0]
+        registers = ("r0",) if target is None else MERGE_REGISTERS
+        groups: list[list] = []
+        for item in waiting.pop(key):
+            for group in groups:
+                if self.mergeable(group[0][0], item[0], registers):
+                    group.append(item)
+                    break
+            else:
+                groups.append([item])
+        for group in groups:
+            state = self.merged([state for state, _ in group])
+            if target is None:
+                self.finish(state, "returned")
+            elif self.call(state, target):
+                pending.append((state, max(depth for _, depth in group)))
+
     def explore(self) -> None:
         pending = [(self.initial(), 0)]
+        waiting: dict[tuple, list] = {}
         deadline = time.time() + self.settings.max_seconds
-        while pending:
+
+        def arrive(state, depth: int, target) -> None:
+            key = (target, tuple(callee for callee, _ in state.globals["calls"]),
+                   state.globals["counts"], state.solver.eval(state.regs.sp))
+            waiting.setdefault(key, []).append((state, depth))
+
+        while pending or waiting:
+            if not pending:
+                self.release(waiting, pending)
+                continue
             state, depth = pending.pop()
             if time.time() > deadline:
+                unfinished = len(pending) + 1 + sum(map(len, waiting.values()))
                 self.notes.add(f"exploration took more than {self.settings.max_seconds:.0f} "
-                               f"seconds ({len(pending) + 1} paths unfinished)")
+                               f"seconds ({unfinished} paths unfinished)")
                 return
             if len(self.paths) + len(pending) >= self.settings.max_paths:
                 self.notes.add(f"more than {self.settings.max_paths} paths")
@@ -518,10 +623,16 @@ class Side:
             for after in successors.flat_successors:
                 target = after.solver.eval(after.regs.pc) & ~1
                 if target == RETURN_ADDRESS:
-                    self.finish(after, "returned")
+                    if self.settings.merge_paths:
+                        arrive(after, depth, None)
+                    else:
+                        self.finish(after, "returned")
                 elif after.history.jumpkind == "Ijk_Call" and self.known.mapped(target):
-                    if (self.name(target) in self.settings.followed_callees
-                            or self.call(after, target)):
+                    if self.name(target) in self.settings.followed_callees:
+                        pending.append((after, depth + 1))
+                    elif self.settings.merge_paths:
+                        arrive(after, depth + 1, target)
+                    elif self.call(after, target):
                         pending.append((after, depth + 1))
                 elif after.history.jumpkind.startswith("Ijk_Sys"):
                     self.notes.add("a system call")
@@ -633,8 +744,9 @@ def compare(patched: Side, original: Side, settings: Settings, shared: Shared,
                      for symbol, value in zip(symbols, values)}
             o = next((path for path in remaining if follows(path, model, inputs)), None)
             if o is None:
-                notes.append("an input of a rewritten path follows no finished path "
-                             "of the original")
+                note = "an input of a rewritten path follows no finished path of the original"
+                if note not in notes:
+                    notes.append(note)
                 break
             remaining.remove(o)
             inputs.add(claripy.Not(o.constraint))
@@ -705,6 +817,7 @@ def check_binary_equivalence(original: Path, rewritten: Path, entry: int, thumb:
         "incomplete": notes,
         "paths": {"original": len(before.paths), "rewritten": len(after.paths)},
         "blocks": {"original": before.steps, "rewritten": after.steps},
+        "joined": {"original": before.joined, "rewritten": after.joined},
         "seconds": round(time.time() - started, 1),
         "assumptions": {
             "arg_buffers": {str(index): size for index, size in settings.arg_buffers.items()},
@@ -754,6 +867,8 @@ def main() -> int:
     parser.add_argument("--pure-callee", action="append", default=[])
     parser.add_argument("--follow-callee", action="append", default=[],
                         help="execute this callee on both sides instead of replacing it")
+    parser.add_argument("--merge-paths", action="store_true",
+                        help="join paths that differ in input-dependent values alone")
     parser.add_argument("--no-models", action="store_true",
                         help="leave the string functions in MODELS uninterpreted")
     parser.add_argument("--mmio-region", action="append", default=[], metavar="LOW:HIGH")
@@ -781,6 +896,7 @@ def main() -> int:
             reject_skips=tuple(args.reject_skip),
             pure_callees=tuple(args.pure_callee),
             followed_callees=tuple(args.follow_callee),
+            merge_paths=args.merge_paths,
             mmio_regions=tuple(tuple(int(part, 0) for part in text.split(":"))
                                for text in args.mmio_region),
             symbolic_globals=args.globals == "symbolic",
