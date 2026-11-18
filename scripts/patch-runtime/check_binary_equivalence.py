@@ -88,7 +88,7 @@ CLI: check_binary_equivalence.py --original ELF --rewritten ELF
      [--arg-range INDEX:LOW:HIGH]
      [--reject-handler NAME]
      [--reject-return VALUE] [--reject-skip NAME] [--pure-callee NAME]
-     [--follow-callee NAME] [--merge-paths]
+     [--follow-callee NAME] [--no-merge-paths]
      [--no-models]
      [--mmio-region LOW:HIGH] [--globals symbolic|image]
      [--max-paths N] [--max-steps N] [--max-seconds N] [--output FILE]
@@ -139,7 +139,7 @@ class Settings:
     reject_skips: tuple = ()
     pure_callees: tuple = ()
     followed_callees: tuple = ()  # executed on both sides instead of replaced
-    merge_paths: bool = False  # join paths that differ in input-dependent values alone
+    merge_paths: bool = True  # join paths that differ in input-dependent values alone
     mmio_regions: tuple = ()  # (low, high), inclusive
     symbolic_globals: bool = True
     models: bool = True  # compute the result of the functions in MODELS
@@ -886,8 +886,9 @@ def main() -> int:
     parser.add_argument("--pure-callee", action="append", default=[])
     parser.add_argument("--follow-callee", action="append", default=[],
                         help="execute this callee on both sides instead of replacing it")
-    parser.add_argument("--merge-paths", action="store_true",
-                        help="join paths that differ in input-dependent values alone")
+    parser.add_argument("--no-merge-paths", action="store_true",
+                        help="keep every path apart; by default paths that differ in "
+                             "input-dependent values alone are joined")
     parser.add_argument("--no-models", action="store_true",
                         help="leave the string functions in MODELS uninterpreted")
     parser.add_argument("--mmio-region", action="append", default=[], metavar="LOW:HIGH")
@@ -915,7 +916,7 @@ def main() -> int:
             reject_skips=tuple(args.reject_skip),
             pure_callees=tuple(args.pure_callee),
             followed_callees=tuple(args.follow_callee),
-            merge_paths=args.merge_paths,
+            merge_paths=not args.no_merge_paths,
             mmio_regions=tuple(tuple(int(part, 0) for part in text.split(":"))
                                for text in args.mmio_region),
             symbolic_globals=args.globals == "symbolic",

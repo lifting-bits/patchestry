@@ -363,7 +363,7 @@ class Merging(unittest.TestCase):
         self.assertEqual(report["paths"], {"original": 1, "rewritten": 1})
 
     def test_without_joining_there_are_more_paths(self):
-        report = self.run_check(32)
+        report = self.run_check(32, merge_paths=False)
         self.assertEqual(report["verdict"], "proven", report)
         self.assertEqual(report["paths"], {"original": 27, "rewritten": 8})
 

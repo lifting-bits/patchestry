@@ -126,11 +126,12 @@ on others, the differences found are listed as `unconfirmed` and the run is
 `incomplete`, not `failed`: an unknown result can separate two paths that
 agree.
 
-`--merge-paths` joins paths that reach the same call or the same return after
-the same calls. Two paths are joined only when every register and memory byte
+Paths that reach the same call or the same return after the same calls are
+joined. Two paths are joined only when every register and memory byte
 that differs between them depends on the input in both, so a pointer or a
 loop counter is never turned into an expression. The joined path carries the
-condition of each path it stands for. It is off unless asked for.
+condition of each path it stands for. `--no-merge-paths` keeps every path
+apart. The firmware and `httpd` cases below give the same verdicts either way.
 
 Both sides start from the same symbolic arguments, argument buffers and
 writable globals. Calls are not followed: each is recorded and returns a
@@ -163,20 +164,20 @@ Patcherex2 environment of the suites already has.
 | `length` with the limit changed from 16 to 64 | proven: against the original this is still a restricting patch. Only the comparison with the intended code (stage 5) sees it |
 | `httpd` `FUN_00067c0c` reinserted unchanged | proven, 5 and 5 paths, 25 calls per path |
 | the same with one byte changed (a `memset` length, 64 to 32) | failed P4 |
-| `httpd` `FUN_0007ae8c` reinserted unchanged, 3-byte buffers, offset argument 0 to 8 | proven, 16 and 16 paths |
+| `httpd` `FUN_0007ae8c` reinserted unchanged, 3-byte buffers, offset argument 0 to 8 | proven, 4 and 4 paths (16 and 16 with `--no-merge-paths`) |
 | the same with the offset argument not bounded | incomplete: the write address can be anywhere |
 | the same with one byte changed (a stored `/` becomes `.`) | failed P2 |
-| `cgibin` `FUN_00026534` reinserted unchanged, 2-byte buffer followed by `99;`, `FUN_0002609c` and `FUN_0002619c` followed | proven, 17 and 17 paths, 7 seconds |
+| `cgibin` `FUN_00026534` reinserted unchanged, 2-byte buffer followed by `99;`, `FUN_0002609c` and `FUN_0002619c` followed, `--no-merge-paths` | proven, 17 and 17 paths, 7 seconds |
 | the same with one byte changed (a compared character, `;` to `:`) | failed P4 |
 | the same unchanged, without following the two helpers | incomplete: the loop never advances, because the helper's length result is lost |
-| the same unchanged, 4-byte buffer | proven, 110 and 113 paths, 28 seconds |
-| the same with the changed byte, 4-byte buffer | failed P3 and P4, with inputs such as `&#9;` |
-| the same unchanged, 5-byte buffer | proven, 293 and 308 paths, 119 seconds |
-| the same unchanged, 6-byte buffer | incomplete: 786 and 847 paths explored, the comparison did not finish in 180 seconds |
-| the same unchanged, 4-byte buffer, `--merge-paths` | proven, 27 and 30 paths, 11 seconds |
-| the same with the changed byte, 4-byte buffer, `--merge-paths` | failed P3 and P4 |
-| the same unchanged, 6-byte buffer, `--merge-paths` | proven, 108 and 118 paths, 114 seconds |
-| the same unchanged, 8-byte buffer, `--merge-paths` | incomplete: exploration not finished in 120 seconds per side |
+| the same unchanged, 4-byte buffer, `--no-merge-paths` | proven, 110 and 113 paths, 28 seconds |
+| the same with the changed byte, 4-byte buffer, `--no-merge-paths` | failed P3 and P4, with inputs such as `&#9;` |
+| the same unchanged, 5-byte buffer, `--no-merge-paths` | proven, 293 and 308 paths, 119 seconds |
+| the same unchanged, 6-byte buffer, `--no-merge-paths` | incomplete: 786 and 847 paths explored, the comparison did not finish in 180 seconds |
+| the same unchanged, 4-byte buffer, paths joined | proven, 27 and 30 paths, 11 seconds |
+| the same with the changed byte, 4-byte buffer, paths joined | failed P3 and P4 |
+| the same unchanged, 6-byte buffer, paths joined | proven, 108 and 118 paths, 114 seconds |
+| the same unchanged, 8-byte buffer, paths joined | incomplete: exploration not finished in 120 seconds per side |
 
 Limits of the prototype: callees are assumed to write no memory; stack and
 floating-point arguments are not compared; memory that is read before it is
