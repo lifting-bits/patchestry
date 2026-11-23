@@ -1,0 +1,101 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-llvm -output %t >> /dev/null 2>&1
+// RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
+//
+// The result of an intrinsic is a reference to a local with no type or size
+// of its own: `"output": { "kind": "local", "operation": ... }`, with the type
+// on the operation only.  This is how Ghidra exports the TLS read behind
+// errno (`mrc p15, 0, rX, cr13, cr0, 3`) in every libc function that sets it.
+// The return type of the call used to be taken from the output varnode alone,
+// which is a null type here, and the lifter aborted in Clang ("Cannot retrieve
+// a NULL type pointer").  It now falls back to the type of the operation.
+//
+// Both builders are covered: a classified intrinsic (coproc_read ->
+// __arm_mrc) and one the lifter has no spelling for (declared by its name).
+//
+// LL: define dso_local i32 @read_tls
+// LL-DAG: call i32 {{.*}}@__arm_mrc(i32 15, i32 0, i32 13, i32 0, i32 3)
+// LL-DAG: call i32 {{.*}}mystery_userop{{.*}}(i32
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:v8",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "read_tls",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["type_int"]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "p0": { "mnemonic": "DECLARE_PARAMETER", "name": "v", "type": "type_int", "kind": "parameter", "index": 0 },
+            "loc0": { "mnemonic": "DECLARE_LOCAL", "name": "tp", "kind": "local", "type": "type_int" },
+            "loc1": { "mnemonic": "DECLARE_LOCAL", "name": "other", "kind": "local", "type": "type_int" },
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:10000000:0:basic" }
+          },
+          "ordered_operations": ["p0", "loc0", "loc1", "br"]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "mrc": {
+              "mnemonic": "CALLOTHER",
+              "type": "type_int",
+              "size": 4,
+              "output": { "kind": "local", "operation": "loc0" },
+              "target": {
+                "kind": "intrinsic", "function": "coprocessor_movefromRt",
+                "is_variadic": true, "is_noreturn": false,
+                "intrinsic_class": "coproc_read"
+              },
+              "inputs": [
+                { "type": "type_int", "size": 4, "kind": "constant", "value": 15 },
+                { "type": "type_int", "size": 4, "kind": "constant", "value": 0 },
+                { "type": "type_int", "size": 4, "kind": "constant", "value": 3 },
+                { "type": "type_int", "size": 4, "kind": "constant", "value": 13 },
+                { "type": "type_int", "size": 4, "kind": "constant", "value": 0 }
+              ]
+            },
+            "mystery": {
+              "mnemonic": "CALLOTHER",
+              "type": "type_int",
+              "size": 4,
+              "output": { "kind": "local", "operation": "loc1" },
+              "target": {
+                "kind": "intrinsic", "function": "mystery_userop",
+                "is_variadic": true, "is_noreturn": false
+              },
+              "inputs": [
+                { "type": "type_int", "kind": "parameter", "operation": "p0" }
+              ]
+            },
+            "sum": {
+              "mnemonic": "INT_ADD",
+              "type": "type_int",
+              "size": 4,
+              "output": { "kind": "local", "operation": "loc0" },
+              "inputs": [
+                { "type": "type_int", "size": 4, "kind": "local", "operation": "loc0" },
+                { "type": "type_int", "size": 4, "kind": "local", "operation": "loc1" }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [{ "type": "type_int", "size": 4, "kind": "local", "operation": "loc0" }]
+            }
+          },
+          "ordered_operations": ["mrc", "mystery", "sum", "ret"]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": { "name": "unsigned int", "size": 4, "kind": "integer" }
+  }
+}

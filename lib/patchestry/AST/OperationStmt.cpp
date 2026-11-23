@@ -4636,22 +4636,44 @@ namespace patchestry::ast {
         return func_decl;
     }
 
+    // The type an intrinsic call returns.  Prefer the typed output, fall back
+    // to op.type: Ghidra exports a result that is a reference to a local as
+    // `{"kind": "local", "operation": ...}` with the type on the operation
+    // only, and get_varnode_type() returns a null type for such a varnode.
+    // Void when the op has neither.  Null only when there is an output and
+    // nothing types it; the caller must not build a declaration from that.
+    static clang::QualType intrinsic_result_type(
+        OpBuilder &builder, clang::ASTContext &ctx, const Operation &op
+    ) {
+        clang::QualType from_output;
+        if (op.output && !(op.output->type_key.empty() && op.output->size == 0U)) {
+            from_output = builder.get_varnode_type(ctx, *op.output);
+        }
+        if (!from_output.isNull()) {
+            return from_output;
+        }
+        if (op.type) {
+            auto from_op = builder.type_builder().GetSerializedType(*op.type);
+            if (!from_op.isNull()) {
+                return from_op;
+            }
+        }
+        return op.output ? clang::QualType() : clang::QualType(ctx.VoidTy);
+    }
+
     std::pair< clang::Stmt *, bool > OpBuilder::create_intrinsic_call(
         clang::ASTContext &ctx, const Function &function, const Operation &op,
         const std::string &name, std::optional< std::size_t > pointer_arg_index
     ) {
         auto op_loc = SourceLocation(ctx.getSourceManager(), op.key);
 
-        // Determine return type.  Prefer the typed output, fall back to
-        // op.type for ops whose value flows through a temporary reference
-        // rather than a named output (default-void otherwise corrupts
-        // every downstream consumer).
-        clang::QualType ret_type = ctx.VoidTy;
-        if (op.output) {
-            ret_type = get_varnode_type(ctx, *op.output);
-        } else if (op.type) {
-            auto t = type_builder().GetSerializedType(*op.type);
-            if (!t.isNull()) ret_type = t;
+        // Determine return type (default-void otherwise corrupts every
+        // downstream consumer).
+        clang::QualType ret_type = intrinsic_result_type(*this, ctx, op);
+        if (ret_type.isNull()) {
+            LOG(ERROR) << "Intrinsic '" << name << "' has an output with no type. key: "
+                       << op.key << "\n";
+            return {};
         }
 
         // Build arguments from inputs
@@ -4820,15 +4842,12 @@ namespace patchestry::ast {
         std::string func_name = "__patchestry_missing_" + original_name;
         (void) original_label; // debug metadata is currently dropped (see below)
 
-        // Determine return type.  Prefer the typed output, fall back to
-        // op.type for ops whose value flows through a temporary reference
-        // rather than a named output.
-        clang::QualType ret_type = ctx.VoidTy;
-        if (op.output) {
-            ret_type = get_varnode_type(ctx, *op.output);
-        } else if (op.type) {
-            auto t = type_builder().GetSerializedType(*op.type);
-            if (!t.isNull()) ret_type = t;
+        // Determine return type.
+        clang::QualType ret_type = intrinsic_result_type(*this, ctx, op);
+        if (ret_type.isNull()) {
+            LOG(ERROR) << "Missing intrinsic '" << original_name
+                       << "' has an output with no type. key: " << op.key << "\n";
+            return {};
         }
 
         // Build the fixed-arity prototype up front so the cache key encodes
