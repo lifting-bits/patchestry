@@ -2478,6 +2478,20 @@ namespace patchestry::ast {
                         ret_expr = cast_expr;
                     }
                 }
+
+                // The function may be declared with a wider type than the one
+                // recovered (a `bool` result): widen the value to it.
+                if (ret_type_it != types.end() && !ret_type_it->second.isNull()) {
+                    auto declared =
+                        FunctionBuilder::declared_return_type(ctx, ret_type_it->second);
+                    if (!ctx.hasSameUnqualifiedType(declared, ret_type_it->second)
+                        && !ctx.hasSameUnqualifiedType(ret_expr->getType(), declared))
+                    {
+                        if (auto *widened = make_cast(ctx, ret_expr, declared, location)) {
+                            ret_expr = widened;
+                        }
+                    }
+                }
             }
 
             return std::make_pair(
@@ -2492,7 +2506,7 @@ namespace patchestry::ast {
         const auto &types = type_builder().GetSerializedTypes();
         auto type_it      = types.find(function.prototype.rttype_key);
         if (type_it != types.end() && !type_it->second->isVoidType()) {
-            auto ret_type = type_it->second;
+            auto ret_type = FunctionBuilder::declared_return_type(ctx, type_it->second);
 
             // The zero returned here is invented.  It is not reported when the
             // operation directly before this RETURN in the same block is a

@@ -38,6 +38,7 @@
 #include <mlir/Target/LLVMIR/Dialect/All.h>
 #include <mlir/Target/LLVMIR/Import.h>
 
+#include <patchestry/Codegen/AbiAttributes.hpp>
 #include <patchestry/Codegen/TargetIntrinsics.hpp>
 #include <patchestry/Dialect/Contracts/ContractsDialect.hpp>
 #include <patchestry/Util/Log.hpp>
@@ -702,6 +703,11 @@ int main(int argc, char **argv) {
     // intrinsics for those instructions (ClangIR has no builtin for them).
     if (unsigned lowered = patchestry::codegen::lower_arm_coprocessor_calls(*llvm_module)) {
         LOG(INFO) << "Lowered " << lowered << " ARM coprocessor call(s) to intrinsics\n";
+    }
+
+    // A _Bool is passed and returned zero-extended; ClangIR does not say so.
+    if (unsigned added = patchestry::codegen::add_bool_extension_attributes(*llvm_module)) {
+        LOG(INFO) << "Added zeroext to " << added << " _Bool argument(s) and result(s)\n";
     }
 
     stripDeadInternalGlobals(*llvm_module);

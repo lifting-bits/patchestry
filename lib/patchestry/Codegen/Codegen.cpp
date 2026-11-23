@@ -41,6 +41,7 @@
 #include <mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h>
 #include <mlir/Target/LLVMIR/Export.h>
 
+#include <patchestry/Codegen/AbiAttributes.hpp>
 #include <patchestry/Codegen/Codegen.hpp>
 #include <patchestry/Codegen/TargetIntrinsics.hpp>
 #include <patchestry/Codegen/PassManager.hpp>
@@ -176,6 +177,8 @@ namespace patchestry::codegen {
             // __arm_mrc and its kind are calls to names nothing defines
             // until they are the instructions they stand for.
             (void) lower_arm_coprocessor_calls(*llvm_mod);
+            // ClangIR drops the `zeroext` of a _Bool argument or result.
+            (void) add_bool_extension_attributes(*llvm_mod);
             if (!Serializer::SerializeToFile(llvm_mod.get(), options.output_prefix + ".ll")) {
                 return false;
             }
