@@ -64,6 +64,7 @@ import traceback
 from dataclasses import dataclass
 from pathlib import Path
 
+from elftools.elf.elffile import ELFFile
 from patcherex2 import ModifyFunctionPatch, Patcherex
 from patcherex2.targets.elf_arm_linux import ElfArmLinux
 
@@ -124,6 +125,24 @@ def load_fixture(path: Path) -> dict:
     """The function JSON; lit fixtures carry `//` comment lines before it."""
     text = path.read_text(encoding="utf-8")
     return json.loads(re.sub(r"^\s*//.*$", "", text, flags=re.MULTILINE))
+
+
+def analyzer_options(binary: Path) -> dict:
+    """Options for the rewriter's function recovery.
+
+    It takes the code to scan from the section headers.  An image without any
+    gets its executable segments instead, or no function is found in it.
+    """
+    with binary.open("rb") as handle:
+        elf = ELFFile(handle)
+        if elf.num_sections():
+            return {}
+        regions = [
+            (segment["p_vaddr"], segment["p_vaddr"] + segment["p_memsz"])
+            for segment in elf.iter_segments()
+            if segment["p_type"] == "PT_LOAD" and segment["p_flags"] & 1
+        ]
+    return {"binary_analyzer": {"angr_cfg_kwargs": {"regions": regions}}}
 
 
 def write_json(path: Path, value) -> None:
@@ -237,7 +256,8 @@ def run_case(case: Case, args, repo_root: Path, summary: dict) -> None:
     addresses = {name: int(value, 16) for name, value in bindings["absolute_symbols"].items()}
     target_address = next(
         int(row["address"], 16) for row in bindings["bindings"]
-        if row["name"] == case.function and row["kind"] == "function"
+        # A C++ function is lifted under a C name; the case names its symbol.
+        if case.function in (row["name"], row.get("symbol")) and row["kind"] == "function"
     )
     # What the patch link can resolve: the image's own function symbols, when
     # it has any, and every name given to it by address.
@@ -250,7 +270,8 @@ def run_case(case: Case, args, repo_root: Path, summary: dict) -> None:
     # 2. What the code to insert needs.  It is compiled for the instruction
     # set of the function it replaces and for the ABI the binary declares.
     rewriter = Patcherex(
-        str(binary), target_cls=ElfArmLinux, target_opts={"compiler": "clang19"}
+        str(binary), target_cls=ElfArmLinux, target_opts={"compiler": "clang19"},
+        components_opts=analyzer_options(binary),
     )
     if rewriter.binary_analyzer.get_function(target_address) is None:
         # Its own analysis has to agree that a function starts here: it takes
