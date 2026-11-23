@@ -1,0 +1,86 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-llvm -print-tu -output %t >> /dev/null 2>&1
+// RUN: %file-check -vv -check-prefix=C %s --input-file %t.c
+// RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
+//
+// When Ghidra has the address of data as a constant, the serializer writes
+// the operand as `kind: "global"` with the constant's pointer type.  The
+// operand is then the address of the global, not what is stored there.  A
+// string Ghidra did not type as one is such data: "OK" at 0x51c80 is the
+// 1-byte `undefined1 null_4Fh_00051c80`.  The lifter used to load the byte and
+// pass it as the pointer (`callee((char *) 0x4f, ...)`).
+//
+// The four operands of the call, in order:
+//   1. pointer-typed operand, global is a scalar: its address
+//   2. pointer-typed operand, global holds a pointer of that type: its value
+//   3. string operand that the callee takes as `int`: the address of the
+//      text as an integer, not its first four bytes
+//   4. operand with the global's own scalar type: its value
+//
+// C: callee((signed char *)&null_4Fh_00051c80, message, (int)"hello", null_4Fh_00051c80);
+// LL-DAG: [[MSG:%.*]] = load ptr, ptr @message
+// LL-DAG: [[BYTE:%.*]] = load i8, ptr @null_4Fh_00051c80
+// LL: call void @callee(ptr @null_4Fh_00051c80, ptr [[MSG]], i32 ptrtoint (ptr @.str to i32), i8 [[BYTE]])
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:v7",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:00010000": {
+      "name": "send",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_void", "is_variadic": false, "is_noreturn": false,
+        "parameter_types": []
+      },
+      "basic_blocks": {
+        "ram:00010000:entry": {
+          "operations": {
+            "entry.exit": { "mnemonic": "BRANCH", "target_block": "ram:00010000:0:basic" }
+          },
+          "ordered_operations": ["entry.exit"]
+        },
+        "ram:00010000:0:basic": {
+          "operations": {
+            "addr": {
+              "mnemonic": "COPY", "type": "t_charp", "size": 4,
+              "inputs": [{ "type": "t_charp", "size": 4, "kind": "global", "global": "ram:00051c80" }]
+            },
+            "call": {
+              "mnemonic": "CALL", "has_return_value": false,
+              "target": { "kind": "function", "function": "ram:00020000", "is_variadic": false, "is_noreturn": false },
+              "inputs": [
+                { "type": "t_charp", "size": 4, "kind": "temporary", "operation": "addr" },
+                { "type": "t_charp", "size": 4, "kind": "global", "global": "ram:00060000" },
+                { "type": "t_int", "size": 4, "kind": "string", "string_value": "hello" },
+                { "type": "t_byte", "size": 1, "kind": "global", "global": "ram:00051c80" }
+              ]
+            },
+            "ret": { "mnemonic": "RETURN", "inputs": [] }
+          },
+          "ordered_operations": ["addr", "call", "ret"]
+        }
+      },
+      "entry_block": "ram:00010000:entry"
+    },
+    "ram:00020000": {
+      "name": "callee",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_void", "is_variadic": false, "is_noreturn": false,
+        "parameter_types": ["t_charp", "t_charp", "t_int", "t_byte"]
+      }
+    }
+  },
+  "globals": {
+    "ram:00051c80": { "name": "null_4Fh_00051c80", "size": "1", "type": "t_byte" },
+    "ram:00060000": { "name": "message", "size": "4", "type": "t_charp" }
+  },
+  "types": {
+    "t_void": { "name": "void", "size": 0, "kind": "void" },
+    "t_int": { "is_signed": true, "name": "int", "size": 4, "kind": "integer" },
+    "t_char": { "is_signed": true, "name": "char", "size": 1, "kind": "integer" },
+    "t_charp": { "kind": "pointer", "size": 4, "element_type": "t_char" },
+    "t_byte": { "name": "undefined1", "size": 1, "kind": "undefined" }
+  }
+}
