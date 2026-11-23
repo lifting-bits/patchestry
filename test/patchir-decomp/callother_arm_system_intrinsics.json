@@ -21,8 +21,14 @@
 // Coprocessor MCR/MRC reorder: Ghidra moveto(cpn,op1,op2,Rt,CRn,CRm) ->
 // ACLE __arm_mcr(cpn,op1,Rt,CRn,CRm,op2). opc1=2,opc2=4 distinct so the swap
 // is visible: opc2(4) lands last, value sits at position 3.
-// LL-DAG: call {{.*}}@__arm_mcr(i32 15, i32 2, i32 {{.*}}, i32 1, i32 3, i32 4)
-// LL-DAG: call i32 {{.*}}@__arm_mrc(i32 15, i32 2, i32 1, i32 3, i32 4)
+// The lifter spells them __arm_mcr/__arm_mrc (CIR); the LLVM IR has the
+// intrinsics those ACLE names stand for, which the backend selects to the
+// instructions.
+// CIR-DAG: @__arm_mcr
+// CIR-DAG: @__arm_mrc
+// LL-DAG: call void @llvm.arm.mcr(i32 15, i32 2, i32 {{.*}}, i32 1, i32 3, i32 4)
+// LL-DAG: call i32 @llvm.arm.mrc(i32 15, i32 2, i32 1, i32 3, i32 4)
+// LL-NOT: @__arm_m
 {
   "architecture": "ARM",
   "id": "ARM:LE:32:Cortex",

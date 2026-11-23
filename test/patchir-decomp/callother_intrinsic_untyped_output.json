@@ -11,10 +11,11 @@
 // a NULL type pointer").  It now falls back to the type of the operation.
 //
 // Both builders are covered: a classified intrinsic (coproc_read ->
-// __arm_mrc) and one the lifter has no spelling for (declared by its name).
+// __arm_mrc, which reaches LLVM IR as llvm.arm.mrc) and one the lifter has no
+// spelling for (declared by its name).
 //
 // LL: define dso_local i32 @read_tls
-// LL-DAG: call i32 {{.*}}@__arm_mrc(i32 15, i32 0, i32 13, i32 0, i32 3)
+// LL-DAG: call i32 @llvm.arm.mrc(i32 15, i32 0, i32 13, i32 0, i32 3)
 // LL-DAG: call i32 {{.*}}mystery_userop{{.*}}(i32
 {
   "architecture": "ARM",

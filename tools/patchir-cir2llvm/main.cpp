@@ -38,6 +38,7 @@
 #include <mlir/Target/LLVMIR/Dialect/All.h>
 #include <mlir/Target/LLVMIR/Import.h>
 
+#include <patchestry/Codegen/TargetIntrinsics.hpp>
 #include <patchestry/Dialect/Contracts/ContractsDialect.hpp>
 #include <patchestry/Util/Log.hpp>
 
@@ -695,6 +696,12 @@ int main(int argc, char **argv) {
     if (!llvm_module) {
         LOG(ERROR) << "Failed to lower cir to llvm\n";
         return EXIT_FAILURE;
+    }
+
+    // The lifter's __arm_mrc/__arm_mcr/__arm_cdp calls become the LLVM
+    // intrinsics for those instructions (ClangIR has no builtin for them).
+    if (unsigned lowered = patchestry::codegen::lower_arm_coprocessor_calls(*llvm_module)) {
+        LOG(INFO) << "Lowered " << lowered << " ARM coprocessor call(s) to intrinsics\n";
     }
 
     stripDeadInternalGlobals(*llvm_module);

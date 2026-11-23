@@ -1,0 +1,119 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-cir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
+// RUN: %file-check -vv -check-prefix=C %s --input-file %t.c
+// RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
+// RUN: %patchir-cir2llvm -S %t.cir -o %t.c2l.ll >> /dev/null 2>&1
+// RUN: %file-check -vv -check-prefix=LL %s --input-file %t.c2l.ll
+//
+// A coprocessor register operand (CRn, CRm) names a register.  Ghidra passes
+// the register varnode itself, and the decompiler exports it as a live-in
+// local stored in `cr<N>`: `in_cr13`, `in_cr0`.  This is the TLS read behind
+// errno, `mrc p15, 0, rX, c13, c0, 3`, as exported for a libc function.
+//
+// The lifter takes the register number from the declaration's storage, so
+// the call has the constants 13 and 0 and not two variables nothing sets.
+// Both producers of LLVM IR (patchir-decomp -emit-llvm and patchir-cir2llvm)
+// then turn the ACLE call into llvm.arm.mrc, which the backend selects to the
+// instruction.
+//
+// The second read has a CRn that is an ordinary value (a parameter).  It
+// cannot be encoded, so it stays a call to __arm_mrc: an unresolved name at
+// link time, not a wrong instruction.
+//
+// C: tp = __arm_mrc(15U, 0U, 13U, 0U, 3U);
+// C: other = __arm_mrc(15U, 0U, v, 0U, 3U);
+// LL: define dso_local i32 @read_tls
+// LL-DAG: call i32 @llvm.arm.mrc(i32 15, i32 0, i32 13, i32 0, i32 3)
+// LL-DAG: call i32 @__arm_mrc(i32 15, i32 0, i32 %{{.*}}, i32 0, i32 3)
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:v8",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "read_tls",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["type_int"]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "p0": { "mnemonic": "DECLARE_PARAMETER", "name": "v", "type": "type_int", "kind": "parameter", "index": 0 },
+            "loc0": { "mnemonic": "DECLARE_LOCAL", "name": "tp", "kind": "local", "type": "type_int" },
+            "loc1": { "mnemonic": "DECLARE_LOCAL", "name": "other", "kind": "local", "type": "type_int" },
+            "cr13": { "mnemonic": "DECLARE_LOCAL", "name": "in_cr13", "kind": "local", "live_in": true, "type": "type_int",
+                      "storage": [{ "kind": "register", "register": "cr13", "offset": 564, "size": 4 }] },
+            "cr0": { "mnemonic": "DECLARE_LOCAL", "name": "in_cr0", "kind": "local", "live_in": true, "type": "type_int",
+                     "storage": [{ "kind": "register", "register": "cr0", "offset": 512, "size": 4 }] },
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:10000000:0:basic" }
+          },
+          "ordered_operations": ["p0", "loc0", "loc1", "cr13", "cr0", "br"]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "mrc": {
+              "mnemonic": "CALLOTHER",
+              "type": "type_int",
+              "size": 4,
+              "output": { "kind": "local", "operation": "loc0" },
+              "target": {
+                "kind": "intrinsic", "function": "coprocessor_movefromRt",
+                "is_variadic": true, "is_noreturn": false,
+                "intrinsic_class": "coproc_read"
+              },
+              "inputs": [
+                { "type": "type_int", "size": 4, "kind": "constant", "value": 15 },
+                { "type": "type_int", "size": 4, "kind": "constant", "value": 0 },
+                { "type": "type_int", "size": 4, "kind": "constant", "value": 3 },
+                { "type": "type_int", "size": 4, "kind": "local", "operation": "cr13" },
+                { "type": "type_int", "size": 4, "kind": "local", "operation": "cr0" }
+              ]
+            },
+            "mrc_value": {
+              "mnemonic": "CALLOTHER",
+              "type": "type_int",
+              "size": 4,
+              "output": { "kind": "local", "operation": "loc1" },
+              "target": {
+                "kind": "intrinsic", "function": "coprocessor_movefromRt",
+                "is_variadic": true, "is_noreturn": false,
+                "intrinsic_class": "coproc_read"
+              },
+              "inputs": [
+                { "type": "type_int", "size": 4, "kind": "constant", "value": 15 },
+                { "type": "type_int", "size": 4, "kind": "constant", "value": 0 },
+                { "type": "type_int", "size": 4, "kind": "constant", "value": 3 },
+                { "type": "type_int", "size": 4, "kind": "parameter", "operation": "p0" },
+                { "type": "type_int", "size": 4, "kind": "local", "operation": "cr0" }
+              ]
+            },
+            "sum": {
+              "mnemonic": "INT_ADD",
+              "type": "type_int",
+              "size": 4,
+              "output": { "kind": "local", "operation": "loc0" },
+              "inputs": [
+                { "type": "type_int", "size": 4, "kind": "local", "operation": "loc0" },
+                { "type": "type_int", "size": 4, "kind": "local", "operation": "loc1" }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [{ "type": "type_int", "size": 4, "kind": "local", "operation": "loc0" }]
+            }
+          },
+          "ordered_operations": ["mrc", "mrc_value", "sum", "ret"]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": { "name": "unsigned int", "size": 4, "kind": "integer" }
+  }
+}
