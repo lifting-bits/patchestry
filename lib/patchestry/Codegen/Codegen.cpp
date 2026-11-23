@@ -49,7 +49,12 @@
 namespace patchestry::codegen {
 
     std::optional< mlir::ModuleOp > CodeGenerator::lower_ast_to_mlir() {
-        const auto errors_before = ctx.getDiagnostics().getNumErrors();
+        // CIRGenerator::Initialize ran in the constructor and reports through the
+        // same engine. After an error there ClangIR skips every declaration, so
+        // the module would verify while holding no functions.
+        if (ctx.getDiagnostics().getNumErrors() > errors_before_init) {
+            return std::nullopt;
+        }
         // Emit declarations first, then definitions in name (= program-address)
         // order. CIRGen caches the first cir.func it lazily creates for a symbol;
         // an unordered emission order let a caller materialize a callee with too
@@ -82,7 +87,8 @@ namespace patchestry::codegen {
 
         reconcile_variadic_decls(cirdriver->getModule());
 
-        if (!cirdriver->verifyModule() || ctx.getDiagnostics().getNumErrors() > errors_before) {
+        if (!cirdriver->verifyModule() || ctx.getDiagnostics().getNumErrors() > errors_before_init)
+        {
             return std::nullopt;
         }
 

@@ -17,6 +17,7 @@
 #include <llvm/Support/CommandLine.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/InitLLVM.h>
+#include <llvm/Support/Process.h>
 #include <llvm/Support/SourceMgr.h>
 #include <llvm/Support/raw_ostream.h>
 
@@ -730,6 +731,10 @@ namespace {
 // Main function
 int main(int argc, char **argv) {
     llvm::InitLLVM y(argc, argv);
+    // A standard descriptor closed by the caller would be handed to the next
+    // file opened; an output file on descriptor 1 or 2 would then also receive
+    // everything printed or logged.  Point closed ones at /dev/null.
+    if (llvm::sys::Process::FixupStandardFileDescriptors()) { return EXIT_FAILURE; }
     llvm::cl::ParseCommandLineOptions(argc, argv, "patchir-seahorn-verifier\n");
 
     llvm::LLVMContext context;

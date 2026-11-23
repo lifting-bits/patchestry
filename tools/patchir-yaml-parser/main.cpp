@@ -10,6 +10,7 @@
 
 #include <llvm/Support/CommandLine.h>
 #include <llvm/Support/InitLLVM.h>
+#include <llvm/Support/Process.h>
 #include <llvm/Support/raw_ostream.h>
 
 #include <patchestry/Util/Log.hpp>
@@ -118,6 +119,10 @@ void writeOutput(const std::string &content, const std::string &filename) {
 
 int main(int argc, char **argv) {
     llvm::InitLLVM init(argc, argv);
+    // A standard descriptor closed by the caller would be handed to the next
+    // file opened; an output file on descriptor 1 or 2 would then also receive
+    // everything printed or logged.  Point closed ones at /dev/null.
+    if (llvm::sys::Process::FixupStandardFileDescriptors()) { return 1; }
     llvm::cl::ParseCommandLineOptions(
         argc, argv, "YAML Parser to verify configuration files\n"
     );

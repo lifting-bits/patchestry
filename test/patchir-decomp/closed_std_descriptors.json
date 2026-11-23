@@ -1,0 +1,76 @@
+// A caller may start the tool with stdin, stdout or stderr closed.  The output
+// files must still be written in full.
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-cir -emit-llvm -print-tu -output %t.ref > /dev/null 2>&1
+// RUN: %patchir-decomp -input %t.json -emit-cir -emit-llvm -print-tu -output %t.in <&- > /dev/null 2>&1
+// RUN: %patchir-decomp -input %t.json -emit-cir -emit-llvm -print-tu -output %t.out >&- 2> /dev/null
+// RUN: %patchir-decomp -input %t.json -emit-cir -emit-llvm -print-tu -output %t.err 2>&- > /dev/null
+// RUN: test -s %t.ref.c && test -s %t.ref.cir && test -s %t.ref.ll
+// RUN: cmp %t.ref.c %t.in.c && cmp %t.ref.cir %t.in.cir && cmp %t.ref.ll %t.in.ll
+// RUN: cmp %t.ref.c %t.out.c && cmp %t.ref.cir %t.out.cir && cmp %t.ref.ll %t.out.ll
+// RUN: cmp %t.ref.c %t.err.c && cmp %t.ref.cir %t.err.cir && cmp %t.ref.ll %t.err.ll
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "closed_std_descriptors",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "cc000001",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["cc000001"]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "unique:000da100:0:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "param_1",
+              "type": "cc000001",
+              "kind": "parameter",
+              "index": 0
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000000:0:basic"
+            }
+          },
+          "ordered_operations": ["unique:000da100:0:0", "entry.exit"]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "ram:10000008:2:0": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "cc000001",
+                  "kind": "parameter",
+                  "operation": "unique:000da100:0:0"
+                }
+              ]
+            }
+          },
+          "ordered_operations": ["ram:10000008:2:0"]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "cc000001": {
+      "name": "ColorEnum",
+      "size": 4,
+      "kind": "enum",
+      "num_entries": 3,
+      "entries": [
+        {"name": "RED",   "value": 0},
+        {"name": "GREEN", "value": 1},
+        {"name": "BLUE",  "value": 2}
+      ]
+    }
+  }
+}

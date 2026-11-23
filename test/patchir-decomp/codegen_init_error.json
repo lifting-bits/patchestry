@@ -1,0 +1,74 @@
+// ClangIR has no C++ ABI for MIPS, so CIRGenerator::Initialize reports an error
+// and then emits nothing.  The lowering must fail instead of writing a module
+// with no functions.
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: rm -f %t.cir
+// RUN: not %patchir-decomp -input %t.json -emit-cir -output %t 2>&1 | %file-check -vv -check-prefix=ERR %s
+// ERR: C++ ABI kind not yet implemented
+// ERR: Failed to emit mlir module
+// RUN: test ! -e %t.cir
+{
+  "architecture": "MIPS",
+  "id": "MIPS:LE:32:default",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "codegen_init_error",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "cc000001",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["cc000001"]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "unique:000da100:0:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "param_1",
+              "type": "cc000001",
+              "kind": "parameter",
+              "index": 0
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000000:0:basic"
+            }
+          },
+          "ordered_operations": ["unique:000da100:0:0", "entry.exit"]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "ram:10000008:2:0": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "cc000001",
+                  "kind": "parameter",
+                  "operation": "unique:000da100:0:0"
+                }
+              ]
+            }
+          },
+          "ordered_operations": ["ram:10000008:2:0"]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "cc000001": {
+      "name": "ColorEnum",
+      "size": 4,
+      "kind": "enum",
+      "num_entries": 3,
+      "entries": [
+        {"name": "RED",   "value": 0},
+        {"name": "GREEN", "value": 1},
+        {"name": "BLUE",  "value": 2}
+      ]
+    }
+  }
+}

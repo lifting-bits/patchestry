@@ -19,6 +19,7 @@
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/JSON.h>
 #include <llvm/Support/MemoryBuffer.h>
+#include <llvm/Support/Process.h>
 #include <llvm/Support/raw_ostream.h>
 
 #include <patchestry/AST/LiftOptions.hpp>
@@ -28,6 +29,7 @@
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
 #include <patchestry/Util/Log.hpp>
 #include <patchestry/Util/Options.hpp>
+#include <patchestry/Util/OutputFile.hpp>
 
 namespace {
 
@@ -203,17 +205,14 @@ namespace {
     ) {
         auto &ctx = unit.context();
         if (!output_file.empty()) {
-            std::error_code ec;
-            llvm::raw_fd_ostream out(output_file + ".c", ec, llvm::sys::fs::OF_Text);
+            auto ec = patchestry::util::write_output_file(
+                output_file + ".c", llvm::sys::fs::OF_Text,
+                [&](llvm::raw_ostream &out) {
+                    ctx.getTranslationUnitDecl()->print(out, ctx.getPrintingPolicy(), 0);
+                }
+            );
             if (ec) {
                 LOG(ERROR) << "Failed to write C output: " << ec.message() << "\n";
-                return false;
-            }
-            ctx.getTranslationUnitDecl()->print(out, ctx.getPrintingPolicy(), 0);
-            out.close();
-            if (out.has_error()) {
-                LOG(ERROR) << "Failed to write C output: " << out.error().message() << "\n";
-                out.clear_error();
                 return false;
             }
         } else {
@@ -227,6 +226,10 @@ namespace {
 } // namespace
 
 int main(int argc, char **argv) {
+    // A standard descriptor closed by the caller would be handed to the next
+    // file opened; an output file on descriptor 1 or 2 would then also receive
+    // everything printed or logged.  Point closed ones at /dev/null.
+    if (llvm::sys::Process::FixupStandardFileDescriptors()) { return EXIT_FAILURE; }
     auto options = parseCommandLineOptions(argc, argv);
 
     auto program = loadProgram(options.input_file);

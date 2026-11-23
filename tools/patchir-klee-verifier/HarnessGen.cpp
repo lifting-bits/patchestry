@@ -26,6 +26,7 @@
 #include <llvm/TargetParser/Triple.h>
 
 #include <patchestry/Util/Log.hpp>
+#include <patchestry/Util/OutputFile.hpp>
 
 #include "GlobalsInit.hpp"
 #include "Options.hpp"
@@ -822,32 +823,11 @@ namespace patchestry::klee_verifier {
             return true;
         }
 
-        std::error_code ec;
-        llvm::raw_fd_ostream os(out, ec, llvm::sys::fs::OF_None);
-        if (ec) {
-            LOG(ERROR) << "opening " << out << ": " << ec.message() << "\n";
-            return false;
-        }
-
-        emitTo(os);
-
-        // Surface write/flush errors before close so the diagnostic can
-        // attribute them to the write phase rather than the close phase.
-        os.flush();
-        if (os.has_error()) {
-            LOG(ERROR) << "writing module to " << out << ": stream error\n";
-            os.clear_error();
-            return false;
-        }
-
-        // Explicitly close to capture late errors (delayed allocation on
-        // network filesystems, disk-quota/ENOSPC flushed on close). If we
-        // let the destructor do this the error surfaces via
-        // report_fatal_error and aborts the process.
-        os.close();
-        if (os.has_error()) {
-            LOG(ERROR) << "closing " << out << ": stream error\n";
-            os.clear_error();
+        if (auto ec = patchestry::util::write_output_file(
+                out.str(), llvm::sys::fs::OF_None, emitTo
+            ))
+        {
+            LOG(ERROR) << "writing module to " << out << ": " << ec.message() << "\n";
             return false;
         }
 

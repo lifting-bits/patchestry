@@ -17,25 +17,16 @@
 
 #include <patchestry/Codegen/Serializer.hpp>
 #include <patchestry/Util/Log.hpp>
+#include <patchestry/Util/OutputFile.hpp>
 
 namespace patchestry::codegen {
 
     namespace {
         template< typename Print >
         bool writeFile(const std::string &filename, Print print) {
-            std::error_code ec;
-            llvm::raw_fd_ostream out(filename, ec, llvm::sys::fs::OF_None);
-            if (ec) {
+            if (auto ec = util::write_output_file(filename, llvm::sys::fs::OF_None, print)) {
                 LOG(ERROR) << "Failed to write output '" << filename << "': " << ec.message()
                            << "\n";
-                return false;
-            }
-            print(out);
-            out.close();
-            if (out.has_error()) {
-                LOG(ERROR) << "Failed to write output '" << filename
-                           << "': " << out.error().message() << "\n";
-                out.clear_error();
                 return false;
             }
             return true;

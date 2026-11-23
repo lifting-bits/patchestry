@@ -16,6 +16,7 @@
 #include <llvm/Linker/Linker.h>
 #include <llvm/Support/CommandLine.h>
 #include <llvm/Support/InitLLVM.h>
+#include <llvm/Support/Process.h>
 #include <llvm/Support/SourceMgr.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/TargetParser/Triple.h>
@@ -104,6 +105,10 @@ int main(int argc, char **argv) {
     using namespace patchestry::klee_verifier;
 
     llvm::InitLLVM y(argc, argv);
+    // A standard descriptor closed by the caller would be handed to the next
+    // file opened; an output file on descriptor 1 or 2 would then also receive
+    // everything printed or logged.  Point closed ones at /dev/null.
+    if (llvm::sys::Process::FixupStandardFileDescriptors()) { return EXIT_FAILURE; }
     llvm::cl::ParseCommandLineOptions(argc, argv, "patchir-klee-verifier\n");
 
     llvm::LLVMContext context;

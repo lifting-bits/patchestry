@@ -40,7 +40,8 @@ namespace patchestry::codegen {
     class CodeGenerator
     {
       public:
-        CodeGenerator(clang::ASTContext &ctx, const clang::CodeGenOptions &cg_opts) : ctx(ctx) {
+        CodeGenerator(clang::ASTContext &ctx, const clang::CodeGenOptions &cg_opts)
+            : ctx(ctx), errors_before_init(ctx.getDiagnostics().getNumErrors()) {
             cirdriver = std::make_shared< cir::CIRGenerator >(
                 ctx.getDiagnostics(), llvm::vfs::getRealFileSystem(), cg_opts
             );
@@ -55,8 +56,11 @@ namespace patchestry::codegen {
         virtual ~CodeGenerator() = default;
 
         // Emit the CIR module for the bound ASTContext, or nullopt on new
-        // codegen diagnostics or verification failure. Existing parse diagnostics may
-        // be recoverable; the caller decides whether to attempt lowering.
+        // codegen diagnostics or verification failure. "New" is counted from
+        // construction, so an error raised while the constructor initializes
+        // ClangIR (an unsupported target ABI, for one) fails the lowering.
+        // Existing parse diagnostics may be recoverable; the caller decides
+        // whether to attempt lowering.
         std::optional< mlir::ModuleOp > lower_ast_to_mlir();
 
         // Write the .cir/.mlir/.ll outputs selected by `options` for an
@@ -72,6 +76,8 @@ namespace patchestry::codegen {
         void reconcile_variadic_decls(mlir::ModuleOp mod);
 
         clang::ASTContext &ctx;
+        // Error count of the diagnostics engine before CIRGenerator::Initialize.
+        const unsigned errors_before_init;
         std::shared_ptr< cir::CIRGenerator > cirdriver;
     };
 
