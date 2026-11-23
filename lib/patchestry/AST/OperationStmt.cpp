@@ -3223,6 +3223,33 @@ namespace patchestry::ast {
                  false };
     }
 
+    // `value < 0` as a test of the sign bit of an operand `width_bytes` wide.
+    // INT_SCARRY and INT_SBORROW compute their flag into the top bit of a
+    // bitwise expression.  Comparing that expression with 0 in its own type is
+    // wrong twice over: an unsigned type makes `< 0` always false, and a type
+    // narrower than int is promoted, which moves the sign bit away from the
+    // operand's top bit.  Casting to the signed type of exactly the operand's
+    // width first keeps the low bits and makes the comparison signed.
+    static clang::Expr *sign_bit_is_set(
+        OpBuilder &builder, clang::ASTContext &ctx, clang::Sema &sema, clang::Expr *value,
+        clang::QualType operand_type, unsigned width_bytes, clang::SourceLocation loc
+    ) {
+        auto bits = width_bytes != 0U ? uint64_t{ width_bytes } * 8U
+                                      : ctx.getTypeSize(operand_type);
+        auto signed_type = ctx.getIntTypeForBitwidth(static_cast< unsigned >(bits), 1);
+        clang::Expr *tested = value;
+        auto zero_type      = operand_type;
+        if (!signed_type.isNull()) {
+            if (auto *cast = builder.make_explicit_cast(ctx, value, signed_type, loc)) {
+                tested    = cast;
+                zero_type = signed_type;
+            }
+        }
+        auto *zero   = MakeIntLiteralPrintable(ctx, 0, zero_type, /*is_signed=*/true, loc);
+        auto compare = sema.BuildBinOp(sema.getCurScope(), loc, clang::BO_LT, tested, zero);
+        return compare.isInvalid() ? nullptr : compare.getAs< clang::Expr >();
+    }
+
     std::pair< clang::Stmt *, bool > OpBuilder::create_int_scarry(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
@@ -3277,18 +3304,18 @@ namespace patchestry::ast {
         );
         assert(!and_result.isInvalid() && "Failed to create and operation");
 
-        // scarry = and_result < 0
-        auto *zero = MakeIntLiteralPrintable(
-            ctx, 0, input0->getType(), /*is_signed=*/true, op_loc
+        // scarry = the sign bit of and_result, at the width of the operands
+        auto *scarry = sign_bit_is_set(
+            *this, ctx, sema(), and_result.getAs< clang::Expr >(), input0->getType(),
+            op.inputs[0].size, op_loc
         );
-        auto scarry = sema().BuildBinOp(
-            sema().getCurScope(), op_loc, clang::BO_LT, and_result.getAs< clang::Expr >(),
-            zero
-        );
-        assert(!scarry.isInvalid() && "Failed to create scarry comparison");
+        if (scarry == nullptr) {
+            LOG(ERROR) << "Failed to create scarry comparison. key: " << op.key << "\n";
+            return {};
+        }
 
         if (!op.output.has_value()) {
-            return { scarry.getAs< clang::Stmt >(), true };
+            return { scarry, true };
         }
 
         auto *output =
@@ -3297,7 +3324,7 @@ namespace patchestry::ast {
             return {};
         }
 
-        return { create_assign_operation(ctx, scarry.getAs< clang::Expr >(), output, op_loc),
+        return { create_assign_operation(ctx, scarry, output, op_loc),
                  false };
     }
 
@@ -3347,18 +3374,18 @@ namespace patchestry::ast {
         );
         assert(!and_result.isInvalid() && "Failed to create and operation");
 
-        // sborrow = and_result < 0
-        auto *zero = MakeIntLiteralPrintable(
-            ctx, 0, input0->getType(), /*is_signed=*/true, op_loc
+        // sborrow = the sign bit of and_result, at the width of the operands
+        auto *sborrow = sign_bit_is_set(
+            *this, ctx, sema(), and_result.getAs< clang::Expr >(), input0->getType(),
+            op.inputs[0].size, op_loc
         );
-        auto sborrow = sema().BuildBinOp(
-            sema().getCurScope(), op_loc, clang::BO_LT, and_result.getAs< clang::Expr >(),
-            zero
-        );
-        assert(!sborrow.isInvalid() && "Failed to create sborrow comparison");
+        if (sborrow == nullptr) {
+            LOG(ERROR) << "Failed to create sborrow comparison. key: " << op.key << "\n";
+            return {};
+        }
 
         if (!op.output.has_value()) {
-            return { sborrow.getAs< clang::Stmt >(), true };
+            return { sborrow, true };
         }
 
         auto *output =
@@ -3367,7 +3394,7 @@ namespace patchestry::ast {
             return {};
         }
 
-        return { create_assign_operation(ctx, sborrow.getAs< clang::Expr >(), output, op_loc),
+        return { create_assign_operation(ctx, sborrow, output, op_loc),
                  false };
     }
 
