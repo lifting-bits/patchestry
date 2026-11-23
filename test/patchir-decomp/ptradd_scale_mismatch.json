@@ -1,0 +1,113 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-llvm -output %t >> /dev/null 2>&1
+// RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
+//
+// PTRADD is base + index * scale, in bytes.  When the scale is not the size
+// of what the base points to, the lifter used to emit a C `+` on the typed
+// pointer, which scales by the pointee size instead:
+//
+//   1. A pointer to a struct exported without fields (`"size": 1,
+//      "fields": []`, how Ghidra exports an opaque type).  The struct has
+//      size 0 in the lifted module, so every offset collapsed to 0 and each
+//      field store landed on the first one.
+//   2. An `int *` advanced by `n * 1`, which moved 4 * n bytes.
+//
+// Both now do the arithmetic on `char *`.  A scale that matches the pointee
+// size (3) is still an element subscript.
+//
+// LL: define dso_local void @set_fields
+// LL: getelementptr i8, ptr {{%.*}}, i32 56
+// LL: [[N:%.*]] = mul i32 {{%.*}}, 1
+// LL: getelementptr i8, ptr {{%.*}}, i32 [[N]]
+// LL: getelementptr i32, ptr {{%.*}}, i32
+// LL-NOT: getelementptr %struct.method_st
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:v7",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:00010000": {
+      "name": "set_fields",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_void", "is_variadic": false, "is_noreturn": false,
+        "parameter_types": ["t_opaquep", "t_intp", "t_int"]
+      },
+      "basic_blocks": {
+        "ram:00010000:entry": {
+          "operations": {
+            "p0": { "mnemonic": "DECLARE_PARAMETER", "name": "method", "type": "t_opaquep", "kind": "parameter", "index": 0 },
+            "p1": { "mnemonic": "DECLARE_PARAMETER", "name": "words", "type": "t_intp", "kind": "parameter", "index": 1 },
+            "p2": { "mnemonic": "DECLARE_PARAMETER", "name": "n", "type": "t_int", "kind": "parameter", "index": 2 },
+            "entry.exit": { "mnemonic": "BRANCH", "target_block": "ram:00010000:0:basic" }
+          },
+          "ordered_operations": ["p0", "p1", "p2", "entry.exit"]
+        },
+        "ram:00010000:0:basic": {
+          "operations": {
+            "field": {
+              "mnemonic": "PTRADD", "type": "t_opaquep", "size": 4,
+              "inputs": [
+                { "type": "t_opaquep", "size": 4, "kind": "parameter", "operation": "p0" },
+                { "type": "t_int", "size": 4, "kind": "constant", "value": 56 },
+                { "type": "t_int", "size": 4, "kind": "constant", "value": 1 }
+              ]
+            },
+            "field_cast": {
+              "mnemonic": "CAST", "type": "t_intp", "size": 4,
+              "inputs": [{ "type": "t_opaquep", "size": 4, "kind": "temporary", "operation": "field" }]
+            },
+            "store_field": {
+              "mnemonic": "STORE",
+              "inputs": [
+                { "type": "t_intp", "size": 4, "kind": "temporary", "operation": "field_cast" },
+                { "type": "t_int", "size": 4, "kind": "parameter", "operation": "p2" }
+              ]
+            },
+            "bytes": {
+              "mnemonic": "PTRADD", "type": "t_intp", "size": 4,
+              "inputs": [
+                { "type": "t_intp", "size": 4, "kind": "parameter", "operation": "p1" },
+                { "type": "t_int", "size": 4, "kind": "parameter", "operation": "p2" },
+                { "type": "t_int", "size": 4, "kind": "constant", "value": 1 }
+              ]
+            },
+            "store_bytes": {
+              "mnemonic": "STORE",
+              "inputs": [
+                { "type": "t_intp", "size": 4, "kind": "temporary", "operation": "bytes" },
+                { "type": "t_int", "size": 4, "kind": "constant", "value": 7 }
+              ]
+            },
+            "elem": {
+              "mnemonic": "PTRADD", "type": "t_intp", "size": 4,
+              "inputs": [
+                { "type": "t_intp", "size": 4, "kind": "parameter", "operation": "p1" },
+                { "type": "t_int", "size": 4, "kind": "parameter", "operation": "p2" },
+                { "type": "t_int", "size": 4, "kind": "constant", "value": 4 }
+              ]
+            },
+            "store_elem": {
+              "mnemonic": "STORE",
+              "inputs": [
+                { "type": "t_intp", "size": 4, "kind": "temporary", "operation": "elem" },
+                { "type": "t_int", "size": 4, "kind": "constant", "value": 9 }
+              ]
+            },
+            "ret": { "mnemonic": "RETURN", "inputs": [] }
+          },
+          "ordered_operations": ["field", "field_cast", "store_field", "bytes", "store_bytes", "elem", "store_elem", "ret"]
+        }
+      },
+      "entry_block": "ram:00010000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "t_void": { "name": "void", "size": 0, "kind": "void" },
+    "t_int": { "is_signed": true, "name": "int", "size": 4, "kind": "integer" },
+    "t_intp": { "kind": "pointer", "size": 4, "element_type": "t_int" },
+    "t_opaque": { "name": "method_st", "kind": "struct", "size": 1, "fields": [] },
+    "t_opaquep": { "kind": "pointer", "size": 4, "element_type": "t_opaque" }
+  }
+}

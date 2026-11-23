@@ -4122,6 +4122,7 @@ namespace patchestry::ast {
             // reinterpret as char* for well-defined byte arithmetic.
             clang::Expr *arith_base = base;
             auto char_ptr_ty        = ctx.getPointerType(ctx.CharTy);
+            clang::QualType byte_arith_type; // set when the sum is cast back
             if (base->getType()->isRecordType()) {
                 arith_base = make_reinterpret_cast(ctx, base, char_ptr_ty, op_loc);
             } else if (base->getType()->isPointerType()
@@ -4135,6 +4136,18 @@ namespace patchestry::ast {
                 // -Wstring-plus-int. An explicit char* cast (not looked through
                 // by the diagnostic) keeps byte arithmetic well-defined.
                 arith_base = make_explicit_cast(ctx, base, char_ptr_ty, op_loc);
+            } else if (base_is_arith_pointer
+                       && ctx.getTypeSizeInChars(base->getType()->getPointeeType()).getQuantity()
+                              != 1)
+            {
+                // PTRADD is base + index * scale in bytes.  C scales `+` on a
+                // pointer by the size of its pointee, which is not `scale`
+                // here: a struct exported without fields has size 0 (every
+                // offset collapses to 0), and an `int *` advanced by `n * 1`
+                // would move 4 * n bytes.  Do the arithmetic on char* and
+                // give the result the type of the base again.
+                arith_base     = make_explicit_cast(ctx, base, char_ptr_ty, op_loc);
+                byte_arith_type = base->getType();
             }
             if (!arith_base) {
                 LOG(ERROR) << "PTRADD: failed to reinterpret base for "
@@ -4151,6 +4164,13 @@ namespace patchestry::ast {
                 return std::make_pair(nullptr, false);
             }
             result_expr = add_result.getAs< clang::Expr >();
+            if (!byte_arith_type.isNull()) {
+                if (auto *typed =
+                        make_explicit_cast(ctx, result_expr, byte_arith_type, op_loc))
+                {
+                    result_expr = typed;
+                }
+            }
         }
 
         if (merge_to_next) {
