@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import shutil
 import subprocess
@@ -15,6 +16,9 @@ from elftools.elf.elffile import ELFFile
 from patcherex2 import InsertFunctionPatch, ModifyFunctionPatch, Patcherex
 from patcherex2.components.compilers import clang_arm as _patcherex_clang_arm
 from patcherex2.targets.elf_arm_bare import ElfArmBare
+
+import check_bindings
+import check_trampoline
 
 
 # Patcherex2's ClangArm.compile() post-processes the assembled Thumb bytes and
@@ -50,6 +54,9 @@ class Case:
     function_name: str
     spec_name: str
     expected_lines: tuple[str, ...]
+    # A problem check_trampoline must report for this case.  The case passes
+    # when the rewritten ELF is rejected for that reason; it is not run.
+    expect_reject: str | None = None
 
 
 @dataclass(frozen=True)
@@ -72,6 +79,9 @@ CASES: tuple[Case, ...] = (
             "BASE:after",
             "BASE:replace",
             "BASE:contract",
+            "BASE:short",
+            "BASE:tiny",
+            "BASE:pointer",
             "DONE",
         ),
     ),
@@ -86,6 +96,9 @@ CASES: tuple[Case, ...] = (
             "PATCH:after",
             "BASE:replace",
             "BASE:contract",
+            "BASE:short",
+            "BASE:tiny",
+            "BASE:pointer",
             "DONE",
         ),
     ),
@@ -99,6 +112,9 @@ CASES: tuple[Case, ...] = (
             "BASE:after",
             "PATCH:replace",
             "BASE:contract",
+            "BASE:short",
+            "BASE:tiny",
+            "BASE:pointer",
             "DONE",
         ),
     ),
@@ -113,6 +129,62 @@ CASES: tuple[Case, ...] = (
             "BASE:replace",
             "CONTRACT:entry",
             "BASE:contract",
+            "BASE:short",
+            "BASE:tiny",
+            "BASE:pointer",
+            "DONE",
+        ),
+    ),
+    # 4 bytes: the entry branch fills the function exactly.
+    Case(
+        name="short",
+        function_name="qemu_target_short",
+        spec_name="serial_qemu_short_patch.yaml",
+        expected_lines=(
+            "BOOT",
+            "BASE:before",
+            "BASE:after",
+            "BASE:replace",
+            "BASE:contract",
+            "PATCH:short",
+            "BASE:tiny",
+            "BASE:pointer",
+            "DONE",
+        ),
+    ),
+    # 2 bytes: the entry branch overwrites the start of emit_tiny_base.
+    # Rejected by the reinsertion check; the transcript is never compared.
+    Case(
+        name="tiny",
+        function_name="qemu_target_tiny",
+        spec_name="serial_qemu_tiny_patch.yaml",
+        expected_lines=(
+            "BOOT",
+            "BASE:before",
+            "BASE:after",
+            "BASE:replace",
+            "BASE:contract",
+            "BASE:short",
+            "PATCH:tiny",
+            "BASE:pointer",
+            "DONE",
+        ),
+        expect_reject="span-outside-function",
+    ),
+    # Reached only through an address stored in .rodata.
+    Case(
+        name="pointer",
+        function_name="qemu_target_pointer",
+        spec_name="serial_qemu_pointer_patch.yaml",
+        expected_lines=(
+            "BOOT",
+            "BASE:before",
+            "BASE:after",
+            "BASE:replace",
+            "BASE:contract",
+            "BASE:short",
+            "BASE:tiny",
+            "PATCH:pointer",
             "DONE",
         ),
     ),
@@ -124,6 +196,9 @@ BASELINE_LINES: tuple[str, ...] = (
     "BASE:after",
     "BASE:replace",
     "BASE:contract",
+    "BASE:short",
+    "BASE:tiny",
+    "BASE:pointer",
     "DONE",
 )
 
@@ -404,11 +479,30 @@ def repo_tool(repo_root: Path, build_type: str, tool_name: str) -> Path:
     )
 
 
+# Flags for the Patcherex2 compile of the patched LLVM IR.  The lifter emits
+# IR with no type-based aliasing, no `inbounds` and wrapping signed arithmetic;
+# the patch compiler must not add those assumptions back.  The optimization
+# level is appended per run (`--patch-opt-level`).
+#
+# `-fno-pic`: Patcherex2 compiles for arm-linux-gnueabihf, where clang defaults
+# to position-independent code and reaches an external global through a GOT
+# slot.  Nothing creates that slot in a bare-metal image, so the inserted code
+# would load the global's address from unmapped memory.  The image is linked at
+# fixed addresses, so the address can be used directly.
+PATCH_COMPILER_FLAGS = ("-fno-strict-aliasing", "-fwrapv", "-fno-pic")
+
+
+def patch_compiler_flags(opt_level: str) -> list[str]:
+    return [*PATCH_COMPILER_FLAGS, f"-{opt_level}"]
+
+
 def patch_function_in_elf(
     original_elf: Path,
     patched_ll: Path,
     target_function: str,
     rewritten_elf: Path,
+    extra_compiler_flags: list[str],
+    data_symbols: dict[str, int],
 ) -> None:
     snippets = extract_functions_from_llvm_ir(patched_ll.read_text(encoding="utf-8"))
     if target_function not in snippets:
@@ -451,7 +545,18 @@ def patch_function_in_elf(
         },
     )
 
-    compile_opts = {"extension": ".ll", "load_options": PATCHEREX2_LOAD_OPTIONS}
+    # Patcherex2 resolves the patch's external references from the function
+    # symbols angr finds.  It does not define data symbols, so a global the
+    # lifted code reads or writes would be left unresolved and get whatever
+    # address the patch loader invents.  Give it the address each lifted
+    # global has in the original image.
+    p.symbols.update(data_symbols)
+
+    compile_opts = {
+        "extension": ".ll",
+        "load_options": PATCHEREX2_LOAD_OPTIONS,
+        "extra_compiler_flags": list(extra_compiler_flags),
+    }
     # Cortex-M / ElfArmBare targets only execute Thumb. InsertFunctionPatch
     # defaults is_thumb=False, which makes patcherex2 compile the patch with
     # -mno-thumb (ARM mode); the BLX from the Thumb trampoline then jumps
@@ -468,6 +573,49 @@ def patch_function_in_elf(
     p.save_binary(str(rewritten_elf))
 
 
+def original_object_addresses(bindings_path: Path) -> dict[str, int]:
+    """Linker name -> address for every global the lifted unit takes from the binary."""
+    manifest = json.loads(bindings_path.read_text(encoding="utf-8"))
+    return {
+        binding.get("symbol", binding["name"]): int(binding["address"], 16)
+        for binding in manifest.get("bindings", [])
+        if binding["kind"] == "object" and binding["origin"] == "original" and binding.get("address")
+    }
+
+
+def verify_bindings(
+    bindings_path: Path, original_elf: Path, rewritten_elf: Path | None, report_path: Path
+) -> None:
+    """Fail the case when a lifted name does not resolve to the original entity."""
+    manifest = json.loads(bindings_path.read_text(encoding="utf-8"))
+    report = check_bindings.check_bindings(manifest, original_elf, rewritten_elf)
+    report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    failed = check_bindings.failures(report, strict=False)
+    if failed:
+        details = ", ".join(
+            f"{row['verdict']} {row['kind']} '{row['name']}' at {row.get('address', '?')}"
+            for row in failed
+        )
+        raise RuntimeError(f"Binding check failed against {original_elf}: {details}")
+
+
+def verify_trampoline(
+    original_elf: Path,
+    rewritten_elf: Path,
+    function: str,
+    function_json: Path,
+    report_path: Path,
+) -> list[str]:
+    """Check how the function was reinserted; return the problems found."""
+    record = json.loads(function_json.read_text(encoding="utf-8"))
+    try:
+        report = check_trampoline.check_trampoline(original_elf, rewritten_elf, function, record)
+    except LookupError as error:
+        raise RuntimeError(str(error)) from error
+    report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    return check_trampoline.failures(report)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo-root", type=Path, required=True)
@@ -476,7 +624,14 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--fixture-dir", type=Path)
     parser.add_argument("--refresh-ghidra-fixtures", action="store_true")
+    parser.add_argument(
+        "--patch-opt-level",
+        default="O0",
+        choices=["O0", "O1", "O2", "Os", "Oz"],
+        help="optimization level for the Patcherex2 compile of the patched IR",
+    )
     args = parser.parse_args()
+    compiler_flags = patch_compiler_flags(args.patch_opt_level)
 
     repo_root = args.repo_root.resolve()
     output_dir = args.output_dir.resolve()
@@ -507,6 +662,7 @@ def main() -> int:
         )
 
     summary_rows = ["case\tstatus\tartifact"]
+    statuses: dict[str, str] = {}
 
     for case in CASES:
         case_dir = output_dir / case.name
@@ -519,6 +675,9 @@ def main() -> int:
         patched_ll_path = case_dir / f"{case.function_name}.patched.ll"
         rewritten_elf_path = case_dir / "rewritten.elf"
         transcript_path = case_dir / "qemu.log"
+        bindings_path = case_dir / "bindings.manifest.json"
+        bindings_report_path = case_dir / "bindings.json"
+        trampoline_report_path = case_dir / "trampoline.json"
 
         fixture_json_path = fixture_dir / f"{case.function_name}.json"
         if args.refresh_ghidra_fixtures:
@@ -545,7 +704,19 @@ def main() -> int:
                 )
             shutil.copyfile(fixture_json_path, json_path)
 
-        run([str(patchir_decomp), "-input", str(json_path), "-emit-cir", "-output", str(cir_stem)])
+        run(
+            [
+                str(patchir_decomp),
+                "-input",
+                str(json_path),
+                "-emit-cir",
+                "-emit-bindings",
+                str(bindings_path),
+                "-output",
+                str(cir_stem),
+            ]
+        )
+        verify_bindings(bindings_path, firmware_elf, None, bindings_report_path)
 
         transform_dir = repo_root / "test" / "patchir-transform"
         run(
@@ -580,7 +751,29 @@ def main() -> int:
             patched_ll_path,
             case.function_name,
             rewritten_elf_path,
+            compiler_flags,
+            original_object_addresses(bindings_path),
         )
+        verify_bindings(bindings_path, firmware_elf, rewritten_elf_path, bindings_report_path)
+
+        problems = verify_trampoline(
+            firmware_elf, rewritten_elf_path, case.function_name, json_path, trampoline_report_path
+        )
+        if case.expect_reject is not None:
+            if case.expect_reject not in problems:
+                raise RuntimeError(
+                    f"Case {case.name} should have been rejected for {case.expect_reject}; "
+                    f"the reinsertion check reported {problems or 'no problem'} "
+                    f"(see {trampoline_report_path})."
+                )
+            statuses[case.name] = f"rejected:{case.expect_reject}"
+            summary_rows.append(f"{case.name}\t{statuses[case.name]}\t{rewritten_elf_path}")
+            continue
+        if problems:
+            raise RuntimeError(
+                f"Reinsertion check failed for {case.name}: {', '.join(problems)} "
+                f"(see {trampoline_report_path})."
+            )
 
         transcript_lines = run_qemu(args.qemu_system_arm, rewritten_elf_path)
         write_lines(transcript_path, transcript_lines)
@@ -589,8 +782,10 @@ def main() -> int:
                 f"Transcript mismatch for {case.name}.\nExpected: {case.expected_lines}\nObserved: {transcript_lines}"
             )
 
+        statuses[case.name] = "pass"
         summary_rows.append(f"{case.name}\tpass\t{rewritten_elf_path}")
 
+    write_lines(output_dir / "patch-compiler-flags.txt", compiler_flags)
     summary_tsv = output_dir / "summary.tsv"
     summary_md = output_dir / "summary.md"
     write_lines(summary_tsv, summary_rows)
@@ -601,7 +796,7 @@ def main() -> int:
             "",
             f"Baseline: {output_dir / 'baseline.log'}",
             "",
-            *[f"- `{case.name}`: pass" for case in CASES],
+            *[f"- `{case.name}`: {statuses[case.name]}" for case in CASES],
         ],
     )
 

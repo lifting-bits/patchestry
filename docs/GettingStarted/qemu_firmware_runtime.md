@@ -121,6 +121,7 @@ The script writes results under `builds/qemu-firmware-runtime/`:
 
 - `baseline.log`
 - `<case>/rewritten.elf`
+- `<case>/trampoline.json`
 - `<case>/qemu.log`
 - `summary.tsv`
 - `summary.md`
@@ -131,8 +132,40 @@ The current runtime cases are:
 - `after`
 - `replace`
 - `contract`
+- `short`: a 4-byte target, which the entry branch fills exactly
+- `tiny`: a 2-byte target, which is expected to be rejected
+- `pointer`: a target reached only through a stored function address
 
 Each case rewrites the original firmware ELF and validates the serial output from QEMU.
+
+## Reinsertion Check
+
+After rewriting, `scripts/patch-runtime/check_trampoline.py` compares the original and rewritten ELF and writes `<case>/trampoline.json`. The rewriter either overwrites the target in place or puts a 4-byte Thumb branch at its entry and the new body in a new executable segment. The check reports which (`in-place` or `trampoline`) and fails the case on any of these:
+
+| Problem | Meaning |
+| --- | --- |
+| `unchanged` | no byte of the target differs |
+| `unknown-extent` | the target symbol has no size |
+| `not-thumb` | the target is not a Thumb function, or the new entry is a `blx` |
+| `span-outside-function` | a changed byte of the original image is not part of the target |
+| `bad-destination` | the entry branch does not lead to executable Thumb code the rewriter added |
+| `incoming-branch` | a direct branch in another function targets the inside of the target |
+| `alternate-entry` | another function symbol starts inside the target, or its Ghidra record has several address ranges |
+
+Indirect branches and stored pointers into the middle of a function are not checked.
+
+A case can declare the problem it expects with `expect_reject`. It then passes only if the check reports that problem, QEMU is not run for it, and its `summary.tsv` status is `rejected:<problem>`. The `tiny` case is there because its transcript alone would pass: the branch overwrites the first instruction of the neighbouring `emit_tiny_base`, and the firmware still prints the expected lines.
+
+The check can be run on its own:
+
+```sh
+python3 scripts/patch-runtime/check_trampoline.py \
+  --elf firmwares/serial-qemu/build/serial.elf \
+  --rewritten builds/qemu-firmware-runtime/replace/rewritten.elf \
+  --function qemu_target_replace
+```
+
+Its unit tests (`scripts/patch-runtime/test_check_trampoline.py`) run at the start of `scripts/test-qemu-firmware-runtime.sh`.
 
 ## Failure Inspection
 

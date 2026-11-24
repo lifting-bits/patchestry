@@ -52,6 +52,15 @@ fi
 export UV_CACHE_DIR="${UV_CACHE_DIR:-/tmp/uv-cache}"
 export UV_TOOL_DIR="${UV_TOOL_DIR:-/tmp/uv-tools}"
 
+# Patcherex2 pulls in angr 9.2.213, which does not import with bitstring 5
+# (pyvex uses ConstBitStream) or with pycparser releases after 3.0 (angr's
+# type parser replaces the lexer). Neither package pins an upper bound.
+patcherex_env=(
+  --with 'patcherex2 @ git+https://github.com/trail-of-forks/Patcherex2.git@patche_support'
+  --with 'bitstring<5'
+  --with 'pycparser==3.0'
+)
+
 check_tool() {
   local path="$1"
   local hint="$2"
@@ -82,7 +91,7 @@ ensure_macos_keystone() {
     return
   fi
 
-  uv run --python "$python_bin" --with 'patcherex2 @ git+https://github.com/trail-of-forks/Patcherex2.git@patche_support' python -c 'print("patcherex2 cache primed")' >/dev/null
+  uv run --python "$python_bin" "${patcherex_env[@]}" python -c 'print("patcherex2 cache primed")' >/dev/null
 
   local cmake_file
   cmake_file="$(
@@ -149,6 +158,10 @@ make -C "$repo_root/firmwares/serial-qemu" clean all \
   LLVM_PREFIX="$llvm_prefix" \
   LD_LLD="$ld_lld"
 
+PATCHESTRY_LLVM_PREFIX="$llvm_prefix" PATCHESTRY_LD_LLD="$ld_lld" \
+  uv run --python "$python_bin" "${patcherex_env[@]}" \
+  python "$repo_root/scripts/patch-runtime/test_check_trampoline.py"
+
 runtime_args=(
   "$repo_root/scripts/patch-runtime/qemu_firmware_runtime.py"
   --repo-root "$repo_root"
@@ -162,4 +175,4 @@ if [[ "$refresh_ghidra" == "1" ]]; then
   runtime_args+=(--refresh-ghidra-fixtures)
 fi
 
-uv run --python "$python_bin" --with 'patcherex2 @ git+https://github.com/trail-of-forks/Patcherex2.git@patche_support' python "${runtime_args[@]}"
+uv run --python "$python_bin" "${patcherex_env[@]}" python "${runtime_args[@]}"
