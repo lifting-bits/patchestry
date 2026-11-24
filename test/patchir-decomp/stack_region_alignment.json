@@ -1,0 +1,247 @@
+// A stack region is an array whose element is as wide as the strictest
+// alignment among its members, so that every member's typed view is aligned.
+// The alignment used to be capped at eight bytes: two 16-byte locals on
+// AArch64 were placed in `unsigned long __stack_m48[4]` (align 8) and accessed
+// as `unsigned __int128` (align 16).
+//
+// wide_record has two adjacent `unsigned __int128` locals at sp-48 and sp-32;
+// the address of the first is passed to consume, so both share a region.
+//
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-llvm -print-tu -strict -output %t > %t.log 2>&1
+// RUN: %file-check -vv -check-prefix=LOG %s --input-file %t.log --allow-empty
+// RUN: %file-check -vv -check-prefix=C %s --input-file %t.c
+// RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
+//
+// LOG-NOT: lossy lift
+//
+// C: unsigned __int128 __stack_m48[2];
+// C: (*(unsigned __int128 *)__stack_m48) = param_1;
+// C: (*(unsigned __int128 *)((unsigned char *)__stack_m48 + 16U)) = param_2;
+//
+// LL: alloca [2 x i128], i64 1, align 16
+// LL-NOT: alloca [4 x i64]
+{
+  "architecture": "AARCH64",
+  "id": "AARCH64:LE:64:v8A",
+  "format": "Executable and Linking Format (ELF)",
+  "compiler_spec": "default",
+  "functions": {
+    "ram:00010000": {
+      "name": "wide_record",
+      "display_name": "wide_record",
+      "is_intrinsic": false,
+      "entry_point": "ram:00010000",
+      "address_ranges": [
+        {
+          "start": "ram:00010000",
+          "end": "ram:00010011"
+        }
+      ],
+      "type": {
+        "return_type": "t0",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "w",
+          "w"
+        ],
+        "return_storage": [],
+        "parameter_storage": []
+      },
+      "basic_blocks": {
+        "ram:00010000:0:basic": {
+          "operations": {
+            "ram:00010002:51:0": {
+              "mnemonic": "ADDRESS_OF",
+              "type": "wp",
+              "size": 8,
+              "inputs": [
+                {
+                  "type": "w",
+                  "size": 16,
+                  "kind": "local",
+                  "operation": "unique:001c2402:2:0"
+                }
+              ]
+            },
+            "ram:0001000a:52:1": {
+              "mnemonic": "COPY",
+              "type": "w",
+              "size": 16,
+              "output": {
+                "kind": "local",
+                "operation": "unique:001c2402:2:0"
+              },
+              "inputs": [
+                {
+                  "type": "w",
+                  "size": 16,
+                  "kind": "parameter",
+                  "operation": "unique:001c2400:0:0"
+                }
+              ]
+            },
+            "ram:0001000a:53:2": {
+              "mnemonic": "COPY",
+              "type": "w",
+              "size": 16,
+              "output": {
+                "kind": "local",
+                "operation": "unique:001c2403:3:0"
+              },
+              "inputs": [
+                {
+                  "type": "w",
+                  "size": 16,
+                  "kind": "parameter",
+                  "operation": "unique:001c2401:1:0"
+                }
+              ]
+            },
+            "ram:0001000a:18:5": {
+              "mnemonic": "CALL",
+              "has_return_value": true,
+              "target": {
+                "kind": "function",
+                "function": "EXTERNAL:00000001",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "wp",
+                  "size": 8,
+                  "kind": "temporary",
+                  "operation": "ram:00010002:51:0"
+                }
+              ]
+            },
+            "ram:00010010:32:6": {
+              "mnemonic": "RETURN",
+              "inputs": []
+            }
+          },
+          "ordered_operations": [
+            "ram:00010002:51:0",
+            "ram:0001000a:52:1",
+            "ram:0001000a:53:2",
+            "ram:0001000a:18:5",
+            "ram:00010010:32:6"
+          ]
+        },
+        "ram:00010000:entry": {
+          "operations": {
+            "unique:001c2400:0:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "param_1",
+              "type": "w",
+              "kind": "parameter",
+              "index": 0
+            },
+            "unique:001c2401:1:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "param_2",
+              "type": "w",
+              "kind": "parameter",
+              "index": 1
+            },
+            "unique:001c2402:2:0": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "live_in": false,
+              "storage": [
+                {
+                  "kind": "stack",
+                  "offset": -48,
+                  "size": 16
+                }
+              ],
+              "name": "local_10",
+              "type": "w"
+            },
+            "unique:001c2403:3:0": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "live_in": false,
+              "storage": [
+                {
+                  "kind": "stack",
+                  "offset": -32,
+                  "size": 16
+                }
+              ],
+              "name": "uStack_c",
+              "type": "w"
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:00010000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "unique:001c2400:0:0",
+            "unique:001c2401:1:0",
+            "unique:001c2402:2:0",
+            "unique:001c2403:3:0",
+            "entry.exit"
+          ]
+        }
+      },
+      "entry_block": "ram:00010000:entry",
+      "region": {
+        "kind": "graph",
+        "index": 0,
+        "children": [
+          {
+            "kind": "plain",
+            "index": 0,
+            "block": "ram:00010000:0:basic"
+          }
+        ]
+      }
+    },
+    "EXTERNAL:00000001": {
+      "name": "consume",
+      "display_name": "consume",
+      "is_intrinsic": false,
+      "entry_point": "ram:00011000",
+      "address_ranges": [
+        {
+          "start": "ram:00011000",
+          "end": "ram:00011000"
+        }
+      ],
+      "type": {
+        "return_type": "t0",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "wp"
+        ],
+        "return_storage": [],
+        "parameter_storage": []
+      }
+    }
+  },
+  "globals": {},
+  "types": {
+    "t0": {
+      "name": "void",
+      "size": 0,
+      "kind": "void"
+    },
+    "w": {
+      "name": "__int128",
+      "size": 16,
+      "kind": "integer",
+      "is_signed": false
+    },
+    "wp": {
+      "kind": "pointer",
+      "size": 8,
+      "element_type": "w"
+    }
+  },
+  "boundary_repairs": []
+}

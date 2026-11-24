@@ -36,6 +36,25 @@ namespace patchestry::ghidra {
         return std::nullopt;
     }
 
+    // Storage of a prototype return value, a parameter or a local: an array
+    // of `{kind, register?, offset, size}` pieces.
+    static Storage parse_storage(const llvm::json::Array &pieces) {
+        Storage storage;
+        for (const auto &piece : pieces) {
+            const auto *piece_obj = piece.getAsObject();
+            if (piece_obj == nullptr) {
+                continue;
+            }
+            StoragePiece entry;
+            entry.kind          = piece_obj->getString("kind").value_or("other").str();
+            entry.register_name = piece_obj->getString("register").value_or("").str();
+            entry.offset        = piece_obj->getInteger("offset").value_or(0);
+            entry.size = static_cast< uint32_t >(piece_obj->getInteger("size").value_or(0));
+            storage.push_back(std::move(entry));
+        }
+        return storage;
+    }
+
     template< typename ObjectType >
     constexpr std::optional< std::string >
     get_string_if_valid(const ObjectType &obj, const char *field) {
@@ -421,8 +440,10 @@ namespace patchestry::ghidra {
                              << "'\n";
             }
 
+            const auto field_size = field_obj->getInteger("size").value_or(0);
             varnode.AddComponents(
-                field_name, iter->second, static_cast< uint32_t >(*maybe_offset)
+                field_name, iter->second, static_cast< uint32_t >(*maybe_offset),
+                field_size > 0 ? static_cast< uint32_t >(field_size) : 0U
             );
 
             ++field_index;
@@ -762,6 +783,15 @@ namespace patchestry::ghidra {
         if (auto maybe_entry_point = get_string_if_valid(func_obj, "entry_point")) {
             function.entry_point = *maybe_entry_point;
         }
+        if (const auto *frame_obj = func_obj.getObject("frame")) {
+            StackFrame frame;
+            frame.size             = frame_obj->getInteger("size").value_or(0);
+            frame.local_size       = frame_obj->getInteger("local_size").value_or(0);
+            frame.parameter_size   = frame_obj->getInteger("parameter_size").value_or(0);
+            frame.parameter_offset = frame_obj->getInteger("parameter_offset").value_or(0);
+            frame.grows_negative   = frame_obj->getBoolean("grows_negative").value_or(true);
+            function.frame         = frame;
+        }
         if (const auto *ranges_arr = func_obj.getArray("address_ranges")) {
             for (const auto &range_val : *ranges_arr) {
                 const auto *range_obj = range_val.getAsObject();
@@ -1042,6 +1072,22 @@ namespace patchestry::ghidra {
         if (auto live_in = pcode_obj.getBoolean("live_in")) {
             operation.live_in = *live_in;
         }
+        if (const auto *storage = pcode_obj.getArray("storage")) {
+            operation.storage = parse_storage(*storage);
+        }
+        if (operation.mnemonic == Mnemonic::OP_DECLARE_LOCAL) {
+            auto positive = [&](const char *field) -> std::optional< uint32_t > {
+                auto value = pcode_obj.getInteger(field);
+                if (!value || *value < 0) {
+                    return std::nullopt;
+                }
+                return static_cast< uint32_t >(*value);
+            };
+            operation.size          = positive("size");
+            operation.shadow_of     = get_string_if_valid(pcode_obj, "shadow_of");
+            operation.shadow_size   = positive("shadow_size");
+            operation.shadow_offset = positive("shadow_offset");
+        }
 
         // Deserialize operation specific fields
         switch (operation.mnemonic) {
@@ -1135,24 +1181,6 @@ namespace patchestry::ghidra {
                 }
             }
         }
-
-        auto parse_storage = [](const llvm::json::Array &pieces) {
-            Storage storage;
-            for (const auto &piece : pieces) {
-                const auto *piece_obj = piece.getAsObject();
-                if (piece_obj == nullptr) {
-                    continue;
-                }
-                StoragePiece entry;
-                entry.kind          = piece_obj->getString("kind").value_or("other").str();
-                entry.register_name = piece_obj->getString("register").value_or("").str();
-                entry.offset        = piece_obj->getInteger("offset").value_or(0);
-                entry.size =
-                    static_cast< uint32_t >(piece_obj->getInteger("size").value_or(0));
-                storage.push_back(std::move(entry));
-            }
-            return storage;
-        };
 
         if (const auto *return_storage = proto_obj.getArray("return_storage")) {
             proto.return_storage = parse_storage(*return_storage);
@@ -1252,8 +1280,15 @@ namespace patchestry::ghidra {
             if (auto maybe_type = get_string_if_valid(*global_obj, "type")) {
                 variable.type = *maybe_type;
             }
+            // The serializer writes the size as a decimal string; accept a
+            // number too.  Anything else leaves the size unknown (0).
             if (auto maybe_size = global_obj->getInteger("size")) {
-                variable.size = static_cast< uint32_t >(*maybe_size);
+                variable.size = *maybe_size > 0 ? static_cast< uint32_t >(*maybe_size) : 0U;
+            } else if (auto size_text = global_obj->getString("size")) {
+                uint32_t parsed = 0;
+                if (!size_text->getAsInteger(10, parsed)) {
+                    variable.size = parsed;
+                }
             }
 
             serialized_globals.emplace(variable.key, std::move(variable));

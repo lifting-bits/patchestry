@@ -87,6 +87,19 @@ int main(int argc, char **argv) {
             check(ci->getCodeGenOpts().OptimizationLevel == 0, "Preserve optimization level");
             check(ci->getLangOpts().GNUMode == !lifted, "GNU mode must depend on policy");
             check(
+                ci->getCodeGenOpts().RelaxedAliasing == lifted,
+                "Lifted code must not use type-based aliasing"
+            );
+            check(
+                ci->getLangOpts().PointerOverflowDefined == lifted,
+                "Lifted pointer arithmetic must not be inbounds"
+            );
+            check(
+                (ci->getLangOpts().getSignedOverflowBehavior() == clang::LangOptions::SOB_Defined)
+                    == lifted,
+                "Lifted signed arithmetic must wrap"
+            );
+            check(
                 &ci->getTarget().getTargetOpts() == &ci->getTargetOpts(),
                 "Target options must be invocation-owned"
             );

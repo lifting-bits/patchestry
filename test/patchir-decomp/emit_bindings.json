@@ -1,0 +1,115 @@
+// -emit-bindings writes what each global and function of the lifted unit is in
+// the original binary: its Ghidra address, recovered size, kind and origin.
+// Objects come first, each list ordered by address.  A global's `size` is
+// accepted as a decimal string (what the serializer writes) or an integer.  A
+// function's size is the sum of its inclusive address ranges.  An entity in
+// Ghidra's EXTERNAL space is `imported`; an intrinsic the lifter declares
+// itself is `patch-owned`.
+//
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-cir -emit-bindings %t.bindings.json -output %t
+// RUN: %file-check -vv %s --input-file %t.bindings.json
+// RUN: test -e %t.cir
+//
+// CHECK: "architecture": "ARM"
+// CHECK: "bindings": [
+// CHECK: "address": "0x20000000"
+// CHECK-NEXT: "address_space": "ram"
+// CHECK-NEXT: "key": "ram:20000000"
+// CHECK-NEXT: "kind": "object"
+// CHECK-NEXT: "lifted_size": 4
+// CHECK-NEXT: "name": "counter"
+// CHECK-NEXT: "origin": "original"
+// CHECK-NEXT: "size": 4
+// CHECK-NEXT: "symbol": "counter"
+// CHECK: "address": "0x20000004"
+// CHECK: "lifted_size": 4
+// CHECK-NEXT: "name": "limit"
+// CHECK-NEXT: "origin": "original"
+// CHECK-NEXT: "size": 4
+// CHECK: "address": "0x1"
+// CHECK-NEXT: "address_space": "EXTERNAL"
+// CHECK-NEXT: "defined": false
+// CHECK-NEXT: "key": "EXTERNAL:00000001"
+// CHECK-NEXT: "kind": "function"
+// CHECK-NEXT: "name": "ext_import"
+// CHECK-NEXT: "origin": "imported"
+// CHECK: "address": "0x10000000"
+// CHECK-NEXT: "address_space": "ram"
+// CHECK-NEXT: "defined": true
+// CHECK-NEXT: "key": "ram:10000000"
+// CHECK-NEXT: "kind": "function"
+// CHECK-NEXT: "name": "emit_bindings"
+// CHECK-NEXT: "origin": "original"
+// CHECK-NEXT: "size": 24
+// CHECK-NEXT: "symbol": "emit_bindings"
+// CHECK: "address": "0x10000040"
+// CHECK: "defined": false
+// CHECK: "name": "callee"
+// CHECK-NEXT: "origin": "original"
+// CHECK-NEXT: "size": 8
+// CHECK: "format": "Executable and Linking Format (ELF)"
+// CHECK: "language": "ARM:LE:32:Cortex"
+// CHECK: "unresolved_calls": []
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "emit_bindings",
+      "is_intrinsic": false,
+      "address_ranges": [
+        { "start": "ram:10000000", "end": "ram:1000000f" },
+        { "start": "ram:10000020", "end": "ram:10000027" }
+      ],
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": []
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:10000000:0:basic" }
+          },
+          "ordered_operations": ["br"]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "copy": {
+              "mnemonic": "COPY",
+              "type": "type_int",
+              "output": { "kind": "global", "global": "ram:20000000" },
+              "inputs": [{ "type": "type_int", "kind": "global", "global": "ram:20000004" }]
+            },
+            "ret": { "mnemonic": "RETURN", "inputs": [] }
+          },
+          "ordered_operations": ["copy", "ret"]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    },
+    "ram:10000040": {
+      "name": "callee",
+      "is_intrinsic": false,
+      "address_ranges": [{ "start": "ram:10000040", "end": "ram:10000047" }],
+      "type": { "return_type": "type_void", "is_variadic": false, "is_noreturn": false, "calling_convention": "__stdcall", "parameter_types": [] }
+    },
+    "EXTERNAL:00000001": {
+      "name": "ext_import",
+      "is_intrinsic": false,
+      "type": { "return_type": "type_void", "is_variadic": false, "is_noreturn": false, "calling_convention": "__stdcall", "parameter_types": [] }
+    }
+  },
+  "globals": {
+    "ram:20000000": { "name": "counter", "size": "4", "type": "type_int" },
+    "ram:20000004": { "name": "limit", "size": 4, "type": "type_int" }
+  },
+  "types": {
+    "type_int": { "name": "unsigned int", "size": 4, "kind": "integer" },
+    "type_void": { "name": "void", "size": 0, "kind": "void" }
+  }
+}

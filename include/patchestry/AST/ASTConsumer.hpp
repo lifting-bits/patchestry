@@ -10,6 +10,7 @@
 #include <functional>
 #include <memory>
 #include <unordered_map>
+#include <vector>
 
 #include <clang/AST/ASTConsumer.h>
 #include <clang/AST/ASTContext.h>
@@ -22,6 +23,7 @@
 #include <clang/Sema/Sema.h>
 #include <llvm/Support/raw_ostream.h>
 
+#include <patchestry/AST/Bindings.hpp>
 #include <patchestry/AST/LiftOptions.hpp>
 #include <patchestry/AST/LossReport.hpp>
 #include <patchestry/AST/TypeBuilder.hpp>
@@ -49,6 +51,11 @@ namespace patchestry::ast {
             , type_builder(nullptr) {}
 
         void HandleTranslationUnit(clang::ASTContext &ctx) override;
+
+        /// Every global and function declared at the top of the unit, tied to
+        /// its entry in the program model.  Call after
+        /// `HandleTranslationUnit`.
+        std::vector< Binding > collect_bindings(clang::ASTContext &ctx) const;
 
       private:
         void create_globals(clang::ASTContext &ctx, VariableMap &serialized_variables);

@@ -9,6 +9,7 @@
 
 #include <functional>
 #include <string>
+#include <unordered_set>
 
 #include <clang/AST/ASTContext.h>
 
@@ -90,6 +91,11 @@ namespace patchestry::ast {
          * types that need to be processed and serialized.
          */
         void create_types(clang::ASTContext &ctx, TypeMap &lifted_types);
+
+        /// Where `record-layout-mismatch` reports go.  Without a reporter the
+        /// records are still laid out at their recovered offsets; a layout
+        /// that cannot be reproduced is just not reported.
+        void set_loss_reporter(const LossReporter *reporter) { loss_reporter = reporter; }
 
       private:
         clang::QualType
@@ -225,5 +231,9 @@ namespace patchestry::ast {
         SerializedTypeMap serialized_types;
         const LossReporter *loss_reporter;
         const TypeMap *lifted_types_ = nullptr;
+        // Keys of the composite types whose definition is already complete.
+        std::unordered_set< std::string > completed_definitions;
+        // Forward declaration of a composite type -> its type key.
+        std::unordered_map< const clang::Decl *, std::string > definition_keys;
     };
 } // namespace patchestry::ast

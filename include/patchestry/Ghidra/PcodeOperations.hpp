@@ -144,7 +144,7 @@ namespace patchestry::ghidra {
     {
         std::string name;
         std::string type;
-        uint32_t size;
+        uint32_t size = 0; // bytes; 0 when the JSON does not say
         std::string key;
     };
 
@@ -180,6 +180,21 @@ namespace patchestry::ghidra {
         bool is_default = false;
     };
 
+    // One varnode of a value's storage: a register, a stack slot, or another
+    // location Ghidra assigned.  `offset` is the register-space or memory
+    // offset, or the signed entry-SP-relative offset for a stack slot.
+    struct StoragePiece
+    {
+        std::string kind; // register, stack, memory, unique, constant, other
+        std::string register_name;
+        int64_t offset = 0;
+        uint32_t size  = 0;
+    };
+
+    // The pieces that together hold one value, in the order Ghidra's
+    // `VariableStorage.getVarnodes()` lists them.
+    using Storage = std::vector< StoragePiece >;
+
     struct Operation
     {
         Mnemonic mnemonic;
@@ -197,6 +212,21 @@ namespace patchestry::ghidra {
         // the function defines it (one of its varnodes is a function input).
         // Absent in JSON from a serializer that does not record it.
         std::optional< bool > live_in;
+        // DECLARE_LOCAL only: where the decompiler placed the variable.
+        // Absent for shadow (size-split) declarations and in JSON from a
+        // serializer that does not record it.
+        std::optional< Storage > storage;
+        // DECLARE_LOCAL only: byte size of a declaration that has no type of
+        // its own (a shadow, see below).
+        std::optional< uint32_t > size;
+        // DECLARE_LOCAL only: a shadow is a differently sized view of another
+        // declaration's storage.  `shadow_of` is that declaration's key,
+        // `shadow_size` the width of the view and `shadow_offset` its byte
+        // offset inside the original (absent when the serializer could not
+        // tell).
+        std::optional< std::string > shadow_of;
+        std::optional< uint32_t > shadow_size;
+        std::optional< uint32_t > shadow_offset;
 
         // Call Operation
         std::optional< OperationTarget > target;
@@ -238,21 +268,6 @@ namespace patchestry::ghidra {
         bool is_entry_block;
     };
 
-    // One varnode of a value's storage: a register, a stack slot, or another
-    // location Ghidra assigned.  `offset` is the register-space or memory
-    // offset, or the signed entry-SP-relative offset for a stack slot.
-    struct StoragePiece
-    {
-        std::string kind; // register, stack, memory, unique, constant, other
-        std::string register_name;
-        int64_t offset = 0;
-        uint32_t size  = 0;
-    };
-
-    // The pieces that together hold one value, in the order Ghidra's
-    // `VariableStorage.getVarnodes()` lists them.
-    using Storage = std::vector< StoragePiece >;
-
     struct FunctionPrototype
     {
         std::vector< std::string > parameters;
@@ -292,6 +307,16 @@ namespace patchestry::ghidra {
         std::optional< std::string > condition_opcode;
     };
 
+    // The stack frame Ghidra recovered for a function; sizes in bytes.
+    struct StackFrame
+    {
+        int64_t size             = 0;
+        int64_t local_size       = 0;
+        int64_t parameter_size   = 0;
+        int64_t parameter_offset = 0;
+        bool grows_negative      = true;
+    };
+
     struct Function
     {
         std::string name;          // original (possibly mangled) symbol name
@@ -305,6 +330,8 @@ namespace patchestry::ghidra {
         // Optional schema fields; empty on older serializer outputs.
         std::string entry_point;
         std::vector< AddressRange > address_ranges;
+        // Absent in JSON from a serializer that does not record it.
+        std::optional< StackFrame > frame;
 
         // Interrupt-handler metadata from the Ghidra InterruptAnalysis pass.
         // When set, the function is emitted void(void) with an interrupt

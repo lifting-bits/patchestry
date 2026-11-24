@@ -99,6 +99,14 @@ namespace {
         llvm::cl::init(false)
     );
 
+    const llvm::cl::opt< std::string > emit_bindings( // NOLINT(cert-err58-cpp)
+        "emit-bindings",
+        llvm::cl::desc(
+            "Write a JSON manifest of every global and function the lifted unit "
+            "refers to, with its address, size and kind in the original binary"),
+        llvm::cl::value_desc("filename"), llvm::cl::init("")
+    );
+
     patchestry::Options parseCommandLineOptions(int argc, char **argv) {
         llvm::cl::ParseCommandLineOptions(
             argc, argv, "patche-lifter to represent high pcode into mlir representations\n"
@@ -119,6 +127,7 @@ namespace {
             .print_tu                   = print_tu.getValue(),
             .emit_dot_cfg               = emit_dot_cfg.getValue(),
             .strict                     = strict.getValue(),
+            .bindings_file              = emit_bindings.getValue(),
         };
     }
 
@@ -234,6 +243,29 @@ namespace {
         return true;
     }
 
+    // `-emit-bindings`: what each emitted global and function is in the
+    // original binary.  Written before lowering, like `-print-tu`.
+    bool writeBindings(
+        const patchestry::ast::TranslationUnit &unit,
+        const patchestry::ghidra::Program &program, const std::string &path
+    ) {
+        auto ec = patchestry::util::write_output_file(
+            path, llvm::sys::fs::OF_Text,
+            [&](llvm::raw_ostream &out) {
+                patchestry::ast::WriteBindings(
+                    out, unit.bindings, patchestry::ast::CollectUnresolvedCalls(program),
+                    program.arch.value_or(""), program.lang.value_or(""),
+                    program.format.value_or("")
+                );
+            }
+        );
+        if (ec) {
+            LOG(ERROR) << "Failed to write bindings: " << ec.message() << "\n";
+            return false;
+        }
+        return true;
+    }
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -253,6 +285,12 @@ int main(int argc, char **argv) {
     if (!unit) { return EXIT_FAILURE; }
 
     if (options.print_tu && !printTranslationUnit(*unit, options.output_file)) {
+        return EXIT_FAILURE;
+    }
+
+    if (!options.bindings_file.empty()
+        && !writeBindings(*unit, *program, options.bindings_file))
+    {
         return EXIT_FAILURE;
     }
 

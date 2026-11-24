@@ -1,0 +1,855 @@
+// A recovered record is laid out at its recovered offsets, not at whatever
+// natural C layout its member types produce: an unchanged callee reads the
+// record where the binary put things.
+//
+//   gap_rec      1-byte tag, 4-byte value at offset 8: explicit padding
+//   packed_rec   4-byte value at offset 1: packed
+//   view_rec     a union stays a union, padded to its recovered size
+//   tail_rec     16 bytes with one 4-byte member: tail padding
+//   outer_rec    a record member is completed before the record holding it
+//   bits_rec     bit-field `b` recovered at bit 5; C puts it at bit 3
+//   overlap_rec  two struct members share bytes 2-3
+//
+// The last two cannot be reproduced and are reported, a warning by default and
+// an error under -strict.  A PTRSUB offset that names no member (inside
+// `word` in overlap_rec) is lifted as byte arithmetic, not as the next member.
+//
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-llvm -print-tu -output %t > %t.log 2>&1
+// RUN: %file-check -vv -check-prefix=WARN %s --input-file %t.log
+// RUN: %file-check -vv -check-prefix=C %s --input-file %t.c
+// RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
+// RUN: not %patchir-decomp -input %t.json -emit-llvm -strict -output %t.strict > %t.strict.log 2>&1
+// RUN: %file-check -vv -check-prefix=ERR %s --input-file %t.strict.log
+// RUN: test ! -e %t.strict.ll
+//
+// WARN-DAG: Diag Warning: {{.*}}lossy lift [record-layout-mismatch]: struct 'bits_rec': member 'b' is at bit 3 in the lifted record, recovered at bit 5
+// WARN-DAG: Diag Warning: {{.*}}lossy lift [record-layout-mismatch]: struct 'overlap_rec': member 'mid' at recovered offset 2 overlaps the member before it
+// WARN-NOT: Diag Error
+// WARN-NOT: struct 'gap_rec'
+// WARN-NOT: struct 'packed_rec'
+// WARN-NOT: union 'view_rec'
+// WARN-NOT: struct 'tail_rec'
+// WARN-NOT: struct 'outer_rec'
+//
+// C-DAG: unsigned char __pad_1[7];
+// C-DAG: struct __attribute__((packed)) packed_rec {
+// C-DAG: union view_rec {
+// C-DAG: unsigned char __pad_4[12];
+// C-DAG: return *(unsigned int *)((char *)p + 2U);
+//
+// LL-DAG: %struct.gap_rec = type { i8, [7 x i8], i32 }
+// LL-DAG: %struct.packed_rec = type <{ i8, i32 }>
+// LL-DAG: %struct.tail_rec = type { i32, [12 x i8] }
+// LL-DAG: %struct.outer_rec = type { i8, [3 x i8], %struct.gap_rec, i32 }
+//
+// ERR-DAG: Diag Error: {{.*}}lossy lift [record-layout-mismatch]: struct 'bits_rec'
+// ERR-DAG: Diag Error: {{.*}}lossy lift [record-layout-mismatch]: struct 'overlap_rec'
+// ERR: Skipping code generation due to prior diagnostics errors
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "get_gap",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "p_gap"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "p",
+              "type": "p_gap",
+              "kind": "parameter",
+              "index": 0
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "br"
+          ]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "sub": {
+              "mnemonic": "PTRSUB",
+              "type": "type_intp",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "p_gap",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "p0"
+                },
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 8
+                }
+              ]
+            },
+            "ld": {
+              "mnemonic": "LOAD",
+              "type": "type_int",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "type_intp",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "sub"
+                }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ld"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "sub",
+            "ld",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    },
+    "ram:10001000": {
+      "name": "get_packed",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "p_packed"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10001000:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "p",
+              "type": "p_packed",
+              "kind": "parameter",
+              "index": 0
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10001000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "br"
+          ]
+        },
+        "ram:10001000:0:basic": {
+          "operations": {
+            "sub": {
+              "mnemonic": "PTRSUB",
+              "type": "type_intp",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "p_packed",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "p0"
+                },
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 1
+                }
+              ]
+            },
+            "ld": {
+              "mnemonic": "LOAD",
+              "type": "type_int",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "type_intp",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "sub"
+                }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ld"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "sub",
+            "ld",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10001000:entry"
+    },
+    "ram:10002000": {
+      "name": "get_union",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "p_union"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10002000:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "p",
+              "type": "p_union",
+              "kind": "parameter",
+              "index": 0
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10002000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "br"
+          ]
+        },
+        "ram:10002000:0:basic": {
+          "operations": {
+            "sub": {
+              "mnemonic": "PTRSUB",
+              "type": "type_intp",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "p_union",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "p0"
+                },
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 0
+                }
+              ]
+            },
+            "ld": {
+              "mnemonic": "LOAD",
+              "type": "type_int",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "type_intp",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "sub"
+                }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ld"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "sub",
+            "ld",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10002000:entry"
+    },
+    "ram:10003000": {
+      "name": "get_bits",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "p_bits"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10003000:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "p",
+              "type": "p_bits",
+              "kind": "parameter",
+              "index": 0
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10003000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "br"
+          ]
+        },
+        "ram:10003000:0:basic": {
+          "operations": {
+            "sub": {
+              "mnemonic": "PTRSUB",
+              "type": "type_intp",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "p_bits",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "p0"
+                },
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 4
+                }
+              ]
+            },
+            "ld": {
+              "mnemonic": "LOAD",
+              "type": "type_int",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "type_intp",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "sub"
+                }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ld"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "sub",
+            "ld",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10003000:entry"
+    },
+    "ram:10004000": {
+      "name": "get_tail",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "p_tail"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10004000:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "p",
+              "type": "p_tail",
+              "kind": "parameter",
+              "index": 0
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10004000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "br"
+          ]
+        },
+        "ram:10004000:0:basic": {
+          "operations": {
+            "sub": {
+              "mnemonic": "PTRSUB",
+              "type": "type_intp",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "p_tail",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "p0"
+                },
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 0
+                }
+              ]
+            },
+            "ld": {
+              "mnemonic": "LOAD",
+              "type": "type_int",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "type_intp",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "sub"
+                }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ld"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "sub",
+            "ld",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10004000:entry"
+    },
+    "ram:10005000": {
+      "name": "get_overlap",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "p_overlap"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10005000:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "p",
+              "type": "p_overlap",
+              "kind": "parameter",
+              "index": 0
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10005000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "br"
+          ]
+        },
+        "ram:10005000:0:basic": {
+          "operations": {
+            "sub": {
+              "mnemonic": "PTRSUB",
+              "type": "type_intp",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "p_overlap",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "p0"
+                },
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 2
+                }
+              ]
+            },
+            "ld": {
+              "mnemonic": "LOAD",
+              "type": "type_int",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "type_intp",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "sub"
+                }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ld"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "sub",
+            "ld",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10005000:entry"
+    },
+    "ram:10006000": {
+      "name": "get_outer",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "p_outer"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10006000:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "p",
+              "type": "p_outer",
+              "kind": "parameter",
+              "index": 0
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10006000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "br"
+          ]
+        },
+        "ram:10006000:0:basic": {
+          "operations": {
+            "sub": {
+              "mnemonic": "PTRSUB",
+              "type": "type_intp",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "p_outer",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "p0"
+                },
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 4
+                }
+              ]
+            },
+            "ld": {
+              "mnemonic": "LOAD",
+              "type": "type_int",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "type_intp",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "sub"
+                }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ld"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "sub",
+            "ld",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10006000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": {
+      "name": "unsigned int",
+      "size": 4,
+      "kind": "integer"
+    },
+    "type_char": {
+      "name": "char",
+      "size": 1,
+      "kind": "integer",
+      "is_signed": true
+    },
+    "type_short": {
+      "name": "short",
+      "size": 2,
+      "kind": "integer",
+      "is_signed": true
+    },
+    "type_intp": {
+      "kind": "pointer",
+      "size": 4,
+      "element_type": "type_int"
+    },
+    "s_gap": {
+      "name": "gap_rec",
+      "kind": "struct",
+      "size": 12,
+      "fields": [
+        {
+          "type": "type_char",
+          "offset": 0,
+          "name": "tag"
+        },
+        {
+          "type": "type_int",
+          "offset": 8,
+          "name": "value"
+        }
+      ]
+    },
+    "s_packed": {
+      "name": "packed_rec",
+      "kind": "struct",
+      "size": 5,
+      "fields": [
+        {
+          "type": "type_char",
+          "offset": 0,
+          "name": "tag"
+        },
+        {
+          "type": "type_int",
+          "offset": 1,
+          "name": "value"
+        }
+      ]
+    },
+    "s_union": {
+      "name": "view_rec",
+      "kind": "union",
+      "size": 8,
+      "fields": [
+        {
+          "type": "type_int",
+          "offset": 0,
+          "name": "word"
+        },
+        {
+          "type": "type_short",
+          "offset": 0,
+          "name": "half"
+        }
+      ]
+    },
+    "bf_a": {
+      "kind": "bitfield",
+      "size": 1,
+      "bit_offset": 0,
+      "bit_size": 3,
+      "base_type": "type_int"
+    },
+    "bf_b": {
+      "kind": "bitfield",
+      "size": 1,
+      "bit_offset": 5,
+      "bit_size": 2,
+      "base_type": "type_int"
+    },
+    "s_bits": {
+      "name": "bits_rec",
+      "kind": "struct",
+      "size": 8,
+      "fields": [
+        {
+          "type": "bf_a",
+          "offset": 0,
+          "name": "a"
+        },
+        {
+          "type": "bf_b",
+          "offset": 0,
+          "name": "b"
+        },
+        {
+          "type": "type_int",
+          "offset": 4,
+          "name": "value"
+        }
+      ]
+    },
+    "s_tail": {
+      "name": "tail_rec",
+      "kind": "struct",
+      "size": 16,
+      "fields": [
+        {
+          "type": "type_int",
+          "offset": 0,
+          "name": "value"
+        }
+      ]
+    },
+    "s_overlap": {
+      "name": "overlap_rec",
+      "kind": "struct",
+      "size": 8,
+      "fields": [
+        {
+          "type": "type_int",
+          "offset": 0,
+          "name": "word"
+        },
+        {
+          "type": "type_int",
+          "offset": 2,
+          "name": "mid"
+        }
+      ]
+    },
+    "s_outer": {
+      "name": "outer_rec",
+      "kind": "struct",
+      "size": 20,
+      "fields": [
+        {
+          "type": "type_char",
+          "offset": 0,
+          "name": "kind"
+        },
+        {
+          "type": "s_gap",
+          "offset": 4,
+          "name": "inner"
+        },
+        {
+          "type": "type_int",
+          "offset": 16,
+          "name": "last"
+        }
+      ]
+    },
+    "p_gap": {
+      "kind": "pointer",
+      "size": 4,
+      "element_type": "s_gap"
+    },
+    "p_packed": {
+      "kind": "pointer",
+      "size": 4,
+      "element_type": "s_packed"
+    },
+    "p_union": {
+      "kind": "pointer",
+      "size": 4,
+      "element_type": "s_union"
+    },
+    "p_bits": {
+      "kind": "pointer",
+      "size": 4,
+      "element_type": "s_bits"
+    },
+    "p_tail": {
+      "kind": "pointer",
+      "size": 4,
+      "element_type": "s_tail"
+    },
+    "p_overlap": {
+      "kind": "pointer",
+      "size": 4,
+      "element_type": "s_overlap"
+    },
+    "p_outer": {
+      "kind": "pointer",
+      "size": 4,
+      "element_type": "s_outer"
+    }
+  }
+}

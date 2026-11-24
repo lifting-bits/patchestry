@@ -5,9 +5,16 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
+#include <algorithm>
+#include <string>
+#include <vector>
+
+#include <clang/AST/Attr.h>
 #include <clang/AST/Expr.h>
+#include <clang/AST/RecordLayout.h>
 #include <clang/AST/Type.h>
 #include <clang/Basic/SourceLocation.h>
+#include <clang/Basic/TargetInfo.h>
 
 #include <patchestry/AST/TypeBuilder.hpp>
 #include <patchestry/AST/Utils.hpp>
@@ -430,34 +437,215 @@ namespace patchestry::ast {
         clang::ASTContext &ctx, const CompositeType &varnode, clang::Decl *prev_decl,
         const SerializedTypeMap &clang_types
     ) {
-        auto *record_decl = clang::RecordDecl::Create(
-            ctx, clang::TagDecl::TagKind::Struct, ctx.getTranslationUnitDecl(),
-            prev_decl->getBeginLoc(), prev_decl->getLocation(), &ctx.Idents.get(varnode.name),
-            llvm::dyn_cast< clang::RecordDecl >(prev_decl)
-        );
+        if (!completed_definitions.insert(varnode.key).second) {
+            return;
+        }
 
-        record_decl->completeDefinition();
+        const bool is_union = varnode.kind == VarnodeType::VT_UNION;
+        // A record with no recovered members is opaque (libc `FILE`, a type
+        // only used through pointers); its size says nothing about a layout.
+        const bool is_opaque = varnode.GetComponents().empty();
+        const auto kind_name = std::string(is_union ? "union" : "struct");
 
+        // Struct members are laid out in offset order; the serializer already
+        // writes them that way, the sort only guards hand-written input.
         auto components = varnode.GetComponents();
-        for (auto &component : components) {
-            // Resolve the type of the current component.
+        if (!is_union) {
+            std::stable_sort(
+                components.begin(), components.end(),
+                [](const auto &lhs, const auto &rhs) { return lhs.offset < rhs.offset; }
+            );
+        }
+
+        // A member whose type is another recovered record needs that record's
+        // layout, so complete it first.  A record cannot contain itself by
+        // value; `completed_definitions` stops a malformed cycle.
+        for (const auto &component : components) {
             auto iter = clang_types.find(component.type->key);
-            if (iter == clang_types.end()) {
+            if (iter == clang_types.end() || iter->second.isNull()) {
+                continue;
+            }
+            const auto *record_type =
+                ctx.getBaseElementType(iter->second)->getAs< clang::RecordType >();
+            if (record_type == nullptr || lifted_types_ == nullptr) {
+                continue;
+            }
+            auto nested = definition_keys.find(record_type->getDecl());
+            if (nested == definition_keys.end()
+                || completed_definitions.contains(nested->second))
+            {
+                continue;
+            }
+            auto lifted  = lifted_types_->find(nested->second);
+            auto forward = missing_type_definition.find(nested->second);
+            if (lifted != lifted_types_->end() && forward != missing_type_definition.end()) {
+                complete_definition(
+                    ctx, dynamic_cast< CompositeType & >(*lifted->second), forward->second,
+                    clang_types
+                );
+            }
+        }
+
+        // Plan the members before creating declarations: every recovered
+        // component keeps its offset, gaps become explicit padding, and the
+        // record is packed when natural alignment would move a member.
+        struct Member
+        {
+            std::string name;
+            clang::QualType type;
+            const CompositeType::Component *component = nullptr; // null for padding
+        };
+
+        std::vector< Member > members;
+        std::vector< std::string > problems;
+        uint64_t cursor     = 0; // first byte not yet covered by a member
+        uint64_t max_align  = 1;
+        uint64_t union_size = 0;
+        bool needs_packed   = false;
+        bool verifiable     = true;
+        // Members already reported as overlapping; their offset is not
+        // reported a second time.
+        std::vector< const CompositeType::Component * > overlapping;
+
+        auto add_padding = [&](uint64_t offset, uint64_t size) {
+            members.push_back({ "__pad_" + std::to_string(offset),
+                                ctx.getConstantArrayType(
+                                    ctx.UnsignedCharTy, llvm::APInt(kNumBitsUint, size), nullptr,
+                                    clang::ArraySizeModifier::Normal, 0
+                                ),
+                                nullptr });
+        };
+
+        for (const auto &component : components) {
+            auto iter = clang_types.find(component.type->key);
+            if (iter == clang_types.end() || iter->second.isNull()) {
+                // No usable type: the bytes stay in the record as padding (the
+                // next member's gap, or the tail) rather than disappearing.
+                // The layout is kept but the member itself is gone, so it is
+                // still a loss.
                 report_fallback(
                     ctx, varnode.key,
-                    "a record field of unknown type '" + component.type->key
-                        + "' is left out, which moves every later field"
+                    "a record field '" + component.name + "' of unknown type '"
+                        + component.type->key + "' is kept as unnamed padding"
                 );
                 continue;
             }
 
-            auto field_type  = iter->second;
-            auto location    = SourceLocation(ctx.getSourceManager(), component.type->key);
+            auto field_type = iter->second;
+            // A string member's type has no size of its own (it lifts as
+            // `char *`); inside a record it is the `char[N]` the member
+            // occupies.
+            // JSON without member sizes: the string runs to the next member,
+            // or to the end of the record.
+            uint64_t string_size = component.size;
+            if (component.type->kind == VarnodeType::VT_STRING && string_size == 0
+                && !is_union)
+            {
+                uint64_t end = varnode.size;
+                for (const auto &other : components) {
+                    if (other.offset > component.offset) {
+                        end = other.offset;
+                        break;
+                    }
+                }
+                string_size = end > component.offset ? end - component.offset : 0;
+            }
+            if (component.type->kind == VarnodeType::VT_STRING && string_size > 0
+                && !field_type->isIncompleteType()
+                && static_cast< uint64_t >(ctx.getTypeSizeInChars(field_type).getQuantity())
+                    != string_size)
+            {
+                field_type = ctx.getConstantArrayType(
+                    ctx.CharTy, llvm::APInt(kNumBitsUint, string_size), nullptr,
+                    clang::ArraySizeModifier::Normal, 0
+                );
+            }
+            if (field_type->isIncompleteType() || field_type->isFunctionType()) {
+                // Size unknown: keep the member as before, but the layout
+                // cannot be planned or checked past it.
+                members.push_back({ component.name, field_type, &component });
+                verifiable = false;
+                continue;
+            }
+
+            const auto size  = static_cast< uint64_t >(ctx.getTypeSizeInChars(field_type).getQuantity());
+            const auto align = static_cast< uint64_t >(ctx.getTypeAlignInChars(field_type).getQuantity());
+
+            if (is_union) {
+                if (component.offset != 0) {
+                    problems.push_back(
+                        "member '" + component.name + "' has recovered offset "
+                        + std::to_string(component.offset) + " in a union"
+                    );
+                }
+                members.push_back({ component.name, field_type, &component });
+                union_size = std::max(union_size, size);
+                max_align  = std::max(max_align, align);
+                continue;
+            }
+
+            if (component.type->kind == VarnodeType::VT_BITFIELD) {
+                // Bit-fields that share a storage unit have overlapping byte
+                // ranges; Clang places them, the check below verifies where.
+                if (component.offset > cursor) {
+                    add_padding(cursor, component.offset - cursor);
+                }
+                members.push_back({ component.name, field_type, &component });
+                cursor    = std::max< uint64_t >(cursor, component.offset + component.type->size);
+                max_align = std::max(max_align, align);
+                continue;
+            }
+
+            if (component.offset < cursor) {
+                problems.push_back(
+                    "member '" + component.name + "' at recovered offset "
+                    + std::to_string(component.offset) + " overlaps the member before it"
+                );
+                overlapping.push_back(&component);
+            } else if (component.offset > cursor) {
+                add_padding(cursor, component.offset - cursor);
+            }
+            if (component.offset % align != 0) {
+                needs_packed = true;
+            }
+            members.push_back({ component.name, field_type, &component });
+            cursor    = std::max< uint64_t >(cursor, component.offset + size);
+            max_align = std::max(max_align, align);
+        }
+
+        if (verifiable && !is_opaque && varnode.size > 0) {
+            if (is_union) {
+                if (varnode.size > union_size) {
+                    add_padding(0, varnode.size);
+                }
+            } else if (varnode.size > cursor) {
+                add_padding(cursor, varnode.size - cursor);
+            }
+            if (varnode.size % max_align != 0) {
+                needs_packed = true;
+            }
+        }
+
+        auto *record_decl = clang::RecordDecl::Create(
+            ctx, is_union ? clang::TagDecl::TagKind::Union : clang::TagDecl::TagKind::Struct,
+            ctx.getTranslationUnitDecl(), prev_decl->getBeginLoc(), prev_decl->getLocation(),
+            &ctx.Idents.get(varnode.name), llvm::dyn_cast< clang::RecordDecl >(prev_decl)
+        );
+        record_decl->startDefinition();
+
+        std::vector< std::pair< clang::FieldDecl *, const CompositeType::Component * > > fields;
+        for (const auto &member : members) {
+            auto location = SourceLocation(
+                ctx.getSourceManager(),
+                member.component != nullptr ? member.component->type->key : varnode.key
+            );
 
             // For bitfield components, create a ConstantExpr wrapping the bit width.
             clang::Expr *bit_width = nullptr;
-            if (component.type->kind == VarnodeType::VT_BITFIELD) {
-                auto &bf = dynamic_cast< const BitFieldType & >(*component.type);
+            if (member.component != nullptr
+                && member.component->type->kind == VarnodeType::VT_BITFIELD)
+            {
+                auto &bf = dynamic_cast< const BitFieldType & >(*member.component->type);
                 auto *int_lit = clang::IntegerLiteral::Create(
                     ctx, llvm::APInt(TypeBuilder::kNumBitsUint, bf.bit_size),
                     ctx.UnsignedIntTy, location
@@ -470,15 +658,73 @@ namespace patchestry::ast {
             }
 
             auto *field_decl = clang::FieldDecl::Create(
-                ctx, record_decl, location, location, &ctx.Idents.get(component.name),
-                field_type, nullptr, bit_width, false, clang::ICIS_NoInit
+                ctx, record_decl, location, location, &ctx.Idents.get(member.name),
+                member.type, nullptr, bit_width, false, clang::ICIS_NoInit
             );
-
+            field_decl->setAccess(clang::AS_public);
             record_decl->addDecl(field_decl);
+            fields.emplace_back(field_decl, member.component);
         }
+
+        if (needs_packed) {
+            record_decl->addAttr(clang::PackedAttr::Create(ctx));
+        }
+        record_decl->completeDefinition();
 
         record_decl->setDeclContext(ctx.getTranslationUnitDecl());
         ctx.getTranslationUnitDecl()->addDecl(record_decl);
+
+        // Compare what Clang laid out with what was recovered.  An unchanged
+        // callee reads the record at the recovered offsets, so any difference
+        // changes what it sees.
+        if (verifiable && !is_opaque && varnode.size > 0) {
+            const auto &layout      = ctx.getASTRecordLayout(record_decl);
+            const bool little_endian = ctx.getTargetInfo().isLittleEndian();
+            for (const auto &[field, component] : fields) {
+                if (component == nullptr
+                    || std::find(overlapping.begin(), overlapping.end(), component)
+                        != overlapping.end())
+                {
+                    continue;
+                }
+                uint64_t expected = static_cast< uint64_t >(component->offset) * kNumBitsInByte;
+                if (component->type->kind == VarnodeType::VT_BITFIELD) {
+                    // Ghidra's bit offset is the right shift within the
+                    // big-endian view of the member's minimal storage.
+                    const auto &bf = dynamic_cast< const BitFieldType & >(*component->type);
+                    const uint64_t storage_bits =
+                        static_cast< uint64_t >(component->type->size) * kNumBitsInByte;
+                    expected += little_endian
+                        ? bf.bit_offset
+                        : storage_bits - std::min< uint64_t >(
+                              storage_bits, bf.bit_offset + bf.bit_size
+                          );
+                }
+                const uint64_t actual = layout.getFieldOffset(field->getFieldIndex());
+                if (actual != expected) {
+                    problems.push_back(
+                        "member '" + component->name + "' is at bit " + std::to_string(actual)
+                        + " in the lifted record, recovered at bit " + std::to_string(expected)
+                    );
+                }
+            }
+            const auto lifted_size = static_cast< uint64_t >(layout.getSize().getQuantity());
+            if (lifted_size != varnode.size) {
+                problems.push_back(
+                    "lifted size is " + std::to_string(lifted_size) + " bytes, recovered size is "
+                    + std::to_string(varnode.size)
+                );
+            }
+        }
+
+        if (loss_reporter != nullptr) {
+            for (const auto &problem : problems) {
+                loss_reporter->report(
+                    SourceLocation(ctx.getSourceManager(), varnode.key), "record-layout-mismatch",
+                    kind_name + " '" + varnode.name + "': " + problem
+                );
+            }
+        }
     }
 
     /**
@@ -522,6 +768,7 @@ namespace patchestry::ast {
 
         // Track the missing type definition for completing at later stage
         missing_type_definition.emplace(composite_type.key, decl);
+        definition_keys.emplace(decl, composite_type.key);
 
         return ctx.getCanonicalTagType(decl);
     }

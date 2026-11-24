@@ -8,11 +8,14 @@
 #pragma once
 
 #include <memory>
+#include <vector>
 
 #include <clang/AST/ASTContext.h>
 #include <clang/Basic/CodeGenOptions.h>
 #include <clang/Basic/Diagnostic.h>
 #include <clang/Frontend/CompilerInstance.h>
+
+#include <patchestry/AST/Bindings.hpp>
 
 namespace patchestry::ast {
 
@@ -23,6 +26,11 @@ namespace patchestry::ast {
     struct TranslationUnit
     {
         std::unique_ptr< clang::CompilerInstance > ci;
+
+        /// What each global and function in the unit is in the original
+        /// binary.  Filled by a source that knows (the P-Code lifter); empty
+        /// otherwise.
+        std::vector< Binding > bindings;
 
         clang::ASTContext &context() { return ci->getASTContext(); }
 

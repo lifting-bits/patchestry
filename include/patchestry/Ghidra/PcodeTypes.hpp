@@ -201,13 +201,20 @@ namespace patchestry::ghidra {
             std::string name;
             uint32_t offset;
             std::shared_ptr< VarnodeType > type;
+            // Bytes the member occupies in the record.  Differs from the
+            // type's own size for a dynamically sized type (a string); 0 when
+            // the serializer did not record it.
+            uint32_t size = 0;
         };
 
         CompositeType(std::string name, Kind kind, uint32_t size)
             : VarnodeType(name, kind, size) {}
 
-        void AddComponents(std::string &name, const std::shared_ptr< VarnodeType > &type, uint32_t offset) {
-            components.emplace_back(Component(name, offset, type));
+        void AddComponents(
+            std::string &name, const std::shared_ptr< VarnodeType > &type, uint32_t offset,
+            uint32_t size = 0
+        ) {
+            components.emplace_back(Component{ name, offset, type, size });
         }
 
         std::vector< Component > GetComponents(void) const { return components; }

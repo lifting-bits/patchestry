@@ -71,6 +71,14 @@ namespace patchestry::ast {
         std::pair< clang::Stmt *, bool >
         create_callind(clang::ASTContext &ctx, const Function &function, const Operation &op);
 
+        // Report `callind-signature-mismatch` when the argument count, an
+        // argument width or the used result of a CALLIND disagrees with the
+        // function type recovered for its target.
+        void report_callind_signature_mismatch(
+            clang::ASTContext &ctx, const Function &function, const Operation &op,
+            clang::QualType target_type, clang::SourceLocation loc
+        );
+
         std::pair< clang::Stmt *, bool >
         create_callother(clang::ASTContext &ctx, const Function &function, const Operation &op);
 
@@ -200,6 +208,13 @@ namespace patchestry::ast {
         clang::Expr *make_explicit_cast(
             clang::ASTContext &ctx, clang::Expr *expr, clang::QualType to_type,
             clang::SourceLocation loc
+        );
+
+        // The lvalue for a local that is a view into shared storage
+        // (`FunctionBuilder::local_views`): `*(T *)(base + offset)`.  Null
+        // when `key` is an ordinary local.
+        clang::Expr *make_local_view(
+            clang::ASTContext &ctx, const std::string &key, clang::SourceLocation loc
         );
 
         // Public for intrinsic handlers: resolve a serialized type key.

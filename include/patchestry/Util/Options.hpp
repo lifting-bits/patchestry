@@ -33,6 +33,10 @@ namespace patchestry {
         // Fail the lift when a P-Code fact cannot be reproduced faithfully
         // instead of warning about it. Set via --strict.
         bool strict = false;
+
+        // Write the binding manifest (globals and functions with their
+        // original addresses) to this file. Set via --emit-bindings.
+        std::string bindings_file;
     };
 
 } // namespace patchestry

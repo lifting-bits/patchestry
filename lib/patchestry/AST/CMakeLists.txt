@@ -4,6 +4,7 @@
 
 add_library(patchestry_ast STATIC
   ASTConsumer.cpp
+  Bindings.cpp
   PcodeLifter.cpp
   FunctionBuilder.cpp
   IntrinsicHandlers.cpp

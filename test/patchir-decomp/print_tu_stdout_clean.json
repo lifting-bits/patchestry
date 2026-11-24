@@ -9,7 +9,7 @@
 // RUN: %patchir-decomp -input %t.json -print-tu -verbose > %t.verbose.c 2> /dev/null
 // RUN: %file-check -vv -check-prefix=OUT %s --input-file %t.verbose.c
 //
-// ERRS: Diag Warning: {{.*}}lossy lift [op-dropped]
+// ERRS: Diag Warning: {{.*}}lossy lift [
 // OUT-NOT: WARNING
 // OUT-NOT: INFO
 // OUT-NOT: lossy lift
