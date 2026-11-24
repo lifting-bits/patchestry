@@ -2311,32 +2311,27 @@ namespace patchestry::ast {
             // the equivalent for ordinary assignments; return is the one
             // lift path that bypasses it.
             if (ret_expr != nullptr) {
-                const auto &types = type_builder().GetSerializedTypes();
-                auto ret_type_it  = types.find(function.prototype.rttype_key);
-                if (ret_type_it != types.end()
-                    && !ret_type_it->second.isNull()
-                    && !ret_type_it->second->isVoidType()
-                    && !ctx.hasSameUnqualifiedType(
-                        ret_expr->getType(), ret_type_it->second))
+                // The type to match is the one the function is declared
+                // with.  It is not always the prototype's: a name shared by
+                // several records gets one canonical return type
+                // (CanonicalFunctionType), and a value cast to the prototype's
+                // type would then not fit the return slot.
+                clang::QualType ret_type;
+                if (const auto *enclosing =
+                        llvm::dyn_cast_or_null< clang::FunctionDecl >(sema().CurContext))
                 {
-                    auto *cast_expr =
-                        make_cast(ctx, ret_expr, ret_type_it->second, location);
+                    ret_type = enclosing->getReturnType();
+                } else {
+                    const auto &types = type_builder().GetSerializedTypes();
+                    auto ret_type_it  = types.find(function.prototype.rttype_key);
+                    if (ret_type_it != types.end()) { ret_type = ret_type_it->second; }
+                }
+                if (!ret_type.isNull() && !ret_type->isVoidType()
+                    && !ctx.hasSameUnqualifiedType(ret_expr->getType(), ret_type))
+                {
+                    auto *cast_expr = make_cast(ctx, ret_expr, ret_type, location);
                     if (cast_expr != nullptr) {
                         ret_expr = cast_expr;
-                    }
-                }
-
-                // The function may be declared with a wider type than the one
-                // recovered (a `bool` result): widen the value to it.
-                if (ret_type_it != types.end() && !ret_type_it->second.isNull()) {
-                    auto declared =
-                        FunctionBuilder::declared_return_type(ctx, ret_type_it->second);
-                    if (!ctx.hasSameUnqualifiedType(declared, ret_type_it->second)
-                        && !ctx.hasSameUnqualifiedType(ret_expr->getType(), declared))
-                    {
-                        if (auto *widened = make_cast(ctx, ret_expr, declared, location)) {
-                            ret_expr = widened;
-                        }
                     }
                 }
             }
@@ -2353,7 +2348,7 @@ namespace patchestry::ast {
         const auto &types = type_builder().GetSerializedTypes();
         auto type_it      = types.find(function.prototype.rttype_key);
         if (type_it != types.end() && !type_it->second->isVoidType()) {
-            auto ret_type = FunctionBuilder::declared_return_type(ctx, type_it->second);
+            auto ret_type = type_it->second;
             auto *zero    = clang::IntegerLiteral::Create(
                 ctx, llvm::APInt(32, 0), ctx.IntTy, location
             );

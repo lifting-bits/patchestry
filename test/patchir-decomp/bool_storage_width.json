@@ -2,8 +2,8 @@
 // four-byte status word as boolean; lifting it as C `bool` would shrink the
 // object to one byte and normalize values such as 2 to 1.  A boolean whose
 // size differs from the target's `bool` lifts as an unsigned integer of the
-// recovered width; a one-byte boolean still lifts as `bool`, except as a
-// return type, which is declared at register width (bool_return_width.json).
+// recovered width; a one-byte boolean still lifts as `bool`.  On 32-bit ARM
+// its result is widened in the LLVM module only (bool_return_width.json).
 //
 // RUN: bash %strip-json-comments %s > %t.json
 // RUN: %patchir-decomp -input %t.json -emit-cir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
@@ -13,7 +13,7 @@
 // Function order in the printed unit is not stable, so match in any order.
 // C-DAG: unsigned int wide_flag(unsigned int flag) {
 // C-DAG: unsigned int saved;
-// C-DAG: unsigned int narrow_flag(_Bool flag) {
+// C-DAG: _Bool narrow_flag(_Bool flag) {
 //
 // LL-DAG: define dso_local i32 @narrow_flag(i1 zeroext
 // LL-DAG: define dso_local i32 @wide_flag(i32

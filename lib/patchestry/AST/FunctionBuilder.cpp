@@ -345,8 +345,6 @@ namespace patchestry::ast {
             return {};
         }
 
-        rttype = declared_return_type(ctx, rttype);
-
         std::vector< clang::QualType > args_vector;
         for (const auto &param : proto.parameters) {
             auto param_type = type_builder.get().GetSerializedType(param);

@@ -1,0 +1,181 @@
+// A function recovered as returning `bool` whose RETURN operand is the integer
+// 2 returns true.  The printed C must compile to the same value as the emitted
+// LLVM: it keeps the `_Bool` return type, which converts 2 to 1.
+//
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-llvm -print-tu -output %t >> /dev/null 2>&1
+// RUN: %file-check -vv -check-prefix=C %s --input-file %t.c
+// RUN: sed -n '/@returns_two/,/^}/p' %t.ll > %t.fn.ll
+// RUN: %file-check -vv -check-prefix=LL %s --input-file %t.fn.ll
+//
+// C: _Bool returns_two(_Bool flag) {
+// C-NEXT: return 2;
+// LL: define dso_local i32 @returns_two(i1 zeroext %0)
+// LL: store i8 1,
+// LL-NOT: i32 2
+// LL: ret i32
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:v7",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:00010000": {
+      "name": "caller",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": []
+      },
+      "basic_blocks": {
+        "ram:00010000:entry": {
+          "operations": {
+            "ok": {
+              "mnemonic": "DECLARE_LOCAL",
+              "name": "ok",
+              "kind": "local",
+              "type": "t_bool"
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:00010000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "ok",
+            "entry.exit"
+          ]
+        },
+        "ram:00010000:0:basic": {
+          "operations": {
+            "call": {
+              "mnemonic": "CALL",
+              "type": "t_bool",
+              "size": 1,
+              "output": {
+                "kind": "local",
+                "operation": "ok"
+              },
+              "has_return_value": true,
+              "target": {
+                "kind": "function",
+                "function": "ram:00020000",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": []
+            },
+            "wide": {
+              "mnemonic": "INT_ZEXT",
+              "type": "t_int",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t_bool",
+                  "size": 1,
+                  "kind": "local",
+                  "operation": "ok"
+                }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "t_int",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "wide"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "call",
+            "wide",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:00010000:entry"
+    },
+    "ram:00020000": {
+      "name": "callee",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_bool",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": []
+      }
+    },
+    "ram:00030000": {
+      "name": "returns_two",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_bool",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "t_bool"
+        ]
+      },
+      "basic_blocks": {
+        "ram:00030000:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "flag",
+              "type": "t_bool",
+              "kind": "parameter",
+              "index": 0
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:00030000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "entry.exit"
+          ]
+        },
+        "ram:00030000:0:basic": {
+          "operations": {
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "t_int",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 2
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:00030000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "t_int": {
+      "is_signed": true,
+      "name": "int",
+      "size": 4,
+      "kind": "integer"
+    },
+    "t_bool": {
+      "is_signed": false,
+      "name": "bool",
+      "size": 1,
+      "kind": "boolean"
+    }
+  }
+}

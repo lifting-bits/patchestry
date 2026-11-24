@@ -1,37 +1,48 @@
 // RUN: bash %strip-json-comments %s > %t.json
 // RUN: %patchir-decomp -input %t.json -emit-cir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
 // RUN: %file-check -vv -check-prefix=C %s --input-file %t.c
+// RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
 // RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
 // RUN: %patchir-cir2llvm -S %t.cir -o %t.from-cir.ll >> /dev/null 2>&1
 // RUN: %file-check -vv -check-prefix=CIR2LL %s --input-file %t.from-cir.ll
 //
-// A function Ghidra types as returning `bool` returns in a whole register,
-// and the code compiled against it tests the whole register (`cmp r0, #0`).
-// Declared `_Bool`, the call result was an `i1`: the backend masked it
-// (`and r0, r0, #1`) before using it, so a callee that returns 2 read as
-// false.  Ghidra assigns `bool` from how a result is used, so such callees
-// exist.
+// On 32-bit ARM a function Ghidra types as returning `bool` returns in the
+// whole of r0, and the code compiled against it tests the whole register
+// (`cmp r0, #0`).  As an `i1` the call result is read as one bit: the backend
+// masks it (`and r0, r0, #1`) before using it, so a callee that returns 2
+// reads as false.  Ghidra assigns `bool` from how a result is used, so such
+// callees exist.
 //
-// The return type is now declared as an unsigned integer of register width.
-// The caller converts the result to its `_Bool` local with `!= 0` over the
-// whole value, and a definition widens the `_Bool` it returns.
-//
-// A `_Bool` parameter stays `_Bool`.  ClangIR leaves out the `zeroext` Clang
-// gives it on ARM, so it is added to the module, on both paths to LLVM IR.
-//
-// Function order in the printed unit is not stable, so match in any order.
-// C-DAG: unsigned int callee(void);
-// C-DAG: unsigned int is_set(_Bool flag) {
-// C-DAG: return (unsigned int)flag;
+// The C and ClangIR signatures stay `_Bool`: patches are matched against
+// them, and the rule below belongs to one ABI.
+// C-DAG: _Bool callee(void);
+// C-DAG: _Bool is_set(_Bool flag) {
+// C-DAG: return flag;
 // C-DAG: ok = callee();
+// CIR-DAG: @is_set(%arg0: !cir.bool{{.*}}) -> !cir.bool
 //
+// In the LLVM module, on both paths to it, an `i1` result becomes `i32`.  The
+// call compares the whole result with zero and a definition zero-extends the
+// `_Bool` it returns.  A `_Bool` parameter stays `i1` and gets the `zeroext`
+// ClangIR leaves out.
 // LL-DAG: declare i32 @callee()
 // LL-DAG: define dso_local i32 @is_set(i1 zeroext %0)
 // LL-DAG: [[R:%.*]] = call i32 @callee()
 // LL-DAG: icmp ne i32 [[R]], 0
 // LL-NOT: call i1
 //
-// CIR2LL: define dso_local i32 @is_set(i1 zeroext %0)
+// CIR2LL-DAG: define dso_local i32 @is_set(i1 zeroext %0)
+// CIR2LL-DAG: call i32 @callee()
+//
+// Other targets are left alone.  On x86-64 a `_Bool` result occupies al and
+// the rest of rax is unspecified, so a whole-register test would be wrong.
+// RUN: sed -e 's/"architecture": "ARM"/"architecture": "x86"/' -e 's/"ARM:LE:32:v7"/"x86:LE:64:default"/' %t.json > %t.x64.json
+// RUN: %patchir-decomp -input %t.x64.json -emit-llvm -output %t.x64 >> /dev/null 2>&1
+// RUN: %file-check -vv -check-prefix=X64 %s --input-file %t.x64.ll
+// X64-DAG: declare i1 @callee()
+// X64-DAG: call i1 @callee()
+// X64-DAG: define dso_local i1 @is_set(i1 %0)
+// X64-NOT: zeroext
 {
   "architecture": "ARM",
   "id": "ARM:LE:32:v7",

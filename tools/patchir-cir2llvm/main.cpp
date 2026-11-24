@@ -703,7 +703,12 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
 
-    // A _Bool is passed and returned zero-extended; ClangIR does not say so.
+    // On 32-bit ARM a _Bool result is the whole register.
+    if (unsigned widened = patchestry::codegen::widen_bool_results(*llvm_module)) {
+        LOG(INFO) << "Widened " << widened << " _Bool result(s) to the register width\n";
+    }
+
+    // A _Bool is passed zero-extended; ClangIR does not say so.
     if (unsigned added = patchestry::codegen::add_bool_extension_attributes(*llvm_module)) {
         LOG(INFO) << "Added zeroext to " << added << " _Bool argument(s) and result(s)\n";
     }
