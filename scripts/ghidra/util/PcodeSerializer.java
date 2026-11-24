@@ -326,6 +326,10 @@ public class PcodeSerializer {
 		// Maps (HighVariable, size) → shadow DECLARE_LOCAL operation key.
 		private Map<HighVariable, String> varDeclKeyMap;
 		private Map<String, String> varShadowMap;
+		// Shadow declaration key -> key of the declaration it is a view of,
+		// and -> byte offset of the view inside that variable (-1: unknown).
+		private Map<String, String> shadowOriginMap;
+		private Map<String, Long> shadowOffsetMap;
 		private int shadowVarCounter;
 
 		// Replacement operations. Sometimes we have something that we actually
@@ -1347,6 +1351,10 @@ public class PcodeSerializer {
 				writer.beginObject();
 				writer.name("type").value(label(dtc.getDataType()));
 				writer.name("offset").value(dtc.getOffset());
+				// Bytes the member occupies in the record.  For a dynamically
+				// sized type (a string) this is the only place the length is
+				// known; the type itself reports -1.
+				writer.name("size").value(dtc.getLength());
 
 				if (dtc.getFieldName() != null) {
 					writer.name("name").value(dtc.getFieldName());
@@ -1874,7 +1882,7 @@ public class PcodeSerializer {
 					// If this variable has instances with mismatched sizes,
 					// redirect to a shadow declaration matching this use-site's size.
 					if (hasInstanceSizeMismatch(highVariable)) {
-						String shadowKey = getOrCreateShadowVarKey(highVariable, node.getSize());
+						String shadowKey = getOrCreateShadowVarKey(highVariable, node);
 						if (shadowKey != null) {
 							localKey = shadowKey;
 						}
@@ -3675,18 +3683,53 @@ public class PcodeSerializer {
 			return false;
 		}
 
+		// Where the whole variable lives according to its symbol, when that is
+		// a single varnode: the varnode's address, moved by the variable's
+		// offset when the variable is one piece of a larger symbol.  Null when
+		// the symbol does not place all `declSize` bytes in one varnode.
+		private Address symbolStorageBase(HighVariable highVariable, int declSize) {
+			HighSymbol highSymbol = highVariable.getSymbol();
+			VariableStorage storage = highSymbol != null ? highSymbol.getStorage() : null;
+			if (storage == null || storage.getVarnodeCount() != 1) {
+				return null;
+			}
+			Varnode whole = storage.getFirstVarnode();
+			if (whole == null || whole.isUnique() || whole.isConstant()) {
+				return null;
+			}
+			int pieceOffset = highVariable.getOffset();
+			if (pieceOffset < 0) {
+				return whole.getSize() == declSize ? whole.getAddress() : null;
+			}
+			if ((long) pieceOffset + declSize > whole.getSize()) {
+				return null;
+			}
+			try {
+				return whole.getAddress().add(pieceOffset);
+			} catch (AddressOutOfBoundsException e) {
+				return null;
+			}
+		}
+
 		// Get or create a shadow variable declaration for a use-site where the
 		// varnode size differs from the declared variable's size.  Returns the
 		// operation key for the shadow declaration, or the original key if no
 		// split is needed.
-		String getOrCreateShadowVarKey(HighVariable highVariable, int useSize) throws Exception {
+		String getOrCreateShadowVarKey(HighVariable highVariable, Varnode useNode) throws Exception {
 			String origKey = varDeclKeyMap.get(highVariable);
 			if (origKey == null) return null;  // not a tracked local
 
+			int useSize = useNode.getSize();
 			int declSize = highVariable.getSize();
 			if (useSize == declSize) return origKey;  // sizes match, no split
 
-			String shadowKey = origKey + ":shadow:" + Integer.toString(useSize);
+			// Where the use sits inside the variable; -1 when unknown.
+			long useOffset = shadowUseOffset(
+				highVariable.getInstances(), symbolStorageBase(highVariable, declSize),
+				useNode, declSize, language.isBigEndian());
+
+			String shadowKey = origKey + ":shadow:" + Integer.toString(useSize)
+				+ ":" + Long.toString(useOffset);
 			if (varShadowMap.containsKey(shadowKey)) {
 				return varShadowMap.get(shadowKey);
 			}
@@ -3702,6 +3745,8 @@ public class PcodeSerializer {
 
 			String newKey = label(shadowOp);
 			varShadowMap.put(shadowKey, newKey);
+			shadowOriginMap.put(newKey, origKey);
+			shadowOffsetMap.put(newKey, useOffset);
 			return newKey;
 		}
 
@@ -4146,6 +4191,60 @@ public class PcodeSerializer {
 	// `op` is one of CPUI_INT_ADD, INT_MULT, INT_LEFT, INT_ZEXT, INT_SEXT,
 	// INT_AND, COPY, CAST.  `constVal` is the constant operand for binary
 	// ops (0 for unary).
+	// Byte offset, in memory order, of the `useNode` bytes inside a variable
+	// of `declSize` bytes; -1 when it is not known.
+	//
+	// The variable's position comes from a full-size instance in the use's
+	// address space, or from `storageBase` (the symbol's storage) when that is
+	// in the same space.  The synthetic declaration varnode that stands in as
+	// the representative is in the unique space and says nothing about
+	// position, so it is never used.  A use that lies outside every such
+	// position is unknown: guessing would bind it to the wrong bytes.
+	//
+	// Only when nothing places the variable in the use's address space is a
+	// narrower use taken as the least-significant bytes, which is what a
+	// size-mismatched temporary of one variable is in practice.
+	static long shadowUseOffset(
+			Varnode[] instances, Address storageBase, Varnode useNode,
+			int declSize, boolean bigEndian) {
+		int useSize = useNode.getSize();
+		Address useAddress = useNode.getAddress();
+		boolean usePositioned =
+			useAddress != null && !useNode.isUnique() && !useNode.isConstant();
+
+		boolean positioned = false;
+		if (usePositioned) {
+			List<Address> bases = new ArrayList<>();
+			if (instances != null) {
+				for (Varnode instance : instances) {
+					if (instance == null || instance.isUnique() || instance.isConstant()
+							|| instance.getSize() != declSize || instance.getAddress() == null) {
+						continue;
+					}
+					bases.add(instance.getAddress());
+				}
+			}
+			if (storageBase != null) {
+				bases.add(storageBase);
+			}
+			for (Address base : bases) {
+				if (!base.getAddressSpace().equals(useAddress.getAddressSpace())) {
+					continue;
+				}
+				positioned = true;
+				long delta = useAddress.getOffset() - base.getOffset();
+				if (delta >= 0 && delta + useSize <= declSize) {
+					return delta;
+				}
+			}
+		}
+
+		if (!positioned && useSize < declSize) {
+			return bigEndian ? declSize - useSize : 0;
+		}
+		return -1;
+	}
+
 	private static class Transform {
 		final int op;
 		final long constVal;
@@ -4891,6 +4990,36 @@ public class PcodeSerializer {
 			int declSize = pcodeOp.getOutput().getSize();
 			boolean isShadow = (declSize != highVariableOfPcodeOp.getSize());
 
+			// Where the decompiler placed the variable.  The lifter turns
+			// every local into an independent C object; the storage lets it
+			// see when two locals were neighbours or overlapped in the
+			// original frame.  A shadow declaration covers only part of the
+			// symbol's storage, so it gets none.
+			//
+			// A variable that is one piece of a larger symbol (a field of a
+			// stack structure the decompiler tracks on its own) reports a
+			// non-negative offset into that symbol; its storage is that
+			// piece, not the whole symbol.  Only a stack symbol in a single
+			// varnode can be subdivided this way.
+			if (!isShadow && highSymbol != null) {
+				VariableStorage symbolStorage = highSymbol.getStorage();
+				int pieceOffset = highVariableOfPcodeOp.getOffset();
+				if (pieceOffset < 0) {
+					writer.name("storage");
+					serializeStorage(symbolStorage);
+				} else if (symbolStorage != null && symbolStorage.isStackStorage()
+						&& symbolStorage.getVarnodeCount() == 1) {
+					writer.name("storage");
+					writer.beginArray();
+					writer.beginObject();
+					writer.name("kind").value("stack");
+					writer.name("offset").value(symbolStorage.getStackOffset() + pieceOffset);
+					writer.name("size").value(highVariableOfPcodeOp.getSize());
+					writer.endObject();
+					writer.endArray();
+				}
+			}
+
 			if (highSymbol != null && highVariableOfPcodeOp.getOffset() == -1 && highVariableOfPcodeOp.getName().equals("UNNAMED")) {
 				String baseName = resolveVariableName(highSymbol.getName());
 				if (isShadow) {
@@ -4912,6 +5041,22 @@ public class PcodeSerializer {
 					writer.name("type").value(
 						label(widenedTypeFor(highSymbol,
 							highVariableOfPcodeOp.getDataType())));
+				}
+			}
+
+			// A shadow is a differently sized view of another declaration's
+			// storage, not a variable of its own: say which one, where in it,
+			// and how wide the view is.
+			if (isShadow) {
+				String shadowKey = label(pcodeOp);
+				String origin = shadowOriginMap.get(shadowKey);
+				if (origin != null) {
+					writer.name("shadow_of").value(origin);
+					writer.name("shadow_size").value(declSize);
+					Long shadowOffset = shadowOffsetMap.get(shadowKey);
+					if (shadowOffset != null && shadowOffset >= 0) {
+						writer.name("shadow_offset").value(shadowOffset);
+					}
 				}
 			}
 		}
@@ -5604,6 +5749,8 @@ public class PcodeSerializer {
 			unnamedVarCounter = 0;
 			varDeclKeyMap = new HashMap<>();
 			varShadowMap = new HashMap<>();
+			shadowOriginMap = new HashMap<>();
+			shadowOffsetMap = new HashMap<>();
 			shadowVarCounter = 0;
 
 			FunctionPrototype functionPrototype = null;
@@ -5655,6 +5802,19 @@ public class PcodeSerializer {
 
 			writer.name("entry_point")
 				.value(functionToSerialize.getEntryPoint().toString(true));
+
+			// The frame Ghidra recovered for the function, for comparison
+			// with the frame of the recompiled function.  Sizes are bytes.
+			StackFrame stackFrame = functionToSerialize.getStackFrame();
+			if (stackFrame != null) {
+				writer.name("frame").beginObject();
+				writer.name("size").value(stackFrame.getFrameSize());
+				writer.name("local_size").value(stackFrame.getLocalSize());
+				writer.name("parameter_size").value(stackFrame.getParameterSize());
+				writer.name("parameter_offset").value(stackFrame.getParameterOffset());
+				writer.name("grows_negative").value(stackFrame.growsNegative());
+				writer.endObject();
+			}
 			serializeAddressRanges(functionToSerialize);
 
 			// If we have a high P-Code function, then serialize the blocks.
