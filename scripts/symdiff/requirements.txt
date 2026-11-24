@@ -1,0 +1,55 @@
+# The environment patch_symdiff.py was developed and evaluated in
+# (PatchSymDiff_Study.md), frozen.  cozy 1.5.4 pins angr 9.2.130; bitstring 5
+# and pycparser 3 break that angr.
+CppHeaderParser==2.7.4
+GitPython==3.2.1
+Pygments==2.21.0
+ailment==9.2.130
+angr==9.2.130
+archinfo==9.2.130
+bitarray==3.12.3
+bitstring==4.4.0
+cachetools==8.0.0
+capstone==5.0.3
+cart==1.2.3
+cffi==2.1.1
+claripy==9.2.130
+cle==9.2.130
+cozy-re==1.5.4
+future==1.0.0
+gitdb==4.0.12
+itanium-demangler==1.1
+linkify-it-py==2.2.0
+markdown-it-py==4.3.0
+mdit-py-plugins==0.7.0
+mdurl==0.1.2
+mpmath==1.3.0
+mulpyplexer==0.9
+nampa==0.1.1
+networkx==3.3
+numpy==2.4.6
+pefile==2024.8.26
+platformdirs==4.14.5
+ply==3.11
+portion==2.4.2
+protobuf==7.36.2
+psutil==7.2.2
+pycparser==2.23
+pycryptodome==4.5.0
+pydot==4.0.1
+pyelftools==0.33
+pyformlang==1.0.11
+pyparsing==3.3.3
+pyvex==9.2.130
+rich==15.0.0
+# unicorn 2.0.1 imports pkg_resources, which setuptools 81 removed.
+setuptools==80.9.0
+smmap==5.0.3
+sortedcontainers==2.4.0
+sympy==1.14.0
+textual==0.86.1
+tibs==0.5.7
+typing_extensions==4.16.0
+unicorn==2.0.1.post1
+unique_log_filter==0.1.0
+z3-solver==4.13.0.0
