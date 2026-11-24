@@ -1,0 +1,41 @@
+// A patch function brings its dependencies with it: the static helper it
+// calls, the string constants the helper returns, and a file-scope variable.
+// The helper's name sorts after its caller's, the order in which patch code
+// is lowered; it must still arrive as a definition, not as a declaration that
+// nothing resolves.
+//
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-cir -output %t1 >> /dev/null 2>&1
+//
+// RUN: %patchir-transform %t1.cir --spec %S/serial_qemu_switch_patch.yaml -o %t.switch.cir
+// RUN: %file-check -vv -check-prefix=SWITCH-CIR %s --input-file %t.switch.cir
+// RUN: %patchir-cir2llvm -S %t.switch.cir -o %t.switch.ll
+// RUN: %file-check -vv -check-prefix=SWITCH-LL %s --input-file %t.switch.ll
+//
+// SWITCH-CIR: cir.call @patch__replace__switch()
+// SWITCH-CIR: cir.func{{.*}}@switch_arm_name(%{{.*}}) -> !cir.ptr<{{.*}}> {
+// SWITCH-CIR-NOT: cir.func private @switch_arm_name
+//
+// SWITCH-LL-DAG: c"PATCH:switch:zero\00"
+// SWITCH-LL-DAG: c"PATCH:switch:four\00"
+// SWITCH-LL-DAG: c"PATCH:switch:other\00"
+// SWITCH-LL-DAG: define internal ptr @switch_arm_name(i32
+// SWITCH-LL-DAG: call ptr @switch_arm_name(i32
+// SWITCH-LL-NOT: declare ptr @switch_arm_name
+// The strings of patches that were not applied stay out.
+// SWITCH-LL-NOT: PATCH:divide
+//
+// RUN: %patchir-transform %t1.cir --spec %S/serial_qemu_state_patch.yaml -o %t.state.cir
+// RUN: %patchir-cir2llvm -S %t.state.cir -o %t.state.ll
+// RUN: %file-check -vv -check-prefix=STATE-LL %s --input-file %t.state.ll
+//
+// STATE-LL: @patch_call_count = internal global i32 0
+// STATE-LL: define internal void @patch__replace__state()
+//
+// RUN: %patchir-transform %t1.cir --spec %S/serial_qemu_initialized_patch.yaml -o %t.init.cir
+// RUN: %patchir-cir2llvm -S %t.init.cir -o %t.init.ll
+// RUN: %file-check -vv -check-prefix=INIT-LL %s --input-file %t.init.ll
+//
+// INIT-LL: @patch_retry_limit = internal global i32 3
+// INIT-LL: define internal void @patch__replace__initialized()
+{"architecture":"ARM","id":"ARM:LE:32:Cortex","format":"Executable and Linking Format (ELF)","functions":{"ram:00000108":{"name":"qemu_target_replace","is_intrinsic":false,"type":{"return_type":"56e6a64d","is_variadic":false,"is_noreturn":false,"parameter_types":[]},"basic_blocks":{"ram:00000108:0:basic":{"operations":{"ram:0000010a:9:0":{"mnemonic":"CALL","has_return_value":true,"target":{"kind":"function","function":"ram:00000110","is_variadic":false,"is_noreturn":false},"inputs":[]},"ram:0000010e:20:1":{"mnemonic":"RETURN","inputs":[]}},"ordered_operations":["ram:0000010a:9:0","ram:0000010e:20:1"]}},"entry_block":"ram:00000108:0:basic"},"ram:00000110":{"name":"emit_replace_base","is_intrinsic":false,"type":{"return_type":"56e6a64d","is_variadic":false,"is_noreturn":false,"parameter_types":[]}}},"globals":{},"types":{"56e6a64d":{"name":"void","size":0,"kind":"void"}}}

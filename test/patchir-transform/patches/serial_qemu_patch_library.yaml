@@ -42,3 +42,48 @@ patch_definitions:
   category: serial-qemu
   function_name: patch::replace::qemu_target_pointer
   code_file: serial_qemu_patch.c
+- name: serial_qemu_handler_patch
+  description: Replace the body of qemu_target_handler, which is called through qemu_callback
+  category: serial-qemu
+  function_name: patch::replace::qemu_target_handler
+  code_file: serial_qemu_patch.c
+- name: serial_qemu_dispatch_patch
+  description: Emit a line before qemu_target_dispatch, which makes an indirect call
+  category: serial-qemu
+  function_name: patch::before::qemu_target_dispatch
+  code_file: serial_qemu_patch.c
+- name: serial_qemu_switch_patch
+  description: Replace qemu_target_replace with a switch over new string constants
+  category: serial-qemu
+  function_name: patch::replace::switch
+  code_file: serial_qemu_patch.c
+- name: serial_qemu_divide_patch
+  description: Replace qemu_target_replace with a 64-bit division, which needs a compiler runtime helper
+  category: serial-qemu
+  function_name: patch::replace::divide
+  code_file: serial_qemu_patch.c
+- name: serial_qemu_state_patch
+  description: Replace qemu_target_replace with code that keeps a writable variable of its own
+  category: serial-qemu
+  function_name: patch::replace::state
+  code_file: serial_qemu_patch.c
+- name: serial_qemu_initialized_patch
+  description: Replace qemu_target_replace with code that keeps an initialized writable variable of its own
+  category: serial-qemu
+  function_name: patch::replace::initialized
+  code_file: serial_qemu_patch.c
+- name: serial_qemu_length_patch
+  description: Replacement body for qemu_target_length that rejects a length over 16 by early return
+  category: serial-qemu
+  function_name: patch::definition::qemu_target_length
+  code_file: serial_qemu_patch.c
+- name: serial_qemu_forward_patch
+  description: Guarded forward_second call that is skipped for a value over 32
+  category: serial-qemu
+  function_name: patch::replace::forward_second
+  code_file: serial_qemu_patch.c
+- name: serial_qemu_send_patch
+  description: Entry check for qemu_target_send that calls the reject handler
+  category: serial-qemu
+  function_name: patch::entry::qemu_target_send
+  code_file: serial_qemu_patch.c

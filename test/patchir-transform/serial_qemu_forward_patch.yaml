@@ -1,0 +1,29 @@
+apiVersion: patchestry.io/v1
+metadata:
+  name: serial-qemu-forward-patch
+  description: Guard the forward_second call in qemu_target_forward, skipping it for a value over 32
+  version: 1.0.0
+  author: Patchestry
+  created: '2026-11-16'
+  kind: PatchSpec
+target:
+  binary: serial.elf
+  arch: ARM:LE:32
+libraries:
+- patches/serial_qemu_patch_library.yaml
+patches:
+- name: serial_qemu_forward_patch
+  id: QEMU-SERIAL-FORWARD-001
+  description: Reject a value over the limit by not making the call
+  match:
+    name: forward_second
+    kind: function
+    context:
+    - qemu_target_forward
+  action:
+    mode: replace
+    patch: serial_qemu_forward_patch
+    arguments:
+    - name: value
+      source: operand
+      index: 0

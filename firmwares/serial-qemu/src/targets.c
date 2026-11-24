@@ -76,3 +76,82 @@ static void emit_pointer_base(void) {
 void qemu_target_pointer(void) {
     emit_pointer_base();
 }
+
+static void emit_handler_base(void) {
+    uart_write_line("BASE:handler");
+}
+
+/* Called only through qemu_callback. */
+void qemu_target_handler(void) {
+    emit_handler_base();
+}
+
+/* A one-slot callback table. volatile keeps the load and the indirect call
+   in qemu_target_dispatch at every optimization level. */
+void (*const volatile qemu_callback)(void) = qemu_target_handler;
+
+static void emit_dispatch_base(void) {
+    uart_write_line("BASE:dispatch");
+}
+
+/* Makes an indirect call: the lifted body has to read the slot and call
+   through it after reinsertion. */
+void qemu_target_dispatch(void) {
+    emit_dispatch_base();
+    qemu_callback();
+}
+
+/* Validation corpus.  The targets below have behaviour that crosses the
+   function boundary: arguments, a return value, a write to a global, calls
+   with computed arguments, writes to a device register and an interrupt
+   disable and enable pair. */
+
+volatile unsigned qemu_length_last;
+
+/* Returns a value, reads through a pointer, writes one global. */
+unsigned qemu_target_length(const unsigned char *buf, unsigned len) {
+    qemu_length_last = len;
+    return buf[0] + len;
+}
+
+void forward_first(unsigned value) {
+    (void) value;
+    uart_write_line("FWD:first");
+}
+
+void forward_second(unsigned value) {
+    uart_write_line(value <= 32 ? "FWD:second:small" : "FWD:second:large");
+}
+
+/* Calls two functions with arguments computed from its own. */
+void qemu_target_forward(unsigned value) {
+    forward_first(value + 1);
+    forward_second(value * 2);
+}
+
+void qemu_irq_disable(void) {
+    __asm__ volatile("cpsid i");
+}
+
+void qemu_irq_enable(void) {
+    __asm__ volatile("cpsie i");
+}
+
+#define UART0_DATA (*(volatile unsigned *) 0x4000C000u)
+
+/* Two writes to the UART data register, in this order, with interrupts off. */
+void qemu_target_send(unsigned byte) {
+    qemu_irq_disable();
+    UART0_DATA = byte;
+    UART0_DATA = '\n';
+    qemu_irq_enable();
+}
+
+/* Where a patch sends an input it rejects.  Does not return.  Nothing in the
+   firmware calls it, so it has to be kept through section garbage collection. */
+__attribute__((used, retain))
+void qemu_reject(void) {
+    uart_write_line("REJECT");
+    for (;;) {
+    }
+}
