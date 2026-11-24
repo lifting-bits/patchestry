@@ -1,0 +1,20 @@
+apiVersion: patchestry.io/v1
+metadata:
+  name: replace-definition-apply
+  description: Apply a replace_definition to a lifted function
+  kind: PatchSpec
+target:
+  binary: x.bin
+  arch: ARM:LE:32
+libraries:
+- patches/replace_definition_apply_patch.yaml
+patches:
+- name: replace_is_set
+  id: REPLACE-DEF-APPLY-001
+  description: Swap is_set's body wholesale
+  match:
+    name: is_set
+    kind: function
+  action:
+    mode: replace_definition
+    patch: is_set_replace_patch

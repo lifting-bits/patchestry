@@ -1,0 +1,14 @@
+apiVersion: patchestry.io/v1
+metadata:
+  name: replace_definition_apply_patch
+  description: Replacement body for is_set
+  version: 1.0.0
+  author: Security Team
+  created: '2026-11-23'
+  kind: PatchLibrary
+patch_definitions:
+- name: is_set_replace_patch
+  description: Replacement body for is_set
+  category: test
+  function_name: patch::replace::is_set
+  code_file: patches/replace_definition_apply_patch.c

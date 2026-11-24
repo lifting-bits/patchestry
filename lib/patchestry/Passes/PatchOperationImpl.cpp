@@ -541,6 +541,15 @@ namespace patchestry {
 
             // cloneInto creates fresh block args; the signature gate above
             // guarantees their types match the target's declared parameters.
+            //
+            // Emptying the body in two steps.  An earlier action may have
+            // queued a patch call in this body for inlining; the pointer
+            // would dangle, so those entries go first.  Then every operand
+            // use inside the region is dropped: clearing the blocks destroys
+            // operations front to back, and an operation that still has
+            // users further down (an alloca, nearly always) is a fatal error.
+            target.getBody().walk([&](mlir::Operation *op) { pass.inline_worklists.erase(op); });
+            target.getBody().dropAllReferences();
             target.getBody().getBlocks().clear();
             mlir::IRMapping mapper;
             patch_func.getBody().cloneInto(&target.getBody(), mapper);
