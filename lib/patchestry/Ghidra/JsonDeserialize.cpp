@@ -84,6 +84,7 @@ namespace patchestry::ghidra {
         program.arch   = get_string_if_valid(root, "architecture");
         program.lang   = get_string_if_valid(root, "id");
         program.format = get_string_if_valid(root, "format");
+        program.compiler_spec = get_string_if_valid(root, "compiler_spec");
 
         if (!program.arch.has_value()) {
             LOG(ERROR) << "Required field 'architecture' is absent from JSON\n";
@@ -1126,6 +1127,35 @@ namespace patchestry::ghidra {
                 if (parameter_key && !parameter_key->empty()) {
                     proto.parameters.push_back(parameter_key->str());
                 }
+            }
+        }
+
+        auto parse_storage = [](const llvm::json::Array &pieces) {
+            Storage storage;
+            for (const auto &piece : pieces) {
+                const auto *piece_obj = piece.getAsObject();
+                if (piece_obj == nullptr) {
+                    continue;
+                }
+                StoragePiece entry;
+                entry.kind          = piece_obj->getString("kind").value_or("other").str();
+                entry.register_name = piece_obj->getString("register").value_or("").str();
+                entry.offset        = piece_obj->getInteger("offset").value_or(0);
+                entry.size =
+                    static_cast< uint32_t >(piece_obj->getInteger("size").value_or(0));
+                storage.push_back(std::move(entry));
+            }
+            return storage;
+        };
+
+        if (const auto *return_storage = proto_obj.getArray("return_storage")) {
+            proto.return_storage = parse_storage(*return_storage);
+        }
+
+        if (const auto *parameter_storage = proto_obj.getArray("parameter_storage")) {
+            for (const auto &entry : *parameter_storage) {
+                const auto *pieces = entry.getAsArray();
+                proto.parameter_storage.push_back(pieces ? parse_storage(*pieces) : Storage{});
             }
         }
 

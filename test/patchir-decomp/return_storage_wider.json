@@ -1,0 +1,193 @@
+// The serializer records where the decompiler placed each return value
+// (`return_storage`) and parameter (`parameter_storage`).  When the return
+// storage holds more bytes than the declared return type, the lifted function
+// cannot return the upper part: a 64-bit value in r0:r1 declared as a 32-bit
+// int loses r1.  That is reported as a warning, and as an error under -strict.
+// Storage that fits, void storage, and a prototype with no storage recorded
+// (JSON from an older serializer) are not reported.
+//
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-cir -print-tu -output %t > %t.log 2>&1
+// RUN: %file-check -vv -check-prefix=WARN %s --input-file %t.log
+// RUN: test -e %t.cir
+// RUN: not %patchir-decomp -input %t.json -emit-cir -strict -output %t.strict > %t.strict.log 2>&1
+// RUN: %file-check -vv -check-prefix=ERR %s --input-file %t.strict.log
+// RUN: test ! -e %t.strict.cir
+//
+// WARN: Diag Warning: {{.*}}lossy lift [return-narrowed]: function 'ret_pair_as_int' returns 8 bytes in r1, r0 but its declared return type 'unsigned int' holds 4 bytes
+// WARN-NOT: Diag Error
+// WARN-NOT: function 'ret_pair_as_u64'
+// WARN-NOT: function 'ret_single'
+// WARN-NOT: function 'ret_void'
+// WARN-NOT: function 'ret_no_storage'
+//
+// ERR: Diag Error: {{.*}}lossy lift [return-narrowed]: function 'ret_pair_as_int' returns 8 bytes in r1, r0
+// ERR: Skipping code generation due to prior diagnostics errors
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "compiler_spec": "default",
+  "functions": {
+    "EXTERNAL:00000001": {
+      "name": "ret_pair_as_int",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": [
+          "type_int"
+        ],
+        "return_storage": [
+          {
+            "kind": "register",
+            "register": "r1",
+            "offset": 36,
+            "size": 4
+          },
+          {
+            "kind": "register",
+            "register": "r0",
+            "offset": 32,
+            "size": 4
+          }
+        ],
+        "parameter_storage": [
+          [
+            {
+              "kind": "register",
+              "register": "r0",
+              "offset": 32,
+              "size": 4
+            }
+          ]
+        ]
+      }
+    },
+    "EXTERNAL:00000002": {
+      "name": "ret_pair_as_u64",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_u64",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": [
+          "type_int"
+        ],
+        "return_storage": [
+          {
+            "kind": "register",
+            "register": "r1",
+            "offset": 36,
+            "size": 4
+          },
+          {
+            "kind": "register",
+            "register": "r0",
+            "offset": 32,
+            "size": 4
+          }
+        ],
+        "parameter_storage": [
+          [
+            {
+              "kind": "register",
+              "register": "r0",
+              "offset": 32,
+              "size": 4
+            }
+          ]
+        ]
+      }
+    },
+    "EXTERNAL:00000003": {
+      "name": "ret_single",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": [
+          "type_int"
+        ],
+        "return_storage": [
+          {
+            "kind": "register",
+            "register": "r0",
+            "offset": 32,
+            "size": 4
+          }
+        ],
+        "parameter_storage": [
+          [
+            {
+              "kind": "register",
+              "register": "r0",
+              "offset": 32,
+              "size": 4
+            }
+          ]
+        ]
+      }
+    },
+    "EXTERNAL:00000004": {
+      "name": "ret_void",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": [
+          "type_int"
+        ],
+        "return_storage": [],
+        "parameter_storage": [
+          [
+            {
+              "kind": "register",
+              "register": "r0",
+              "offset": 32,
+              "size": 4
+            }
+          ]
+        ]
+      }
+    },
+    "EXTERNAL:00000005": {
+      "name": "ret_no_storage",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": [
+          "type_int"
+        ]
+      }
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": {
+      "name": "unsigned int",
+      "size": 4,
+      "kind": "integer"
+    },
+    "type_u64": {
+      "name": "unsigned long long",
+      "size": 8,
+      "kind": "integer"
+    },
+    "type_void": {
+      "name": "void",
+      "size": 0,
+      "kind": "void"
+    }
+  }
+}

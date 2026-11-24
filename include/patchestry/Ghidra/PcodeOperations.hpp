@@ -231,6 +231,21 @@ namespace patchestry::ghidra {
         bool is_entry_block;
     };
 
+    // One varnode of a value's storage: a register, a stack slot, or another
+    // location Ghidra assigned.  `offset` is the register-space or memory
+    // offset, or the signed entry-SP-relative offset for a stack slot.
+    struct StoragePiece
+    {
+        std::string kind; // register, stack, memory, unique, constant, other
+        std::string register_name;
+        int64_t offset = 0;
+        uint32_t size  = 0;
+    };
+
+    // The pieces that together hold one value, in the order Ghidra's
+    // `VariableStorage.getVarnodes()` lists them.
+    using Storage = std::vector< StoragePiece >;
+
     struct FunctionPrototype
     {
         std::vector< std::string > parameters;
@@ -238,6 +253,12 @@ namespace patchestry::ghidra {
         std::string calling_convention;
         bool is_variadic;
         bool is_noreturn;
+
+        // Absent when the JSON predates storage serialization or the
+        // prototype came from a signature without decompiler storage.
+        std::optional< Storage > return_storage;
+        // Parallel to the JSON `parameter_types` array; empty when absent.
+        std::vector< Storage > parameter_storage;
     };
 
     // One contiguous range of a function's body.
@@ -295,6 +316,8 @@ namespace patchestry::ghidra {
         std::optional< std::string > arch;
         std::optional< std::string > lang;
         std::optional< std::string > format;
+        // Ghidra compiler spec id (e.g. "default", "windows", "gcc").
+        std::optional< std::string > compiler_spec;
         std::unordered_map< std::string, Function > serialized_functions;
         std::unordered_map< std::string, std::shared_ptr< VarnodeType > > serialized_types;
         std::unordered_map< std::string, Variable > serialized_globals;

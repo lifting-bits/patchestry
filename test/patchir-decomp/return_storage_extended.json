@@ -1,0 +1,113 @@
+// A return value held in one register larger than its type is ABI extension,
+// not data loss.  On 32-bit x86 Ghidra's compiler spec returns float and
+// double in the 10-byte x87 register ST0 (`extension="float"`), so the return
+// storage is 10 bytes for a 4-byte or 8-byte type.  Neither is reported.  A
+// value split across two registers that together exceed the declared type
+// (EDX:EAX declared as a 32-bit int) still is.
+//
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-cir -output %t > %t.log 2>&1
+// RUN: %file-check -vv -check-prefix=WARN %s --input-file %t.log
+// RUN: test -e %t.cir
+// RUN: not %patchir-decomp -input %t.json -emit-cir -strict -output %t.strict > %t.strict.log 2>&1
+// RUN: %file-check -vv -check-prefix=ERR %s --input-file %t.strict.log
+//
+// WARN: Diag Warning: {{.*}}lossy lift [return-narrowed]: function 'ret_pair_as_int' returns 8 bytes in EDX, EAX but its declared return type 'unsigned int' holds 4 bytes
+// WARN-NOT: function 'ret_float'
+// WARN-NOT: function 'ret_double'
+//
+// ERR: Diag Error: {{.*}}lossy lift [return-narrowed]: function 'ret_pair_as_int'
+// ERR-NOT: function 'ret_float'
+// ERR-NOT: function 'ret_double'
+{
+  "architecture": "x86",
+  "id": "x86:LE:32:default",
+  "format": "Executable and Linking Format (ELF)",
+  "compiler_spec": "gcc",
+  "functions": {
+    "EXTERNAL:00000001": {
+      "name": "ret_float",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_float",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__cdecl",
+        "parameter_types": [],
+        "return_storage": [
+          {
+            "kind": "register",
+            "register": "ST0",
+            "offset": 4352,
+            "size": 10
+          }
+        ],
+        "parameter_storage": []
+      }
+    },
+    "EXTERNAL:00000002": {
+      "name": "ret_double",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_double",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__cdecl",
+        "parameter_types": [],
+        "return_storage": [
+          {
+            "kind": "register",
+            "register": "ST0",
+            "offset": 4352,
+            "size": 10
+          }
+        ],
+        "parameter_storage": []
+      }
+    },
+    "EXTERNAL:00000003": {
+      "name": "ret_pair_as_int",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__cdecl",
+        "parameter_types": [],
+        "return_storage": [
+          {
+            "kind": "register",
+            "register": "EDX",
+            "offset": 8,
+            "size": 4
+          },
+          {
+            "kind": "register",
+            "register": "EAX",
+            "offset": 0,
+            "size": 4
+          }
+        ],
+        "parameter_storage": []
+      }
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_float": {
+      "name": "float",
+      "size": 4,
+      "kind": "float"
+    },
+    "type_double": {
+      "name": "double",
+      "size": 8,
+      "kind": "float"
+    },
+    "type_int": {
+      "name": "unsigned int",
+      "size": 4,
+      "kind": "integer"
+    }
+  }
+}
