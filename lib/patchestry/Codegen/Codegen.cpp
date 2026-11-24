@@ -43,6 +43,7 @@
 
 #include <patchestry/Codegen/AbiAttributes.hpp>
 #include <patchestry/Codegen/Codegen.hpp>
+#include <patchestry/Codegen/TargetIntrinsics.hpp>
 #include <patchestry/Codegen/PassManager.hpp>
 #include <patchestry/Codegen/Serializer.hpp>
 #include <patchestry/Util/Log.hpp>
@@ -84,7 +85,11 @@ namespace patchestry::codegen {
             cirdriver->HandleTopLevelDecl(clang::DeclGroupRef(decl));
         }
 
-        cirdriver->emitDeferredDecls();
+        // Definitions that are not externally visible (a `static` helper or
+        // variable in patch code) are deferred until something uses them, and
+        // CIRGen only emits that queue when the translation unit ends.
+        // Without this the module kept bare declarations of them.
+        cirdriver->HandleTranslationUnit(ctx);
 
         reconcile_variadic_decls(cirdriver->getModule());
 
@@ -175,6 +180,9 @@ namespace patchestry::codegen {
                 LOG(ERROR) << "Failed to translate LLVM dialect to LLVM IR\n";
                 return false;
             }
+            // __arm_mrc and its kind are calls to names nothing defines
+            // until they are the instructions they stand for.
+            (void) lower_arm_coprocessor_calls(*llvm_mod);
             // 32-bit ARM: a _Bool result is the whole register, and ClangIR
             // drops the `zeroext` of a _Bool argument.
             unsigned rewritten  = widen_bool_results(*llvm_mod);
