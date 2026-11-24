@@ -1,0 +1,242 @@
+// An operand the JSON parser cannot read keeps its slot as an unknown
+// placeholder.  Not every operation builds every operand, so the placeholder
+// is refused before the operation is built:
+//
+//   return_unknown           RETURN of an unknown operand: was a bare `return;`
+//                            that left the return slot uninitialized
+//   subpiece_unknown_offset  SUBPIECE with an unknown offset: was lifted with
+//                            offset 0
+//   subpiece_known_offset    the same with a readable offset: not reported
+//
+// Each is reported, a warning by default and an error under -strict.  The
+// RETURN that consumes the dropped SUBPIECE fails with it.
+//
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-cir -output %t > %t.log 2>&1
+// RUN: %file-check -vv -check-prefix=WARN %s --input-file %t.log
+// RUN: test -e %t.cir
+// RUN: not %patchir-decomp -input %t.json -emit-cir -strict -output %t.strict > %t.strict.log 2>&1
+// RUN: %file-check -vv -check-prefix=ERR %s --input-file %t.strict.log
+// RUN: test ! -e %t.strict.cir
+//
+// WARN-DAG: Diag Warning: {{.*}}lossy lift [op-dropped]: RETURN operation 'ret' in function 'return_unknown' produced no statement
+// WARN-DAG: Diag Warning: {{.*}}lossy lift [op-dropped]: SUBPIECE operation 'sub' in function 'subpiece_unknown_offset' produced no statement
+// WARN-NOT: in function 'subpiece_known_offset'
+// WARN-NOT: Diag Error
+//
+// ERR-DAG: Diag Error: {{.*}}lossy lift [op-dropped]: RETURN operation 'ret' in function 'return_unknown'
+// ERR-DAG: Diag Error: {{.*}}lossy lift [op-dropped]: SUBPIECE operation 'sub' in function 'subpiece_unknown_offset'
+// ERR-NOT: in function 'subpiece_known_offset'
+// ERR: Skipping code generation due to prior diagnostics errors
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:v7",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:00010000": {
+      "name": "return_unknown",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "t_int"
+        ]
+      },
+      "basic_blocks": {
+        "return_unknown:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "x",
+              "type": "t_int",
+              "kind": "parameter",
+              "index": 0
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "return_unknown:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "entry.exit"
+          ]
+        },
+        "return_unknown:0:basic": {
+          "operations": {
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "kind": "unknown"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "return_unknown:entry"
+    },
+    "ram:00020000": {
+      "name": "subpiece_unknown_offset",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_char",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "t_int"
+        ]
+      },
+      "basic_blocks": {
+        "subpiece_unknown_offset:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "x",
+              "type": "t_int",
+              "kind": "parameter",
+              "index": 0
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "subpiece_unknown_offset:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "entry.exit"
+          ]
+        },
+        "subpiece_unknown_offset:0:basic": {
+          "operations": {
+            "sub": {
+              "mnemonic": "SUBPIECE",
+              "type": "t_char",
+              "size": 1,
+              "inputs": [
+                {
+                  "type": "t_int",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "p0"
+                },
+                {
+                  "kind": "unknown"
+                }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "t_char",
+                  "size": 1,
+                  "kind": "temporary",
+                  "operation": "sub"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "sub",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "subpiece_unknown_offset:entry"
+    },
+    "ram:00030000": {
+      "name": "subpiece_known_offset",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_char",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "t_int"
+        ]
+      },
+      "basic_blocks": {
+        "subpiece_known_offset:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "x",
+              "type": "t_int",
+              "kind": "parameter",
+              "index": 0
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "subpiece_known_offset:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "entry.exit"
+          ]
+        },
+        "subpiece_known_offset:0:basic": {
+          "operations": {
+            "sub": {
+              "mnemonic": "SUBPIECE",
+              "type": "t_char",
+              "size": 1,
+              "inputs": [
+                {
+                  "type": "t_int",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "p0"
+                },
+                {
+                  "type": "t_int",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 1
+                }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "t_char",
+                  "size": 1,
+                  "kind": "temporary",
+                  "operation": "sub"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "sub",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "subpiece_known_offset:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "t_int": {
+      "is_signed": false,
+      "name": "unsigned int",
+      "size": 4,
+      "kind": "integer"
+    },
+    "t_char": {
+      "is_signed": false,
+      "name": "unsigned char",
+      "size": 1,
+      "kind": "integer"
+    }
+  }
+}

@@ -730,6 +730,22 @@ namespace patchestry::ast {
             return {};
         }
 
+        // The deserializer keeps the slot of a varnode it could not read as
+        // a VARNODE_UNKNOWN placeholder.  Not every builder builds every
+        // operand (SUBPIECE reads its offset as a number, RETURN accepts an
+        // operand it cannot resolve), so refuse here, once, instead of
+        // relying on each builder to trip over the placeholder.  The caller
+        // reports the failed build.
+        auto is_unknown = [](const Varnode &varnode) {
+            return varnode.kind == Varnode::VARNODE_UNKNOWN;
+        };
+        if ((op.output && is_unknown(*op.output)) || std::ranges::any_of(op.inputs, is_unknown))
+        {
+            LOG(ERROR) << "Operation has an operand the deserializer could not read. "
+                       << "operation key ( " << op.key << " )\n";
+            return {};
+        }
+
         switch (op.mnemonic) {
             case Mnemonic::OP_COPY:
                 return op_builder->create_copy(ctx, function, op);
