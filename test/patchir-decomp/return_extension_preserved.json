@@ -1,0 +1,386 @@
+// A `char` or `bool` result travels in a whole register, so Ghidra returns it
+// as an extension of the narrow value through a register-sized varnode.
+// Narrowing that back to the declared return type gives the same value, so it
+// is not a narrowed return.
+//
+//   zext_byte, sext_byte   a byte extended to 4 bytes, returned as a byte
+//   zext_bool              a bool extended to 4 bytes, returned as a bool
+//
+// The extension only helps when the value it extends fits the return type:
+//
+//   zext_short_as_byte     a 16-bit value returned as a byte loses its high half
+//   zext_byte_as_bool      a byte may be 2, which a bool return turns into 1
+//
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-cir -output %t > %t.log 2>&1
+// RUN: %file-check -vv -check-prefix=WARN %s --input-file %t.log
+// RUN: grep -c "return-narrowed" %t.log | %file-check -check-prefix=COUNT %s
+//
+// WARN-DAG: lossy lift [return-narrowed]: 32-bit returned value truncated to the declared 8-bit return type 'unsigned char' in function 'zext_short_as_byte'
+// WARN-DAG: lossy lift [return-narrowed]: 32-bit returned value reduced to a truth value by the declared return type '_Bool' in function 'zext_byte_as_bool'
+// The other three functions are not reported.
+// COUNT: 2
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:v7",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:00010000": {
+      "name": "zext_byte",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_char",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "t_char"
+        ]
+      },
+      "basic_blocks": {
+        "ram:00010000:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "x",
+              "type": "t_char",
+              "kind": "parameter",
+              "index": 0
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:00010000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "entry.exit"
+          ]
+        },
+        "ram:00010000:0:basic": {
+          "operations": {
+            "z": {
+              "mnemonic": "INT_ZEXT",
+              "type": "t_int",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t_char",
+                  "size": 1,
+                  "kind": "parameter",
+                  "operation": "p0"
+                }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "t_int",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "z"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "z",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:00010000:entry"
+    },
+    "ram:00020000": {
+      "name": "sext_byte",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_char",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "t_char"
+        ]
+      },
+      "basic_blocks": {
+        "ram:00020000:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "x",
+              "type": "t_char",
+              "kind": "parameter",
+              "index": 0
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:00020000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "entry.exit"
+          ]
+        },
+        "ram:00020000:0:basic": {
+          "operations": {
+            "z": {
+              "mnemonic": "INT_SEXT",
+              "type": "t_int",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t_char",
+                  "size": 1,
+                  "kind": "parameter",
+                  "operation": "p0"
+                }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "t_int",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "z"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "z",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:00020000:entry"
+    },
+    "ram:00030000": {
+      "name": "zext_bool",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_bool",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "t_bool"
+        ]
+      },
+      "basic_blocks": {
+        "ram:00030000:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "x",
+              "type": "t_bool",
+              "kind": "parameter",
+              "index": 0
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:00030000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "entry.exit"
+          ]
+        },
+        "ram:00030000:0:basic": {
+          "operations": {
+            "z": {
+              "mnemonic": "INT_ZEXT",
+              "type": "t_int",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t_bool",
+                  "size": 1,
+                  "kind": "parameter",
+                  "operation": "p0"
+                }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "t_int",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "z"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "z",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:00030000:entry"
+    },
+    "ram:00040000": {
+      "name": "zext_short_as_byte",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_char",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "t_short"
+        ]
+      },
+      "basic_blocks": {
+        "ram:00040000:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "x",
+              "type": "t_short",
+              "kind": "parameter",
+              "index": 0
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:00040000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "entry.exit"
+          ]
+        },
+        "ram:00040000:0:basic": {
+          "operations": {
+            "z": {
+              "mnemonic": "INT_ZEXT",
+              "type": "t_int",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t_short",
+                  "size": 2,
+                  "kind": "parameter",
+                  "operation": "p0"
+                }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "t_int",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "z"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "z",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:00040000:entry"
+    },
+    "ram:00050000": {
+      "name": "zext_byte_as_bool",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_bool",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "t_char"
+        ]
+      },
+      "basic_blocks": {
+        "ram:00050000:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "x",
+              "type": "t_char",
+              "kind": "parameter",
+              "index": 0
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:00050000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "entry.exit"
+          ]
+        },
+        "ram:00050000:0:basic": {
+          "operations": {
+            "z": {
+              "mnemonic": "INT_ZEXT",
+              "type": "t_int",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t_char",
+                  "size": 1,
+                  "kind": "parameter",
+                  "operation": "p0"
+                }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "t_int",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "z"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "z",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:00050000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "t_int": {
+      "is_signed": true,
+      "name": "int",
+      "size": 4,
+      "kind": "integer"
+    },
+    "t_bool": {
+      "is_signed": false,
+      "name": "bool",
+      "size": 1,
+      "kind": "boolean"
+    },
+    "t_char": {
+      "is_signed": false,
+      "name": "unsigned char",
+      "size": 1,
+      "kind": "integer"
+    },
+    "t_short": {
+      "is_signed": false,
+      "name": "unsigned short",
+      "size": 2,
+      "kind": "integer"
+    }
+  }
+}

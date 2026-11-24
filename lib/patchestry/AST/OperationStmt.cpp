@@ -2301,12 +2301,25 @@ namespace patchestry::ast {
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
         auto location = SourceLocation(ctx.getSourceManager(), op.key);
+        auto report_lossy = [&](llvm::StringRef category, const std::string &message) {
+            function_builder().loss_reporter.get().report(
+                location, category,
+                message + " in function '" + function.name + "'. key: " + op.key
+            );
+        };
+
         if (!op.inputs.empty()) {
             // For multi-input RETURN, input[0] is the address-space constant; use input[1].
             // For single-input RETURN, use input[0] directly.
             size_t idx     = op.inputs.size() > 1 ? 1 : 0;
             auto *ret_stmt = create_varnode(ctx, function, op.inputs[idx]);
             auto *ret_expr = llvm::dyn_cast_or_null< clang::Expr >(ret_stmt);
+            if (ret_expr == nullptr) {
+                report_lossy(
+                    "return-synthesized",
+                    "returned value could not be built; a bare return is emitted"
+                );
+            }
 
             // Match the return expression's type to the function's declared
             // return type. Ghidra high-pcode operators like INT_EQUAL emit a
@@ -2334,12 +2347,176 @@ namespace patchestry::ast {
                     auto ret_type_it  = types.find(function.prototype.rttype_key);
                     if (ret_type_it != types.end()) { ret_type = ret_type_it->second; }
                 }
-                if (!ret_type.isNull() && !ret_type->isVoidType()
-                    && !ctx.hasSameUnqualifiedType(ret_expr->getType(), ret_type))
-                {
-                    auto *cast_expr = make_cast(ctx, ret_expr, ret_type, location);
-                    if (cast_expr != nullptr) {
-                        ret_expr = cast_expr;
+                if (!ret_type.isNull() && !ret_type->isVoidType()) {
+                    // A returned value wider than the declared return type is
+                    // truncated, by the cast below or, when the varnode's
+                    // serialized type is already the narrow one, while the
+                    // expression was built.  So this runs whether or not a
+                    // cast is needed.  That is how a value Ghidra
+                    // recovered across two registers (r0:r1) loses its high
+                    // half when the prototype only names the low register.
+                    //
+                    // The width that matters is the P-Code varnode's, not the
+                    // Clang expression's: C makes `a == b` an int and promotes
+                    // 8- and 16-bit arithmetic to int, so the expression is
+                    // routinely wider than the value the binary returns.  The
+                    // varnode's own size is used when present, else the size
+                    // of its serialized type; with neither, nothing is known
+                    // and nothing is reported.
+                    uint64_t value_bits = uint64_t{ op.inputs[idx].size } * 8U;
+                    if (value_bits == 0U && !op.inputs[idx].type_key.empty()) {
+                        auto varnode_type =
+                            type_builder().GetSerializedType(op.inputs[idx].type_key);
+                        if (!varnode_type.isNull() && varnode_type->isScalarType()) {
+                            value_bits = ctx.getTypeSize(varnode_type);
+                        }
+                    }
+
+                    // A constant whose value survives the conversion loses
+                    // nothing, whatever the widths: 1 in an 8-byte varnode
+                    // returned as a 32-bit int is still 1.  For a boolean
+                    // return type that means 0 or 1; otherwise the value must
+                    // come back unchanged when the narrowed result is extended
+                    // again the way the declared type extends.
+                    auto constant_is_preserved = [&]() {
+                        const auto &returned = op.inputs[idx];
+                        if (returned.kind != Varnode::VARNODE_CONSTANT || !returned.value
+                            || value_bits == 0U || value_bits > 64U)
+                        {
+                            return false;
+                        }
+                        const llvm::APInt original(
+                            static_cast< unsigned >(value_bits), *returned.value, false, true
+                        );
+                        if (ret_type->isBooleanType()) {
+                            return original.ule(1U);
+                        }
+                        if (!ret_type->isIntegralOrEnumerationType()) {
+                            return false;
+                        }
+                        const auto narrowed =
+                            original.trunc(static_cast< unsigned >(ctx.getTypeSize(ret_type)));
+                        const auto restored = ret_type->isSignedIntegerOrEnumerationType()
+                            ? narrowed.sext(static_cast< unsigned >(value_bits))
+                            : narrowed.zext(static_cast< unsigned >(value_bits));
+                        return restored == original;
+                    };
+
+                    // A value extended from one no wider than the declared
+                    // type comes back unchanged when it is narrowed again.  A
+                    // `char` or `bool` result travels in a whole register, so
+                    // Ghidra routinely returns INT_ZEXT or INT_SEXT of the
+                    // narrow value through a register-sized varnode.
+                    //
+                    // For a boolean return type width is not enough, because
+                    // the conversion is a `!= 0` test: the extended value must
+                    // itself be 0 or 1, that is boolean-typed or the result
+                    // of a comparison or boolean operation.
+                    //
+                    // Only the operation that defines the returned varnode is
+                    // examined, and for a boolean the one it extends; a longer
+                    // chain is still reported.
+                    auto varnode_bits = [&](const Varnode &varnode) -> uint64_t {
+                        if (varnode.size != 0U) {
+                            return uint64_t{ varnode.size } * 8U;
+                        }
+                        if (varnode.type_key.empty()) {
+                            return 0U;
+                        }
+                        auto type = type_builder().GetSerializedType(varnode.type_key);
+                        return !type.isNull() && type->isScalarType() ? ctx.getTypeSize(type)
+                                                                      : 0U;
+                    };
+                    auto defining_operation =
+                        [&](const Varnode &varnode) -> std::optional< Operation > {
+                        if (!varnode.operation) {
+                            return std::nullopt;
+                        }
+                        return operationFromKey(function, *varnode.operation);
+                    };
+                    auto yields_truth_value = [](const Operation &operation) {
+                        switch (operation.mnemonic) {
+                            case Mnemonic::OP_INT_EQUAL:
+                            case Mnemonic::OP_INT_NOTEQUAL:
+                            case Mnemonic::OP_INT_LESS:
+                            case Mnemonic::OP_INT_SLESS:
+                            case Mnemonic::OP_INT_LESSEQUAL:
+                            case Mnemonic::OP_INT_SLESSEQUAL:
+                            case Mnemonic::OP_INT_CARRY:
+                            case Mnemonic::OP_INT_SCARRY:
+                            case Mnemonic::OP_INT_SBORROW:
+                            case Mnemonic::OP_BOOL_NEGATE:
+                            case Mnemonic::OP_BOOL_OR:
+                            case Mnemonic::OP_BOOL_AND:
+                            case Mnemonic::OP_FLOAT_EQUAL:
+                            case Mnemonic::OP_FLOAT_NOTEQUAL:
+                            case Mnemonic::OP_FLOAT_LESS:
+                            case Mnemonic::OP_FLOAT_LESSEQUAL:
+                            case Mnemonic::OP_FLOAT_NAN:
+                                return true;
+                            default:
+                                return false;
+                        }
+                    };
+                    auto is_truth_value = [&](const Varnode &varnode) {
+                        if (!varnode.type_key.empty()) {
+                            auto type = type_builder().GetSerializedType(varnode.type_key);
+                            if (!type.isNull() && type->isBooleanType()) {
+                                return true;
+                            }
+                        }
+                        auto definition = defining_operation(varnode);
+                        return definition.has_value() && yields_truth_value(*definition);
+                    };
+                    auto extension_is_preserved = [&]() {
+                        auto definition = defining_operation(op.inputs[idx]);
+                        if (!definition.has_value()) {
+                            return false;
+                        }
+                        if (ret_type->isBooleanType() && yields_truth_value(*definition)) {
+                            return true;
+                        }
+                        if ((definition->mnemonic != Mnemonic::OP_INT_ZEXT
+                             && definition->mnemonic != Mnemonic::OP_INT_SEXT)
+                            || definition->inputs.size() != 1U)
+                        {
+                            return false;
+                        }
+                        const auto &extended = definition->inputs.front();
+                        if (ret_type->isBooleanType()) {
+                            return is_truth_value(extended);
+                        }
+                        const auto extended_bits = varnode_bits(extended);
+                        return ret_type->isIntegralOrEnumerationType() && extended_bits != 0U
+                            && extended_bits <= ctx.getTypeSize(ret_type);
+                    };
+
+                    if (ret_type->isScalarType() && value_bits > ctx.getTypeSize(ret_type)
+                        && !constant_is_preserved() && !extension_is_preserved())
+                    {
+                        // Converting to a boolean is a `!= 0` test, not a
+                        // truncation, but the binary still returned a wider
+                        // value than one truth bit, so it is reported with
+                        // wording that says what happens.
+                        report_lossy(
+                            "return-narrowed",
+                            ret_type->isBooleanType()
+                                ? std::to_string(value_bits)
+                                      + "-bit returned value reduced to a truth value by the "
+                                        "declared return type '"
+                                      + ret_type.getAsString() + "'"
+                                : std::to_string(value_bits) + "-bit returned value"
+                                      " truncated to the declared "
+                                      + std::to_string(ctx.getTypeSize(ret_type))
+                                      + "-bit return type '" + ret_type.getAsString() + "'"
+                        );
+                    }
+
+                    if (!ctx.hasSameUnqualifiedType(ret_expr->getType(), ret_type)) {
+                        auto *cast_expr = make_cast(ctx, ret_expr, ret_type, location);
+                        if (cast_expr != nullptr) {
+                            ret_expr = cast_expr;
+                        }
                     }
                 }
             }
@@ -2357,6 +2534,55 @@ namespace patchestry::ast {
         auto type_it      = types.find(function.prototype.rttype_key);
         if (type_it != types.end() && !type_it->second->isVoidType()) {
             auto ret_type = type_it->second;
+
+            // The zero returned here is invented.  It is not reported when the
+            // operation directly before this RETURN in the same block is a
+            // call Ghidra marked noreturn (abort, __stack_chk_fail): the
+            // operations of a block run in order, so the return never
+            // executes and the value cannot be observed.
+            auto follows_noreturn_call = [&]() {
+                auto block_it = function.basic_blocks.find(op.parent_block_key);
+                if (block_it == function.basic_blocks.end()) {
+                    return false;
+                }
+                const auto &block = block_it->second;
+                auto position     = std::ranges::find(block.ordered_operations, op.key);
+                if (position == block.ordered_operations.end()
+                    || position == block.ordered_operations.begin())
+                {
+                    return false;
+                }
+                auto previous_it = block.operations.find(*std::prev(position));
+                if (previous_it == block.operations.end()) {
+                    return false;
+                }
+                const auto &previous = previous_it->second;
+                if (previous.mnemonic != Mnemonic::OP_CALL
+                    && previous.mnemonic != Mnemonic::OP_CALLIND)
+                {
+                    return false;
+                }
+                if (!previous.target.has_value()) {
+                    return false;
+                }
+                if (previous.target->is_noreturn) {
+                    return true;
+                }
+                if (previous.target->function) {
+                    const auto &functions = function_builder().function_list.get();
+                    auto callee_it        = functions.find(*previous.target->function);
+                    return callee_it != functions.end() && callee_it->second != nullptr
+                        && callee_it->second->isNoReturn();
+                }
+                return false;
+            };
+            if (!follows_noreturn_call()) {
+                report_lossy(
+                    "return-synthesized",
+                    "RETURN carries no value but the return type is '"
+                        + ret_type.getAsString() + "'; a zero value is returned"
+                );
+            }
             auto *zero    = clang::IntegerLiteral::Create(
                 ctx, llvm::APInt(32, 0), ctx.IntTy, location
             );
@@ -2615,7 +2841,7 @@ namespace patchestry::ast {
         auto op_location    = SourceLocation(ctx.getSourceManager(), op.key);
 
         // input[1] is the byte offset; the bit-shift amount is byte_offset * 8.
-        uint32_t byte_offset = op.inputs[1].value.value_or(0);
+        uint32_t byte_offset = static_cast< uint32_t >(op.inputs[1].value.value_or(0));
         unsigned shift_bits  = byte_offset * 8;
 
         auto *input_stmt = create_varnode(ctx, function, op.inputs[0]);
@@ -3802,7 +4028,9 @@ namespace patchestry::ast {
 
         auto input_type = input_expr->getType();
         if (input_type->isPointerType() && input_type->getPointeeType()->isRecordType()) {
-            auto *mem_expr = make_member_expr(ctx, input_expr, *op.inputs[1].value);
+            auto *mem_expr = make_member_expr(
+                ctx, input_expr, static_cast< unsigned >(*op.inputs[1].value)
+            );
             if (mem_expr == nullptr) {
                 LOG(ERROR) << "PTRSUB failed to build member access. key: " << op.key << "\n";
                 return { nullptr, false };
@@ -4122,6 +4350,56 @@ namespace patchestry::ast {
         std::string var_name = *op.name;
         auto &name_counts    = function_builder().declared_name_counts;
         auto [it, inserted]  = name_counts.try_emplace(var_name, 0);
+
+        // A local the function reads before defining it holds caller state
+        // the prototype does not cover (Ghidra typically names it
+        // `unaff_<reg>` or `in_<loc>`).  It is lifted as an ordinary
+        // uninitialized local, so the lifted code does not read the value the
+        // binary read.
+        //
+        // The serializer records this as `live_in`.  JSON without the field
+        // falls back to the naming convention, and because a name alone proves
+        // nothing (a symbol may be called `in_count`), also requires that no
+        // operation in the function writes the local or takes its address.
+        auto is_live_in = [&]() {
+            if (op.live_in.has_value()) {
+                return *op.live_in;
+            }
+            if (!llvm::StringRef(var_name).starts_with("unaff_")
+                && !llvm::StringRef(var_name).starts_with("in_"))
+            {
+                return false;
+            }
+            for (const auto &[_, block] : function_builder().function.get().basic_blocks) {
+                for (const auto &[_, other] : block.operations) {
+                    if (other.output && other.output->operation
+                        && *other.output->operation == op.key)
+                    {
+                        return false;
+                    }
+                    // Once the local's address is taken it can be written
+                    // through the pointer (a STORE names no output), and a
+                    // name cannot prove it is not.
+                    if (other.mnemonic == Mnemonic::OP_ADDRESS_OF
+                        && std::ranges::any_of(other.inputs, [&](const Varnode &input) {
+                               return input.operation && *input.operation == op.key;
+                           }))
+                    {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        };
+        if (inserted && is_live_in()) {
+            function_builder().loss_reporter.get().report(
+                op_loc, "unaffected-register-use",
+                "local '" + var_name + "' in function '"
+                    + function_builder().function.get().name
+                    + "' is read before the function defines it; it is lifted as an "
+                      "uninitialized local. key: " + op.key
+            );
+        }
         if (!inserted) {
             // Variable coalescing (structural): when multiple SSA
             // versions of the same register have the same type, reuse

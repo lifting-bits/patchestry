@@ -560,7 +560,9 @@ namespace patchestry::ghidra {
         set_field_if_valid(get_string_if_valid(var_obj, "function"), vnode.function);
         set_field_if_valid(get_string_if_valid(var_obj, "global"), vnode.global);
         set_field_if_valid(get_string_with_empty(var_obj, "string_value"), vnode.string_value);
-        vnode.value = var_obj.getInteger("value");
+        if (auto value = var_obj.getInteger("value")) {
+            vnode.value = static_cast< uint64_t >(*value);
+        }
         return vnode;
     }
 
@@ -1035,6 +1037,10 @@ namespace patchestry::ghidra {
 
         if (auto index = pcode_obj.getInteger("index")) {
             operation.index = static_cast< uint32_t >(*index);
+        }
+
+        if (auto live_in = pcode_obj.getBoolean("live_in")) {
+            operation.live_in = *live_in;
         }
 
         // Deserialize operation specific fields

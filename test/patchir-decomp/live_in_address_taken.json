@@ -1,0 +1,204 @@
+// JSON without the `live_in` flag falls back to Ghidra's `in_`/`unaff_` naming
+// to find a local read before the function defines it.  A local whose address
+// is taken can be written through the pointer, by a STORE that names no
+// output, so the name proves nothing and the local is not reported.
+//
+//   stored_in       &in_count is stored through: lifted `in_count = a;`
+//   never_written   in_count is only read: reported
+//
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-cir -print-tu -output %t > %t.log 2>&1
+// RUN: %file-check -vv -check-prefix=WARN %s --input-file %t.log
+// RUN: %file-check -vv -check-prefix=C %s --input-file %t.c
+//
+// WARN: lossy lift [unaffected-register-use]: local 'in_count' in function 'never_written'
+// WARN-NOT: in function 'stored_in'
+// C: in_count = a;
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "stored_in",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": [
+          "type_int"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "a",
+              "type": "type_int",
+              "kind": "parameter",
+              "index": 0
+            },
+            "l0": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "in_count",
+              "type": "type_int"
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "l0",
+            "br"
+          ]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "addr": {
+              "mnemonic": "ADDRESS_OF",
+              "type": "type_ptr",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "local",
+                  "operation": "l0"
+                }
+              ]
+            },
+            "st": {
+              "mnemonic": "STORE",
+              "inputs": [
+                {
+                  "type": "type_ptr",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "addr"
+                },
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "p0"
+                }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "kind": "constant",
+                  "value": 0
+                },
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "local",
+                  "operation": "l0"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "addr",
+            "st",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    },
+    "ram:20000000": {
+      "name": "never_written",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": [
+          "type_int"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "a",
+              "type": "type_int",
+              "kind": "parameter",
+              "index": 0
+            },
+            "l0": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "in_count",
+              "type": "type_int"
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "l0",
+            "br"
+          ]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "kind": "constant",
+                  "value": 0
+                },
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "local",
+                  "operation": "l0"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": {
+      "name": "unsigned int",
+      "size": 4,
+      "kind": "integer"
+    },
+    "type_void": {
+      "name": "void",
+      "size": 0,
+      "kind": "void"
+    },
+    "type_ptr": {
+      "name": "unsigned int *",
+      "kind": "pointer",
+      "size": 4,
+      "element_type": "type_int"
+    }
+  }
+}

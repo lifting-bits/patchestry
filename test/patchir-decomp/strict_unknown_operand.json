@@ -21,12 +21,12 @@
 //
 // WARN-DAG: Diag Warning: {{.*}}lossy lift [op-dropped]: RETURN operation 'ret' in function 'return_unknown' produced no statement
 // WARN-DAG: Diag Warning: {{.*}}lossy lift [op-dropped]: SUBPIECE operation 'sub' in function 'subpiece_unknown_offset' produced no statement
-// WARN-NOT: in function 'subpiece_known_offset'
+// WARN-NOT: lossy lift [op-dropped]: {{.*}} in function 'subpiece_known_offset'
 // WARN-NOT: Diag Error
 //
 // ERR-DAG: Diag Error: {{.*}}lossy lift [op-dropped]: RETURN operation 'ret' in function 'return_unknown'
 // ERR-DAG: Diag Error: {{.*}}lossy lift [op-dropped]: SUBPIECE operation 'sub' in function 'subpiece_unknown_offset'
-// ERR-NOT: in function 'subpiece_known_offset'
+// ERR-NOT: lossy lift [op-dropped]: {{.*}} in function 'subpiece_known_offset'
 // ERR: Skipping code generation due to prior diagnostics errors
 {
   "architecture": "ARM",

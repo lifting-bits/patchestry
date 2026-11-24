@@ -1,0 +1,554 @@
+// A 64-bit value returned from a 32-bit ARM function travels in r0:r1.  When
+// the prototype names a 64-bit return type the whole value survives.  When the
+// prototype only names the low register, the lifter truncates the returned
+// value to the declared type and the high word is gone; that is now reported.
+// A RETURN with no value in a function that returns one is reported too.
+//
+//   ret_wide_declared   u64 f(u64 v) { return v; }   ret i64, no report
+//   ret_wide_narrowed   u32 f(u64 v) { return v; }   high word dropped
+//   ret_missing         u32 f(u32 a) { return; }     zero returned
+//   ret_const_fits      u32 f() { return 1ULL; }             no report: the value survives
+//   ret_const_too_wide  u32 f() { return 0x100000000ULL; }   reported: it does not
+//   ret_bool_of_wide    bool f(u64 v) { return v; }          reported as reduced to a
+//                       truth value: the binary returns 8 bytes, the lift one bit
+//   ret_after_noreturn  u32 f(u32 a) { abort(); return; }   no report: the
+//                       return follows a noreturn call and never executes
+//   ret_promoted        u8 f(u32 a, u32 b) { return a == b; }   no report: the
+//                       P-Code value is 1 byte; only the C expression is an int
+//
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-llvm -print-tu -output %t > %t.log 2>&1
+// RUN: %file-check -vv -check-prefix=WARN %s --input-file %t.log
+// RUN: %file-check -vv -check-prefix=C %s --input-file %t.c
+// RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
+// RUN: not %patchir-decomp -input %t.json -emit-llvm -strict -output %t.strict > %t.strict.log 2>&1
+// RUN: %file-check -vv -check-prefix=ERR %s --input-file %t.strict.log
+// RUN: test ! -e %t.strict.ll
+//
+// WARN-DAG: Diag Warning: {{.*}}lossy lift [return-narrowed]: 64-bit returned value truncated to the declared 32-bit return type 'unsigned int' in function 'ret_wide_narrowed'
+// WARN-DAG: Diag Warning: {{.*}}lossy lift [return-synthesized]: RETURN carries no value but the return type is 'unsigned int'; a zero value is returned in function 'ret_missing'
+// WARN-DAG: Diag Warning: {{.*}}lossy lift [return-narrowed]: 64-bit returned value truncated to the declared 32-bit return type 'unsigned int' in function 'ret_const_too_wide'
+// WARN-DAG: Diag Warning: {{.*}}lossy lift [return-narrowed]: 64-bit returned value reduced to a truth value by the declared return type '_Bool' in function 'ret_bool_of_wide'
+// WARN-NOT: in function 'ret_wide_declared'
+// WARN-NOT: in function 'ret_const_fits'
+// WARN-NOT: in function 'ret_promoted'
+// WARN-NOT: in function 'ret_after_noreturn'
+// WARN-NOT: Diag Error
+//
+// C-DAG: return (unsigned int)v;
+// C-DAG: return v;
+// C-DAG: return (unsigned int)0;
+// C-DAG: return a == b;
+//
+// LL-DAG: define dso_local i64 @ret_wide_declared(i64
+// LL-DAG: define dso_local i32 @ret_wide_narrowed(i64
+// LL-DAG: trunc i64 %{{.*}} to i32
+//
+// ERR-DAG: Diag Error: {{.*}}lossy lift [return-narrowed]
+// ERR-DAG: Diag Error: {{.*}}lossy lift [return-synthesized]
+// ERR: Skipping code generation due to prior diagnostics errors
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "ret_wide_declared",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_u64",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": [
+          "type_u64"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "v",
+              "type": "type_u64",
+              "kind": "parameter",
+              "index": 0
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "br"
+          ]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "kind": "constant",
+                  "value": 0
+                },
+                {
+                  "type": "type_u64",
+                  "kind": "parameter",
+                  "operation": "p0"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    },
+    "ram:10000100": {
+      "name": "ret_wide_narrowed",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": [
+          "type_u64"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000100:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "v",
+              "type": "type_u64",
+              "kind": "parameter",
+              "index": 0
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000100:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "br"
+          ]
+        },
+        "ram:10000100:0:basic": {
+          "operations": {
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "kind": "constant",
+                  "value": 0
+                },
+                {
+                  "type": "type_u64",
+                  "kind": "parameter",
+                  "operation": "p0"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000100:entry"
+    },
+    "ram:10000200": {
+      "name": "ret_missing",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": [
+          "type_int"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000200:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "a",
+              "type": "type_int",
+              "kind": "parameter",
+              "index": 0
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000200:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "br"
+          ]
+        },
+        "ram:10000200:0:basic": {
+          "operations": {
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": []
+            }
+          },
+          "ordered_operations": [
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000200:entry"
+    },
+    "ram:10000300": {
+      "name": "ret_promoted",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_u8",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": [
+          "type_int",
+          "type_int"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000300:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "a",
+              "type": "type_int",
+              "kind": "parameter",
+              "index": 0
+            },
+            "p1": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "b",
+              "type": "type_int",
+              "kind": "parameter",
+              "index": 1
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000300:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "p1",
+            "br"
+          ]
+        },
+        "ram:10000300:0:basic": {
+          "operations": {
+            "eq": {
+              "mnemonic": "INT_EQUAL",
+              "type": "type_bool",
+              "size": 1,
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "p0"
+                },
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "p1"
+                }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "kind": "constant",
+                  "value": 0
+                },
+                {
+                  "type": "type_bool",
+                  "size": 1,
+                  "kind": "temporary",
+                  "operation": "eq"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "eq",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000300:entry"
+    },
+    "ram:10000400": {
+      "name": "ret_after_noreturn",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": [
+          "type_int"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000400:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "a",
+              "type": "type_int",
+              "kind": "parameter",
+              "index": 0
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000400:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "br"
+          ]
+        },
+        "ram:10000400:0:basic": {
+          "operations": {
+            "die": {
+              "mnemonic": "CALL",
+              "has_return_value": false,
+              "target": {
+                "kind": "function",
+                "function": "EXTERNAL:00000001",
+                "is_variadic": false,
+                "is_noreturn": true
+              },
+              "inputs": []
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": []
+            }
+          },
+          "ordered_operations": [
+            "die",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000400:entry"
+    },
+    "EXTERNAL:00000001": {
+      "name": "abort",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": true,
+        "calling_convention": "__stdcall",
+        "parameter_types": []
+      }
+    },
+    "ram:10000500": {
+      "name": "ret_const_fits",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": []
+      },
+      "basic_blocks": {
+        "ram:10000500:entry": {
+          "operations": {
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000500:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "br"
+          ]
+        },
+        "ram:10000500:0:basic": {
+          "operations": {
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "kind": "constant",
+                  "value": 0
+                },
+                {
+                  "type": "type_u64",
+                  "size": 8,
+                  "kind": "constant",
+                  "value": 1
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000500:entry"
+    },
+    "ram:10000600": {
+      "name": "ret_const_too_wide",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": []
+      },
+      "basic_blocks": {
+        "ram:10000600:entry": {
+          "operations": {
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000600:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "br"
+          ]
+        },
+        "ram:10000600:0:basic": {
+          "operations": {
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "kind": "constant",
+                  "value": 0
+                },
+                {
+                  "type": "type_u64",
+                  "size": 8,
+                  "kind": "constant",
+                  "value": 4294967296
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000600:entry"
+    },
+    "ram:10000700": {
+      "name": "ret_bool_of_wide",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_bool",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": [
+          "type_u64"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000700:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "v",
+              "type": "type_u64",
+              "kind": "parameter",
+              "index": 0
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000700:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "br"
+          ]
+        },
+        "ram:10000700:0:basic": {
+          "operations": {
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "kind": "constant",
+                  "value": 0
+                },
+                {
+                  "type": "type_u64",
+                  "size": 8,
+                  "kind": "parameter",
+                  "operation": "p0"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000700:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": {
+      "name": "unsigned int",
+      "size": 4,
+      "kind": "integer"
+    },
+    "type_u64": {
+      "name": "unsigned long long",
+      "size": 8,
+      "kind": "integer"
+    },
+    "type_void": {
+      "name": "void",
+      "size": 0,
+      "kind": "void"
+    },
+    "type_u8": {
+      "name": "unsigned char",
+      "size": 1,
+      "kind": "integer"
+    },
+    "type_bool": {
+      "name": "bool",
+      "size": 1,
+      "kind": "boolean"
+    }
+  }
+}

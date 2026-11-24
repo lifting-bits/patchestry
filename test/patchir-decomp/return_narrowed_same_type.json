@@ -1,0 +1,216 @@
+// The returned varnode's P-Code size is compared with the declared return
+// type even when its serialized type already is the return type.  The value
+// is then truncated while the expression is built, with no cast to notice.
+//
+//   wide_const       8-byte constant 0x100000000 typed `unsigned int`: lifted
+//                    as `return 0U;`, reported
+//   wide_const_fits  8-byte constant 7 typed `unsigned int`: the value
+//                    survives, not reported
+//   wide_param       an 8-byte varnode typed `unsigned int`: reported
+//
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-cir -print-tu -output %t > %t.log 2>&1
+// RUN: %file-check -vv -check-prefix=WARN %s --input-file %t.log
+// RUN: grep -c "return-narrowed" %t.log | %file-check -check-prefix=COUNT %s
+// RUN: %file-check -vv -check-prefix=C %s --input-file %t.c
+// RUN: not %patchir-decomp -input %t.json -emit-cir -strict -output %t.strict > %t.strict.log 2>&1
+// RUN: test ! -e %t.strict.cir
+//
+// WARN-DAG: lossy lift [return-narrowed]: 64-bit returned value truncated to the declared 32-bit return type 'unsigned int' in function 'wide_const'.
+// WARN-DAG: lossy lift [return-narrowed]: 64-bit returned value truncated to the declared 32-bit return type 'unsigned int' in function 'wide_param'.
+// COUNT: 2
+// C-DAG: return 7U;
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "wide_const",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": [
+          "type_int"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "a",
+              "type": "type_int",
+              "kind": "parameter",
+              "index": 0
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "br"
+          ]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "kind": "constant",
+                  "value": 0
+                },
+                {
+                  "type": "type_int",
+                  "size": 8,
+                  "kind": "constant",
+                  "value": 4294967296
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    },
+    "ram:20000000": {
+      "name": "wide_const_fits",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": [
+          "type_int"
+        ]
+      },
+      "basic_blocks": {
+        "ram:20000000:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "a",
+              "type": "type_int",
+              "kind": "parameter",
+              "index": 0
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:20000000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "br"
+          ]
+        },
+        "ram:20000000:0:basic": {
+          "operations": {
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "kind": "constant",
+                  "value": 0
+                },
+                {
+                  "type": "type_int",
+                  "size": 8,
+                  "kind": "constant",
+                  "value": 7
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:20000000:entry"
+    },
+    "ram:30000000": {
+      "name": "wide_param",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": [
+          "type_int"
+        ]
+      },
+      "basic_blocks": {
+        "ram:30000000:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "a",
+              "type": "type_int",
+              "kind": "parameter",
+              "index": 0
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:30000000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "br"
+          ]
+        },
+        "ram:30000000:0:basic": {
+          "operations": {
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "kind": "constant",
+                  "value": 0
+                },
+                {
+                  "type": "type_int",
+                  "size": 8,
+                  "kind": "parameter",
+                  "operation": "p0"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:30000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": {
+      "name": "unsigned int",
+      "size": 4,
+      "kind": "integer"
+    },
+    "type_void": {
+      "name": "void",
+      "size": 0,
+      "kind": "void"
+    }
+  }
+}

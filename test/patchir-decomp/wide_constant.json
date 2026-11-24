@@ -1,0 +1,231 @@
+// A constant keeps all 64 bits of its value.  The serializer writes constants
+// as signed 64-bit integers, so an 8-byte constant with the top bit set
+// arrives negative.  The lifter used to store the value in 32 bits: 2^32
+// became 0, and -16 in an 8-byte varnode became 0xFFFFFFF0 zero-extended.
+//
+//   const_above_32_bits   4294967296            (0x1_0000_0000)
+//   const_negative_64     -16                   (0xFFFF_FFFF_FFFF_FFF0)
+//   const_high_pattern    -4294901761           (0xFFFF_FFFF_0000_FFFF)
+//   const_negative_32     -2 in a 4-byte type   (0xFFFF_FFFE, truncated to width)
+//
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-llvm -print-tu -output %t > %t.log 2>&1
+// RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
+//
+// LL-DAG: store i64 4294967296, ptr
+// LL-DAG: store i64 -16, ptr
+// LL-DAG: store i64 -4294901761, ptr
+// LL-DAG: store i32 -2, ptr
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "const_above_32_bits",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_u64",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": []
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "br"
+          ]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "kind": "constant",
+                  "value": 0
+                },
+                {
+                  "type": "type_u64",
+                  "size": 8,
+                  "kind": "constant",
+                  "value": 4294967296
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    },
+    "ram:10000100": {
+      "name": "const_negative_64",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_i64",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": []
+      },
+      "basic_blocks": {
+        "ram:10000100:entry": {
+          "operations": {
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000100:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "br"
+          ]
+        },
+        "ram:10000100:0:basic": {
+          "operations": {
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "kind": "constant",
+                  "value": 0
+                },
+                {
+                  "type": "type_i64",
+                  "size": 8,
+                  "kind": "constant",
+                  "value": -16
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000100:entry"
+    },
+    "ram:10000200": {
+      "name": "const_high_pattern",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_u64",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": []
+      },
+      "basic_blocks": {
+        "ram:10000200:entry": {
+          "operations": {
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000200:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "br"
+          ]
+        },
+        "ram:10000200:0:basic": {
+          "operations": {
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "kind": "constant",
+                  "value": 0
+                },
+                {
+                  "type": "type_u64",
+                  "size": 8,
+                  "kind": "constant",
+                  "value": -4294901761
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000200:entry"
+    },
+    "ram:10000300": {
+      "name": "const_negative_32",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": []
+      },
+      "basic_blocks": {
+        "ram:10000300:entry": {
+          "operations": {
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000300:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "br"
+          ]
+        },
+        "ram:10000300:0:basic": {
+          "operations": {
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "kind": "constant",
+                  "value": 0
+                },
+                {
+                  "type": "type_int",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": -2
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000300:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": {
+      "name": "unsigned int",
+      "size": 4,
+      "kind": "integer"
+    },
+    "type_u64": {
+      "name": "unsigned long long",
+      "size": 8,
+      "kind": "integer"
+    },
+    "type_i64": {
+      "name": "long long",
+      "size": 8,
+      "kind": "integer"
+    }
+  }
+}

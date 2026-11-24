@@ -132,7 +132,10 @@ namespace patchestry::ghidra {
 
         std::optional< std::string > operation;
         std::optional< std::string > function;
-        std::optional< uint32_t > value;
+        // Constant value as a 64-bit pattern.  The serializer writes a
+        // signed 64-bit integer, so an 8-byte constant with the top bit set
+        // arrives negative; consumers truncate to the width they build.
+        std::optional< uint64_t > value;
         std::optional< std::string > string_value;
         std::optional< std::string > global;
     };
@@ -190,6 +193,10 @@ namespace patchestry::ghidra {
         std::optional< std::string > name;
         std::optional< std::string > type;
         std::optional< uint32_t > index;
+        // DECLARE_LOCAL only: true when Ghidra found the variable read before
+        // the function defines it (one of its varnodes is a function input).
+        // Absent in JSON from a serializer that does not record it.
+        std::optional< bool > live_in;
 
         // Call Operation
         std::optional< OperationTarget > target;
