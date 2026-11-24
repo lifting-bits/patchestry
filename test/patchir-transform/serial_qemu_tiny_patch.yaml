@@ -1,0 +1,26 @@
+apiVersion: patchestry.io/v1
+metadata:
+  name: serial-qemu-tiny-patch
+  description: Replace qemu_target_tiny inside the QEMU serial firmware fixture
+  version: 1.0.0
+  author: Patchestry
+  created: '2026-11-16'
+  kind: PatchSpec
+target:
+  binary: serial.elf
+  arch: ARM:LE:32
+libraries:
+- patches/serial_qemu_patch_library.yaml
+patches:
+- name: serial_qemu_tiny_patch
+  id: QEMU-SERIAL-TINY-001
+  description: Replace emit_tiny_base inside qemu_target_tiny
+  match:
+    name: emit_tiny_base
+    kind: function
+    context:
+    - qemu_target_tiny
+  action:
+    mode: replace
+    patch: serial_qemu_tiny_patch
+    arguments: []

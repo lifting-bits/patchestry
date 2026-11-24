@@ -23,3 +23,15 @@ void patch__replace__qemu_target_replace(void) {
 void contract__entrypoint__qemu_target_contract(void) {
     uart_write_line("CONTRACT:entry");
 }
+
+void patch__replace__qemu_target_short(void) {
+    uart_write_line("PATCH:short");
+}
+
+void patch__replace__qemu_target_tiny(void) {
+    uart_write_line("PATCH:tiny");
+}
+
+void patch__replace__qemu_target_pointer(void) {
+    uart_write_line("PATCH:pointer");
+}

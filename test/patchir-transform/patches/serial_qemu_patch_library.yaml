@@ -27,3 +27,18 @@ patch_definitions:
   category: serial-qemu
   function_name: contract::entrypoint::qemu_target_contract
   code_file: serial_qemu_patch.c
+- name: serial_qemu_short_patch
+  description: Replace the body of qemu_target_short, a 4-byte function
+  category: serial-qemu
+  function_name: patch::replace::qemu_target_short
+  code_file: serial_qemu_patch.c
+- name: serial_qemu_tiny_patch
+  description: Replace the body of qemu_target_tiny, a 2-byte function
+  category: serial-qemu
+  function_name: patch::replace::qemu_target_tiny
+  code_file: serial_qemu_patch.c
+- name: serial_qemu_pointer_patch
+  description: Replace the body of qemu_target_pointer, a function called through a stored address
+  category: serial-qemu
+  function_name: patch::replace::qemu_target_pointer
+  code_file: serial_qemu_patch.c
