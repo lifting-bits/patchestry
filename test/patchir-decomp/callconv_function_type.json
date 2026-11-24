@@ -1,0 +1,133 @@
+// A function type carries its own calling convention.  A pointer to it is
+// lifted as an ordinary C function pointer, so a convention that is not the
+// target default is reported the same way as for a named function.  On 32-bit
+// x86 a `__stdcall` callback pops its own arguments and a `__cdecl` one does
+// not; only the first is reported.
+//
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-cir -output %t > %t.log 2>&1
+// RUN: %file-check -vv -check-prefix=WARN %s --input-file %t.log
+// RUN: test -e %t.cir
+// RUN: not %patchir-decomp -input %t.json -emit-cir -strict -output %t.strict > %t.strict.log 2>&1
+// RUN: %file-check -vv -check-prefix=ERR %s --input-file %t.strict.log
+// RUN: test ! -e %t.strict.cir
+//
+// WARN: Diag Warning: {{.*}}lossy lift [callconv-unsupported]: calling convention '__stdcall' of function type 'stdcall_callback' is not the default for i386; lifted with the target default convention
+// WARN-NOT: Diag Error
+// WARN-NOT: of function type 'cdecl_callback'
+// WARN-NOT: of function 'callconv_function_type'
+//
+// ERR: Diag Error: {{.*}}lossy lift [callconv-unsupported]: calling convention '__stdcall' of function type 'stdcall_callback'
+// ERR-NOT: of function type 'cdecl_callback'
+// ERR: Skipping code generation due to prior diagnostics errors
+{
+  "architecture": "x86",
+  "id": "x86:LE:32:default",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "callconv_function_type",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__cdecl",
+        "parameter_types": [
+          "type_cb_ptr",
+          "type_plain_ptr"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "cb",
+              "type": "type_cb_ptr",
+              "kind": "parameter",
+              "index": 0
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000000:0:basic"
+            },
+            "p1": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "plain",
+              "type": "type_plain_ptr",
+              "kind": "parameter",
+              "index": 1
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "p1",
+            "br"
+          ]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": []
+            }
+          },
+          "ordered_operations": [
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": {
+      "name": "unsigned int",
+      "size": 4,
+      "kind": "integer"
+    },
+    "type_void": {
+      "name": "void",
+      "size": 0,
+      "kind": "void"
+    },
+    "type_cb": {
+      "name": "stdcall_callback",
+      "size": 4,
+      "kind": "function",
+      "return_type": "type_void",
+      "parameter_types": [
+        "type_int"
+      ],
+      "is_variadic": false,
+      "is_noreturn": false,
+      "calling_convention": "__stdcall"
+    },
+    "type_cb_ptr": {
+      "name": "stdcall_callback_t",
+      "size": 4,
+      "kind": "pointer",
+      "base_type": "type_cb"
+    },
+    "type_plain": {
+      "name": "cdecl_callback",
+      "size": 4,
+      "kind": "function",
+      "return_type": "type_void",
+      "parameter_types": [
+        "type_int"
+      ],
+      "is_variadic": false,
+      "is_noreturn": false,
+      "calling_convention": "__cdecl"
+    },
+    "type_plain_ptr": {
+      "name": "cdecl_callback_t",
+      "size": 4,
+      "kind": "pointer",
+      "base_type": "type_plain"
+    }
+  }
+}

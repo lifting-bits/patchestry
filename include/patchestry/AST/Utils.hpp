@@ -15,6 +15,8 @@
 #include <clang/AST/OperationKinds.h>
 #include <clang/AST/Type.h>
 #include <clang/Basic/SourceLocation.h>
+#include <llvm/ADT/StringRef.h>
+#include <llvm/TargetParser/Triple.h>
 
 namespace patchestry::ast {
 
@@ -52,6 +54,20 @@ namespace patchestry::ast {
     );
 
     clang::SourceLocation SourceLocation(clang::SourceManager &sm, std::string key);
+
+    /// True when the Ghidra prototype-model name `name` selects the same
+    /// argument and return placement as the default C convention of `triple`.
+    /// The lifter emits every function and function type with that default
+    /// (ClangIR lowers no other convention), so any other name means the
+    /// lifted prototype does not place arguments where the binary does.
+    bool IsTargetDefaultConvention(const llvm::Triple &triple, llvm::StringRef name);
+
+    /// True when `language_id` (Ghidra `arch:endian:size:variant`) is a 32-bit
+    /// ARM variant whose default prototype model passes floating-point
+    /// arguments in core registers.  The lifter always builds a hard-float
+    /// target for 32-bit ARM, so a floating-point parameter or return value
+    /// in such a program is lifted into the wrong register.
+    bool IsSoftFloatArmLanguage(llvm::StringRef language_id);
 
     /// Returns a valid SourceLocation backed by a virtual "<patchestry-virtual>"
     /// buffer in the given context's SourceManager.  Idempotent: subsequent

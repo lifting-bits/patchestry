@@ -157,6 +157,76 @@ namespace patchestry::ast {
         type_builder = std::make_unique< TypeBuilder >(ci.getASTContext(), &loss_reporter);
         if (!get_program().serialized_types.empty()) {
             type_builder->create_types(ctx, get_program().serialized_types);
+
+            // A function type is lifted with the target default convention,
+            // the same as a named function, so an indirect call through a
+            // pointer to it gets the same check the FunctionBuilder applies.
+            const auto &triple = ctx.getTargetInfo().getTriple();
+            for (const auto &[key, type] : get_program().serialized_types) {
+                if (!type || type->kind != VarnodeType::Kind::VT_FUNCTION) {
+                    continue;
+                }
+                const auto *fn_type = dynamic_cast< const FunctionType * >(type.get());
+                if (fn_type == nullptr
+                    || IsTargetDefaultConvention(triple, fn_type->calling_convention))
+                {
+                    continue;
+                }
+                loss_reporter.report(
+                    SourceLocation(ctx.getSourceManager(), key), "callconv-unsupported",
+                    "calling convention '" + fn_type->calling_convention
+                        + "' of function type '" + fn_type->name + "' is not the default for "
+                        + triple.getArchName().str()
+                        + "; lifted with the target default convention"
+                );
+            }
+        }
+
+        // The lifter builds a hard-float target for every 32-bit ARM program.
+        // On the language variants Ghidra analyses with a soft-float model, a
+        // floating-point parameter or return value is in a core register in
+        // the binary and in a VFP register in the lifted code.  A variadic
+        // function is the exception: it uses the base convention, core
+        // registers, on a hard-float target too, so the two agree.
+        const std::string language = get_program().lang.value_or("");
+        if (IsSoftFloatArmLanguage(language)) {
+            auto is_float = [&](const std::string &type_key) {
+                if (type_key.empty()) {
+                    return false;
+                }
+                auto type = type_builder->GetSerializedType(type_key);
+                return !type.isNull() && type->isRealFloatingType();
+            };
+            auto passes_float = [&](const std::string &return_key,
+                                    const std::vector< std::string > &param_keys) {
+                return is_float(return_key) || std::ranges::any_of(param_keys, is_float);
+            };
+            auto report = [&](const std::string &key, const std::string &what) {
+                loss_reporter.report(
+                    SourceLocation(ctx.getSourceManager(), key), "float-abi-mismatch",
+                    what + " passes or returns a floating-point value; language '" + language
+                        + "' uses core registers for it but the lifted target is hard-float"
+                );
+            };
+
+            for (const auto &[key, function] : get_program().serialized_functions) {
+                if (!function.prototype.is_variadic
+                    && passes_float(function.prototype.rttype_key, function.prototype.parameters))
+                {
+                    report(key, "function '" + function.name + "'");
+                }
+            }
+            for (const auto &[key, type] : get_program().serialized_types) {
+                if (!type || type->kind != VarnodeType::Kind::VT_FUNCTION) {
+                    continue;
+                }
+                const auto *fn_type = dynamic_cast< const FunctionType * >(type.get());
+                if (fn_type != nullptr && !fn_type->is_variadic
+                    && passes_float(fn_type->return_type_key, fn_type->param_type_keys))
+                {
+                    report(key, "function type '" + fn_type->name + "'");
+                }
+            }
         }
 
         if (!get_program().serialized_globals.empty()) {

@@ -1,0 +1,100 @@
+// `__thiscall` is not accepted where a Ghidra compiler spec for the processor
+// defines it differently from the Linux target the lifter builds:
+// AARCH64_swift.cspec lists x20 ahead of x0, and x86-64-win.cspec passes the
+// first argument in RCX.  The JSON does not record the compiler spec, so the
+// name is reported on both processors.  (On 32-bit ARM no spec defines it and
+// it stays accepted; see callconv_unsupported.json.)
+//
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-cir -output %t > %t.log 2>&1
+// RUN: %file-check -vv -check-prefix=A64 %s --input-file %t.log
+// RUN: not %patchir-decomp -input %t.json -emit-cir -strict -output %t.strict > %t.strict.log 2>&1
+// RUN: %file-check -vv -check-prefix=ERR %s --input-file %t.strict.log
+// RUN: sed -e 's/"AARCH64"/"x86"/' -e 's/AARCH64:LE:64:v8A/x86:LE:64:default/' -e 's/"__cdecl"/"__stdcall"/' %t.json > %t.x64.json
+// RUN: %patchir-decomp -input %t.x64.json -emit-cir -output %t.x64 > %t.x64.log 2>&1
+// RUN: %file-check -vv -check-prefix=X64 %s --input-file %t.x64.log
+//
+// A64: Diag Warning: {{.*}}lossy lift [callconv-unsupported]: calling convention '__thiscall' of function 'ext_method' is not the default for aarch64
+// A64-NOT: of function 'callconv_thiscall_ambiguous'
+// ERR: Diag Error: {{.*}}lossy lift [callconv-unsupported]: calling convention '__thiscall' of function 'ext_method'
+// X64: Diag Warning: {{.*}}lossy lift [callconv-unsupported]: calling convention '__thiscall' of function 'ext_method' is not the default for x86_64
+// X64-NOT: of function 'callconv_thiscall_ambiguous'
+{
+  "architecture": "AARCH64",
+  "id": "AARCH64:LE:64:v8A",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "callconv_thiscall_ambiguous",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__cdecl",
+        "parameter_types": [
+          "type_int"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "a",
+              "type": "type_int",
+              "kind": "parameter",
+              "index": 0
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "br"
+          ]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": []
+            }
+          },
+          "ordered_operations": [
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    },
+    "EXTERNAL:00000001": {
+      "name": "ext_method",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__thiscall",
+        "parameter_types": [
+          "type_int"
+        ]
+      }
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": {
+      "name": "unsigned int",
+      "size": 4,
+      "kind": "integer"
+    },
+    "type_void": {
+      "name": "void",
+      "size": 0,
+      "kind": "void"
+    }
+  }
+}

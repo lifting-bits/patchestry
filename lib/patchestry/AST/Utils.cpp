@@ -23,6 +23,63 @@
 
 namespace patchestry::ast {
 
+    // The names come from the Ghidra compiler specs for each processor.  The
+    // JSON does not say which compiler spec was used, so the table is keyed on
+    // the Clang triple alone and a name is accepted only when every compiler
+    // spec for that processor agrees it is the default placement.
+    //
+    // `__thiscall` is accepted where no compiler spec for the processor
+    // defines it: Ghidra then falls back to the default model.  It is not
+    // accepted on x86-64 or AArch64, where x86-64-win.cspec (first argument in
+    // RCX) and AARCH64_swift.cspec (x20 ahead of x0) define a `__thiscall`
+    // that differs from the Linux target the lifter builds.
+    bool IsTargetDefaultConvention(const llvm::Triple &triple, llvm::StringRef name) {
+        // No model recorded, or Ghidra could not name one: nothing to
+        // contradict the default.
+        if (name.empty() || name == "unknown" || name == "default") {
+            return true;
+        }
+
+        switch (triple.getArch()) {
+            case llvm::Triple::arm:
+            case llvm::Triple::armeb:
+            case llvm::Triple::thumb:
+            case llvm::Triple::thumbeb:
+                // ARM.cspec, ARM_v45.cspec: default model is `__stdcall` (AAPCS).
+                return name == "__stdcall" || name == "__thiscall";
+            case llvm::Triple::aarch64:
+            case llvm::Triple::aarch64_be:
+                // AARCH64.cspec: default model is `__cdecl` (AAPCS64).
+                return name == "__cdecl";
+            case llvm::Triple::x86_64:
+                // x86-64-win.cspec: default is `__fastcall` (Microsoft x64).
+                // x86-64-gcc.cspec: default is `__stdcall` (System V).
+                if (triple.isOSWindows()) {
+                    return name == "__fastcall" || name == "__thiscall";
+                }
+                return name == "__stdcall";
+            case llvm::Triple::x86:
+                // x86 32-bit: only `__cdecl` matches the default; `__stdcall`,
+                // `__fastcall` and `__thiscall` differ in stack cleanup or
+                // register use.
+                return name == "__cdecl";
+            case llvm::Triple::ppc:
+            case llvm::Triple::ppcle:
+            case llvm::Triple::ppc64:
+            case llvm::Triple::ppc64le:
+            case llvm::Triple::mips:
+            case llvm::Triple::mipsel:
+            case llvm::Triple::mips64:
+            case llvm::Triple::mips64el:
+                // Every PowerPC and MIPS compiler spec names its default
+                // model `__stdcall` and defines no `__thiscall`.
+                return name == "__stdcall" || name == "__thiscall";
+            default:
+                // The lifter builds no target for any other architecture.
+                return false;
+        }
+    }
+
     clang::SourceLocation SourceLocation(clang::SourceManager &sm, std::string key) {
         auto &fm = sm.getFileManager();
         auto fe  = fm.getVirtualFileRef(key, static_cast< int >(key.size()), 0);
@@ -467,6 +524,20 @@ namespace patchestry::ast {
         LOG(WARNING) << "CloneExpr: unhandled expression type "
                      << expr->getStmtClassName() << ", wrapping in ParenExpr\n";
         return new (ctx) clang::ParenExpr(loc, loc, expr);
+    }
+
+    // ARM.ldefs binds these language variants to ARM_v45.cspec (or
+    // ARM_apcs.cspec), whose default model has no floating-point register
+    // entries: float and double arguments travel in r0-r3 and on the stack.
+    bool IsSoftFloatArmLanguage(llvm::StringRef language_id) {
+        llvm::SmallVector< llvm::StringRef, 4 > parts;
+        language_id.split(parts, ':');
+        if (parts.size() < 4 || !parts[0].equals_insensitive("ARM") || parts[2] != "32") {
+            return false;
+        }
+        const auto variant = parts[3];
+        return variant == "v4" || variant == "v4t" || variant == "v5" || variant == "v5t"
+            || variant == "v6";
     }
 
 } // namespace patchestry::ast

@@ -1,0 +1,139 @@
+// The lifter builds a hard-float target (gnueabihf) for every 32-bit ARM
+// program.  Ghidra analyses the v4, v4t, v5, v5t and v6 language variants
+// with ARM_v45.cspec, whose default `__stdcall` model passes floating-point
+// values in core registers.  A function or function type that passes or
+// returns a float in such a program is reported; one that only uses integers
+// is not.  The same input under a variant Ghidra analyses with the VFP model
+// (v7) is not reported.
+//
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-cir -output %t > %t.log 2>&1
+// RUN: %file-check -vv -check-prefix=WARN %s --input-file %t.log
+// RUN: test -e %t.cir
+// RUN: not %patchir-decomp -input %t.json -emit-cir -strict -output %t.strict > %t.strict.log 2>&1
+// RUN: %file-check -vv -check-prefix=ERR %s --input-file %t.strict.log
+// RUN: test ! -e %t.strict.cir
+// RUN: sed 's/ARM:LE:32:v4t/ARM:LE:32:v7/' %t.json > %t.v7.json
+// RUN: %patchir-decomp -input %t.v7.json -emit-cir -strict -output %t.v7 > %t.v7.log 2>&1
+// RUN: %file-check -vv -check-prefix=V7 --allow-empty %s --input-file %t.v7.log
+//
+// WARN-DAG: Diag Warning: {{.*}}lossy lift [float-abi-mismatch]: function 'float_abi_soft_arm' passes or returns a floating-point value; language 'ARM:LE:32:v4t' uses core registers for it but the lifted target is hard-float
+// WARN-DAG: Diag Warning: {{.*}}lossy lift [float-abi-mismatch]: function 'ext_returns_float' passes or returns a floating-point value
+// WARN-DAG: Diag Warning: {{.*}}lossy lift [float-abi-mismatch]: function type 'float_callback' passes or returns a floating-point value
+// WARN-NOT: 'ext_int_only'
+// WARN-NOT: Diag Error
+//
+// ERR-DAG: Diag Error: {{.*}}lossy lift [float-abi-mismatch]: function 'float_abi_soft_arm'
+// ERR-DAG: Diag Error: {{.*}}lossy lift [float-abi-mismatch]: function 'ext_returns_float'
+// ERR-DAG: Diag Error: {{.*}}lossy lift [float-abi-mismatch]: function type 'float_callback'
+// ERR: Skipping code generation due to prior diagnostics errors
+//
+// V7-NOT: float-abi-mismatch
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:v4t",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "float_abi_soft_arm",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": [
+          "type_float"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "a",
+              "type": "type_float",
+              "kind": "parameter",
+              "index": 0
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "br"
+          ]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": []
+            }
+          },
+          "ordered_operations": [
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    },
+    "EXTERNAL:00000001": {
+      "name": "ext_int_only",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": [
+          "type_int"
+        ]
+      }
+    },
+    "EXTERNAL:00000002": {
+      "name": "ext_returns_float",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_float",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": [
+          "type_int"
+        ]
+      }
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": {
+      "name": "unsigned int",
+      "size": 4,
+      "kind": "integer"
+    },
+    "type_void": {
+      "name": "void",
+      "size": 0,
+      "kind": "void"
+    },
+    "type_float": {
+      "name": "float",
+      "size": 4,
+      "kind": "float"
+    },
+    "type_fcb": {
+      "name": "float_callback",
+      "size": 4,
+      "kind": "function",
+      "return_type": "type_void",
+      "parameter_types": [
+        "type_float"
+      ],
+      "is_variadic": false,
+      "is_noreturn": false
+    }
+  }
+}

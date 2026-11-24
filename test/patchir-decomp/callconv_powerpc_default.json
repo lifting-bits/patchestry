@@ -1,0 +1,82 @@
+// Ghidra names the default prototype model `__stdcall` in every PowerPC
+// compiler spec.  It is the target default, so it is not reported and the
+// function lifts under -strict.  A name no PowerPC spec defines is reported.
+//
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-llvm -strict -output %t > %t.log 2>&1
+// RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
+// RUN: %file-check -vv -check-prefix=QUIET --allow-empty %s --input-file %t.log
+// RUN: sed 's/"__stdcall"/"__fastcall"/' %t.json > %t.fastcall.json
+// RUN: not %patchir-decomp -input %t.fastcall.json -emit-llvm -strict -output %t.fastcall > %t.fastcall.log 2>&1
+// RUN: %file-check -vv -check-prefix=ERR %s --input-file %t.fastcall.log
+//
+// LL: target triple = "powerpc-unknown-linux"
+// LL: define dso_local void @callconv_powerpc_default(i32
+// QUIET-NOT: callconv-unsupported
+// ERR: Diag Error: {{.*}}lossy lift [callconv-unsupported]: calling convention '__fastcall' of function 'callconv_powerpc_default' is not the default for powerpc
+{
+  "architecture": "PowerPC",
+  "id": "PowerPC:BE:32:default",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "callconv_powerpc_default",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__stdcall",
+        "parameter_types": [
+          "type_int"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "a",
+              "type": "type_int",
+              "kind": "parameter",
+              "index": 0
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "br"
+          ]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": []
+            }
+          },
+          "ordered_operations": [
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": {
+      "name": "unsigned int",
+      "size": 4,
+      "kind": "integer"
+    },
+    "type_void": {
+      "name": "void",
+      "size": 0,
+      "kind": "void"
+    }
+  }
+}

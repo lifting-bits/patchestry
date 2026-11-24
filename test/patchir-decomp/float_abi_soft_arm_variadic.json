@@ -1,0 +1,141 @@
+// A variadic function uses the base ARM convention, floating-point arguments
+// in core registers, on a hard-float target too.  That is where a soft-float
+// binary passes them, so a variadic function or function type that takes a
+// float is not a float-ABI mismatch.  A fixed-arity one is.
+//
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-llvm -output %t > %t.log 2>&1
+// RUN: %file-check -vv -check-prefix=WARN %s --input-file %t.log
+// RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
+// RUN: sed -e 's/"fixed_float"/"fixed_float_removed"/' -e 's/"is_variadic": false/"is_variadic": true/' %t.json > %t.var.json
+// RUN: %patchir-decomp -input %t.var.json -emit-llvm -strict -output %t.var > %t.var.log 2>&1
+// RUN: %file-check -vv -check-prefix=QUIET --allow-empty %s --input-file %t.var.log
+//
+// WARN: lossy lift [float-abi-mismatch]: function 'fixed_float' passes or returns a floating-point value
+// WARN-NOT: function 'variadic_float'
+// WARN-NOT: function type 'variadic_callback'
+// LL-DAG: define dso_local void @variadic_float(float %0, ...)
+//
+// With every signature variadic the program lifts under -strict.
+// QUIET-NOT: float-abi-mismatch
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:v4t",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:00010000": {
+      "name": "variadic_float",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_void",
+        "is_variadic": true,
+        "is_noreturn": false,
+        "parameter_types": [
+          "t_float"
+        ]
+      },
+      "basic_blocks": {
+        "variadic_float:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "x",
+              "type": "t_float",
+              "kind": "parameter",
+              "index": 0
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "variadic_float:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "entry.exit"
+          ]
+        },
+        "variadic_float:0:basic": {
+          "operations": {
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": []
+            }
+          },
+          "ordered_operations": [
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "variadic_float:entry"
+    },
+    "ram:00020000": {
+      "name": "fixed_float",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "t_float"
+        ]
+      },
+      "basic_blocks": {
+        "fixed_float:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "x",
+              "type": "t_float",
+              "kind": "parameter",
+              "index": 0
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "fixed_float:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "entry.exit"
+          ]
+        },
+        "fixed_float:0:basic": {
+          "operations": {
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": []
+            }
+          },
+          "ordered_operations": [
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "fixed_float:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "t_float": {
+      "name": "float",
+      "size": 4,
+      "kind": "float"
+    },
+    "t_void": {
+      "name": "void",
+      "size": 0,
+      "kind": "void"
+    },
+    "t_vfn": {
+      "name": "variadic_callback",
+      "kind": "function",
+      "size": 4,
+      "return_type": "t_void",
+      "is_variadic": true,
+      "is_noreturn": false,
+      "parameter_types": [
+        "t_float"
+      ]
+    }
+  }
+}

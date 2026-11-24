@@ -19,8 +19,10 @@
 #include <clang/AST/Attrs.inc>
 #include <clang/AST/OperationKinds.h>
 #include <clang/Basic/SourceLocation.h>
+#include <clang/Basic/TargetInfo.h>
 #include <clang/Frontend/CompilerInstance.h>
 #include <llvm/Support/ErrorHandling.h>
+#include <llvm/TargetParser/Triple.h>
 
 #include <patchestry/AST/FunctionBuilder.hpp>
 #include <patchestry/AST/OperationBuilder.hpp>
@@ -98,7 +100,6 @@ namespace patchestry::ast {
             return operation_vec;
         }
 
-
     } // namespace
 
     FunctionBuilder::FunctionBuilder(
@@ -125,6 +126,18 @@ namespace patchestry::ast {
         , loss_reporter(loss_reporter)
         , local_variables({}) {
         if (!function.key.empty()) {
+            const auto &triple     = ci.getASTContext().getTargetInfo().getTriple();
+            const auto &convention = function.prototype.calling_convention;
+            if (!IsTargetDefaultConvention(triple, convention)) {
+                loss_reporter.report(
+                    SourceLocation(ci.getASTContext().getSourceManager(), function.key),
+                    "callconv-unsupported",
+                    "calling convention '" + convention + "' of function '" + function.name
+                        + "' is not the default for " + triple.getArchName().str()
+                        + "; lifted with the target default convention"
+                );
+            }
+
             if (auto *function_decl = create_declaration(
                     ci.getASTContext(),
                     create_function_type(ci.getASTContext(), function.prototype)
@@ -372,7 +385,8 @@ namespace patchestry::ast {
         // __fastcall, __thiscall, __vectorcall) to clang::CallingConv once
         // ClangIR supports them. Currently ClangIR only handles the default
         // CC_C convention; all others hit UNREACHABLE in CIRGenTypes.cpp.
-        // The calling convention string is available in proto.calling_convention.
+        // Until then a convention that is not the target default is reported
+        // as `callconv-unsupported` by the FunctionBuilder constructor.
 
         return ctx.getFunctionType(rttype, args_vector, ext_proto_info);
     }
