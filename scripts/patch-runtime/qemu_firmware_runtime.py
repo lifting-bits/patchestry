@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
-import re
 import shutil
 import subprocess
 import sys
@@ -17,8 +17,14 @@ from patcherex2 import InsertFunctionPatch, ModifyFunctionPatch, Patcherex
 from patcherex2.components.compilers import clang_arm as _patcherex_clang_arm
 from patcherex2.targets.elf_arm_bare import ElfArmBare
 
+import check_applied_bytes
 import check_bindings
+import check_static
 import check_trampoline
+import evidence
+import patch_dependencies
+import patch_record
+import patch_symdiff
 
 
 # Patcherex2's ClangArm.compile() post-processes the assembled Thumb bytes and
@@ -48,6 +54,12 @@ def _thumb_only_compile(self, code, base=0, symbols=None, extension=".c",
 _patcherex_clang_arm.ClangArm.compile = _thumb_only_compile
 
 
+# Fixtures written by hand in the lifter's format, not produced by it.
+HAND_WRITTEN_FIXTURES = frozenset(
+    {"qemu_target_length", "qemu_target_forward", "qemu_target_send"}
+)
+
+
 @dataclass(frozen=True)
 class Case:
     name: str
@@ -57,6 +69,18 @@ class Case:
     # A problem check_trampoline must report for this case.  The case passes
     # when the rewritten ELF is rejected for that reason; it is not run.
     expect_reject: str | None = None
+    # Reasons the static checks cannot analyze some inserted function of this
+    # case.  Such a function has not passed them; the case says so in advance,
+    # and any other outcome of the static checks fails it.
+    static_not_run: tuple[str, ...] = ()
+    # What the comparison of the rewritten function with the original is told:
+    # the inputs, and the ways the patch rejects an input (the keys of
+    # patch_symdiff.DECLARED).  None declares nothing.  Writes to the UART
+    # are compared in order in every case.
+    compare: dict | None = None
+    # The kinds of difference (patch_symdiff.KINDS) the patch is meant to
+    # make.  The comparison has to find exactly these and no other.
+    compare_differs: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -66,6 +90,10 @@ class SymbolInfo:
     size: int
     kind: str
 
+
+# The firmware's UART.  Callees are executed in the comparison, so what a
+# function prints shows up as its writes here.
+UART_REGION = (0x4000C000, 0x4000CFFF)
 
 CASES: tuple[Case, ...] = (
     Case(
@@ -82,8 +110,19 @@ CASES: tuple[Case, ...] = (
             "BASE:short",
             "BASE:tiny",
             "BASE:pointer",
+            "BASE:dispatch",
+            "BASE:handler",
+            "LEN:ok",
+            "LEN:ok",
+            "FWD:first",
+            "FWD:second:small",
+            "FWD:first",
+            "FWD:second:large",
+            "S",
+            "z",
             "DONE",
         ),
+        compare_differs=("device-writes",),
     ),
     Case(
         name="after",
@@ -99,8 +138,19 @@ CASES: tuple[Case, ...] = (
             "BASE:short",
             "BASE:tiny",
             "BASE:pointer",
+            "BASE:dispatch",
+            "BASE:handler",
+            "LEN:ok",
+            "LEN:ok",
+            "FWD:first",
+            "FWD:second:small",
+            "FWD:first",
+            "FWD:second:large",
+            "S",
+            "z",
             "DONE",
         ),
+        compare_differs=("device-writes",),
     ),
     Case(
         name="replace",
@@ -115,8 +165,19 @@ CASES: tuple[Case, ...] = (
             "BASE:short",
             "BASE:tiny",
             "BASE:pointer",
+            "BASE:dispatch",
+            "BASE:handler",
+            "LEN:ok",
+            "LEN:ok",
+            "FWD:first",
+            "FWD:second:small",
+            "FWD:first",
+            "FWD:second:large",
+            "S",
+            "z",
             "DONE",
         ),
+        compare_differs=("device-writes",),
     ),
     Case(
         name="contract",
@@ -132,8 +193,19 @@ CASES: tuple[Case, ...] = (
             "BASE:short",
             "BASE:tiny",
             "BASE:pointer",
+            "BASE:dispatch",
+            "BASE:handler",
+            "LEN:ok",
+            "LEN:ok",
+            "FWD:first",
+            "FWD:second:small",
+            "FWD:first",
+            "FWD:second:large",
+            "S",
+            "z",
             "DONE",
         ),
+        compare_differs=("device-writes",),
     ),
     # 4 bytes: the entry branch fills the function exactly.
     Case(
@@ -149,8 +221,19 @@ CASES: tuple[Case, ...] = (
             "PATCH:short",
             "BASE:tiny",
             "BASE:pointer",
+            "BASE:dispatch",
+            "BASE:handler",
+            "LEN:ok",
+            "LEN:ok",
+            "FWD:first",
+            "FWD:second:small",
+            "FWD:first",
+            "FWD:second:large",
+            "S",
+            "z",
             "DONE",
         ),
+        compare_differs=("device-writes",),
     ),
     # 2 bytes: the entry branch overwrites the start of emit_tiny_base.
     # Rejected by the reinsertion check; the transcript is never compared.
@@ -167,6 +250,16 @@ CASES: tuple[Case, ...] = (
             "BASE:short",
             "PATCH:tiny",
             "BASE:pointer",
+            "BASE:dispatch",
+            "BASE:handler",
+            "LEN:ok",
+            "LEN:ok",
+            "FWD:first",
+            "FWD:second:small",
+            "FWD:first",
+            "FWD:second:large",
+            "S",
+            "z",
             "DONE",
         ),
         expect_reject="span-outside-function",
@@ -185,8 +278,286 @@ CASES: tuple[Case, ...] = (
             "BASE:short",
             "BASE:tiny",
             "PATCH:pointer",
+            "BASE:dispatch",
+            "BASE:handler",
+            "LEN:ok",
+            "LEN:ok",
+            "FWD:first",
+            "FWD:second:small",
+            "FWD:first",
+            "FWD:second:large",
+            "S",
+            "z",
             "DONE",
         ),
+        compare_differs=("device-writes",),
+    ),
+    # The callee of an indirect call: reached through qemu_callback.
+    Case(
+        name="handler",
+        function_name="qemu_target_handler",
+        spec_name="serial_qemu_handler_patch.yaml",
+        expected_lines=(
+            "BOOT",
+            "BASE:before",
+            "BASE:after",
+            "BASE:replace",
+            "BASE:contract",
+            "BASE:short",
+            "BASE:tiny",
+            "BASE:pointer",
+            "BASE:dispatch",
+            "PATCH:handler",
+            "LEN:ok",
+            "LEN:ok",
+            "FWD:first",
+            "FWD:second:small",
+            "FWD:first",
+            "FWD:second:large",
+            "S",
+            "z",
+            "DONE",
+        ),
+        compare_differs=("device-writes",),
+    ),
+    # The caller: its lifted body reads qemu_callback and calls through it.
+    Case(
+        name="dispatch",
+        function_name="qemu_target_dispatch",
+        spec_name="serial_qemu_dispatch_patch.yaml",
+        expected_lines=(
+            "BOOT",
+            "BASE:before",
+            "BASE:after",
+            "BASE:replace",
+            "BASE:contract",
+            "BASE:short",
+            "BASE:tiny",
+            "BASE:pointer",
+            "PATCH:dispatch",
+            "BASE:dispatch",
+            "BASE:handler",
+            "LEN:ok",
+            "LEN:ok",
+            "FWD:first",
+            "FWD:second:small",
+            "FWD:first",
+            "FWD:second:large",
+            "S",
+            "z",
+            "DONE",
+        ),
+        compare_differs=("device-writes",),
+    ),
+    # Inserted code with a switch and string constants of its own; the
+    # transcript shows every arm.
+    Case(
+        name="switch",
+        # The helper's switch is compiled to a jump through a table.
+        static_not_run=("indirect-jump",),
+        function_name="qemu_target_replace",
+        spec_name="serial_qemu_switch_patch.yaml",
+        expected_lines=(
+            "BOOT",
+            "BASE:before",
+            "BASE:after",
+            "PATCH:switch:zero",
+            "PATCH:switch:one",
+            "PATCH:switch:two",
+            "PATCH:switch:three",
+            "PATCH:switch:four",
+            "PATCH:switch:other",
+            "BASE:contract",
+            "BASE:short",
+            "BASE:tiny",
+            "BASE:pointer",
+            "BASE:dispatch",
+            "BASE:handler",
+            "LEN:ok",
+            "LEN:ok",
+            "FWD:first",
+            "FWD:second:small",
+            "FWD:first",
+            "FWD:second:large",
+            "S",
+            "z",
+            "DONE",
+        ),
+        compare_differs=("device-writes",),
+    ),
+    # Inserted code that calls a compiler runtime helper the firmware does not
+    # have.  Rejected before the image is rewritten.
+    Case(
+        name="divide",
+        function_name="qemu_target_replace",
+        spec_name="serial_qemu_divide_patch.yaml",
+        expected_lines=(
+            "BOOT",
+            "BASE:before",
+            "BASE:after",
+            "PATCH:divide",
+            "BASE:contract",
+            "BASE:short",
+            "BASE:tiny",
+            "BASE:pointer",
+            "BASE:dispatch",
+            "BASE:handler",
+            "LEN:ok",
+            "LEN:ok",
+            "FWD:first",
+            "FWD:second:small",
+            "FWD:first",
+            "FWD:second:large",
+            "S",
+            "z",
+            "DONE",
+        ),
+        expect_reject="unresolved-dependency",
+    ),
+    # Inserted code with a writable variable of its own.  The reinsertion places
+    # code and read-only data only, so the variable would have no storage.
+    Case(
+        name="state",
+        function_name="qemu_target_replace",
+        spec_name="serial_qemu_state_patch.yaml",
+        expected_lines=(
+            "BOOT",
+            "BASE:before",
+            "BASE:after",
+            "PATCH:state",
+            "BASE:contract",
+            "BASE:short",
+            "BASE:tiny",
+            "BASE:pointer",
+            "BASE:dispatch",
+            "BASE:handler",
+            "LEN:ok",
+            "LEN:ok",
+            "FWD:first",
+            "FWD:second:small",
+            "FWD:first",
+            "FWD:second:large",
+            "S",
+            "z",
+            "DONE",
+        ),
+        expect_reject="writable-state",
+    ),
+    # The same with a non-zero initial value, which would also need a startup
+    # copy from flash.
+    Case(
+        name="initialized",
+        function_name="qemu_target_replace",
+        spec_name="serial_qemu_initialized_patch.yaml",
+        expected_lines=(
+            "BOOT",
+            "BASE:before",
+            "BASE:after",
+            "PATCH:initialized",
+            "BASE:contract",
+            "BASE:short",
+            "BASE:tiny",
+            "BASE:pointer",
+            "BASE:dispatch",
+            "BASE:handler",
+            "LEN:ok",
+            "LEN:ok",
+            "FWD:first",
+            "FWD:second:small",
+            "FWD:first",
+            "FWD:second:large",
+            "S",
+            "z",
+            "DONE",
+        ),
+        expect_reject="writable-state",
+    ),
+    # Validation corpus: input-restricting patches, one per way of rejecting.
+    # Each declares that way, and the comparison with the original then holds.
+    # Early return from a replacement body: a length over 16 gets the error value.
+    Case(
+        name="length",
+        function_name="qemu_target_length",
+        spec_name="serial_qemu_length_patch.yaml",
+        expected_lines=(
+            "BOOT",
+            "BASE:before",
+            "BASE:after",
+            "BASE:replace",
+            "BASE:contract",
+            "BASE:short",
+            "BASE:tiny",
+            "BASE:pointer",
+            "BASE:dispatch",
+            "BASE:handler",
+            "LEN:ok",
+            "LEN:error",
+            "FWD:first",
+            "FWD:second:small",
+            "FWD:first",
+            "FWD:second:large",
+            "S",
+            "z",
+            "DONE",
+        ),
+        compare={"arg_buffers": {0: 4}, "reject_returns": [0xFFFFFFFF]},
+    ),
+    # Skipped operation: the second call is not made for a value over 32.
+    Case(
+        name="forward",
+        function_name="qemu_target_forward",
+        spec_name="serial_qemu_forward_patch.yaml",
+        expected_lines=(
+            "BOOT",
+            "BASE:before",
+            "BASE:after",
+            "BASE:replace",
+            "BASE:contract",
+            "BASE:short",
+            "BASE:tiny",
+            "BASE:pointer",
+            "BASE:dispatch",
+            "BASE:handler",
+            "LEN:ok",
+            "LEN:ok",
+            "FWD:first",
+            "FWD:second:small",
+            "FWD:first",
+            "S",
+            "z",
+            "DONE",
+        ),
+        compare={"reject_skips": ["forward_second"]},
+    ),
+    # Call to a handler that does not return: the run ends at REJECT.
+    Case(
+        name="send",
+        function_name="qemu_target_send",
+        spec_name="serial_qemu_send_patch.yaml",
+        expected_lines=(
+            "BOOT",
+            "BASE:before",
+            "BASE:after",
+            "BASE:replace",
+            "BASE:contract",
+            "BASE:short",
+            "BASE:tiny",
+            "BASE:pointer",
+            "BASE:dispatch",
+            "BASE:handler",
+            "LEN:ok",
+            "LEN:ok",
+            "FWD:first",
+            "FWD:second:small",
+            "FWD:first",
+            "FWD:second:large",
+            "S",
+            "REJECT",
+        ),
+        compare={
+            "reject_handlers": ["qemu_reject"],
+            "mmio_regions": [list(UART_REGION)],
+        },
     ),
 )
 
@@ -199,6 +570,16 @@ BASELINE_LINES: tuple[str, ...] = (
     "BASE:short",
     "BASE:tiny",
     "BASE:pointer",
+    "BASE:dispatch",
+    "BASE:handler",
+    "LEN:ok",
+    "LEN:ok",
+    "FWD:first",
+    "FWD:second:small",
+    "FWD:first",
+    "FWD:second:large",
+    "S",
+    "z",
     "DONE",
 )
 
@@ -327,120 +708,6 @@ def detect_arm_bare_regions(path: Path) -> tuple[int, int, int, int, int]:
     return flash_start, flash_end, ram_start, ram_end, entry_point
 
 
-_LL_FUNCTION_HEADER_PATTERN = re.compile(
-    r"^define\s+(?:dso_local\s+)?(?:\w+\s+)*@(\w+)\(",
-)
-_LL_LINKAGE_KEYWORDS = re.compile(
-    r"^(?:private|internal|available_externally|linkonce(?:_odr)?"
-    r"|weak(?:_odr)?|common|appending|extern_weak|external)\s+",
-)
-
-
-def iter_function_definitions(content: str) -> Iterable[tuple[str, str, str]]:
-    pos = 0
-    while True:
-        start = content.find("define ", pos)
-        while start != -1 and start > 0 and content[start - 1] != "\n":
-            start = content.find("define ", start + len("define "))
-        if start == -1:
-            return
-
-        body_start = content.find("{", start)
-        if body_start == -1:
-            raise RuntimeError("Malformed LLVM IR: unterminated function header")
-
-        header = content[start:body_start]
-        header_match = _LL_FUNCTION_HEADER_PATTERN.match(header.strip())
-        if header_match is None:
-            raise RuntimeError(
-                "Malformed LLVM IR: could not extract function name from header:\n"
-                f"{header.strip()}"
-            )
-
-        depth = 1
-        cursor = body_start + 1
-        while cursor < len(content) and depth > 0:
-            char = content[cursor]
-            if char == "{":
-                depth += 1
-            elif char == "}":
-                depth -= 1
-            cursor += 1
-        if depth != 0:
-            raise RuntimeError(
-                f"Malformed LLVM IR: unterminated function body for {header_match.group(1)}"
-            )
-
-        yield header_match.group(1), header, content[start:cursor]
-        pos = cursor
-
-
-def extract_functions_from_llvm_ir(content: str) -> dict[str, str]:
-    """Split an LLVM IR module into one self-contained snippet per function.
-
-    Each snippet carries the module-level type defs, globals, external
-    declarations, attribute groups, and metadata, plus `declare`s for the
-    *other* functions defined in the module — so it can be compiled in
-    isolation by Patcherex2's clang invocation. Mirrors
-    Patcherex2/tools/patche_firmware.py:106–210 since that helper is not
-    part of the installed `patcherex2` package.
-    """
-    type_defs = re.findall(
-        r"^%[\w.]+ = type\s+(?:opaque|<?\{[^}]*\}>?).*$",
-        content,
-        re.MULTILINE,
-    )
-    global_vars = re.findall(
-        r"^@[\w.]+ = (?:private |internal |external |global )?(?:constant |global).*$",
-        content,
-        re.MULTILINE,
-    )
-    declarations = re.findall(
-        r"^declare.*?@\w+\([^)]*\).*?(?:\n|$)",
-        content,
-        re.MULTILINE | re.DOTALL,
-    )
-    attributes = re.findall(r"^attributes #\d+ = \{[^}]+\}", content, re.MULTILINE)
-    metadata = re.findall(r"^![\w.]+ = .*$", content, re.MULTILINE)
-
-    functions = tuple(iter_function_definitions(content))
-
-    local_decls: dict[str, str] = {}
-    for name, _, function_body in functions:
-        signature_match = re.match(
-            r"(define\s+(?:dso_local\s+)?(?:\w+\s+)*@\w+\([^)]*\)[^{]*)",
-            function_body,
-        )
-        if signature_match is None:
-            continue
-        body_match = re.match(
-            r"define\s+(?:dso_local\s+)?(.*?@\w+\([^)]*\))",
-            signature_match.group(1),
-        )
-        if body_match is None:
-            continue
-        body = _LL_LINKAGE_KEYWORDS.sub("", body_match.group(1))
-        local_decls[name] = f"declare {body}"
-
-    suffix = "\n\n" + "\n".join(attributes) + "\n\n" + "\n".join(metadata)
-
-    snippets: dict[str, str] = {}
-    for name, _, function_body in functions:
-        other_decls = [decl for fn, decl in local_decls.items() if fn != name]
-        prefix = (
-            "\n".join(type_defs)
-            + "\n\n"
-            + "\n".join(global_vars)
-            + "\n\n"
-            + "\n".join(declarations)
-            + "\n"
-            + "\n".join(other_decls)
-            + "\n\n"
-        )
-        snippets[name] = prefix + function_body + suffix
-    return snippets
-
-
 def write_lines(path: Path, lines: Iterable[str]) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -492,23 +759,29 @@ def repo_tool(repo_root: Path, build_type: str, tool_name: str) -> Path:
 PATCH_COMPILER_FLAGS = ("-fno-strict-aliasing", "-fwrapv", "-fno-pic")
 
 
+# `Case.expect_reject` values for a case stopped before the image is rewritten:
+# its inserted code references a symbol nothing provides, or owns a writable
+# global.
+UNRESOLVED_DEPENDENCY = "unresolved-dependency"
+WRITABLE_STATE = "writable-state"
+
+
 def patch_compiler_flags(opt_level: str) -> list[str]:
     return [*PATCH_COMPILER_FLAGS, f"-{opt_level}"]
 
 
 def patch_function_in_elf(
     original_elf: Path,
-    patched_ll: Path,
+    snippets: dict[str, str],
     target_function: str,
     rewritten_elf: Path,
     extra_compiler_flags: list[str],
     data_symbols: dict[str, int],
-) -> None:
-    snippets = extract_functions_from_llvm_ir(patched_ll.read_text(encoding="utf-8"))
+) -> tuple[list[patch_record.Applied], list[tuple[int, bytes]]]:
+    """Reinsert the snippets; return what each patch wrote and what else was written."""
     if target_function not in snippets:
         raise RuntimeError(
-            f"Patched LLVM IR {patched_ll} does not define {target_function}. "
-            f"Defines: {sorted(snippets)}"
+            f"Patched LLVM IR does not define {target_function}. Defines: {sorted(snippets)}"
         )
 
     flash_start, flash_end, ram_start, ram_end, entry_point = detect_arm_bare_regions(original_elf)
@@ -561,16 +834,88 @@ def patch_function_in_elf(
     # defaults is_thumb=False, which makes patcherex2 compile the patch with
     # -mno-thumb (ARM mode); the BLX from the Thumb trampoline then jumps
     # into ARM code and the M-profile core faults on the first instruction.
-    # Force Thumb for every inserted helper.
+    # Force Thumb for every inserted helper.  `snippets` is in insertion order:
+    # each helper is linked against the ones placed before it.
+    recorder = patch_record.Recorder()
     for name, code in snippets.items():
         if name == target_function:
             continue
-        p.patches.append(InsertFunctionPatch(name, code, is_thumb=True, compile_opts=compile_opts))
-    p.patches.append(
-        ModifyFunctionPatch(target_function, snippets[target_function], compile_opts=compile_opts)
+        patch = InsertFunctionPatch(name, code, is_thumb=True, compile_opts=compile_opts)
+        recorder.watch(patch, name, "inserted", code)
+        p.patches.append(patch)
+    patch = ModifyFunctionPatch(
+        target_function, snippets[target_function], compile_opts=compile_opts
     )
+    recorder.watch(patch, target_function, "target", snippets[target_function])
+    p.patches.append(patch)
     p.apply_patches()
     p.save_binary(str(rewritten_elf))
+    return recorder.applied, recorder.unattributed(p)
+
+
+def patch_compiler_info(compiler_flags: list[str], thumb: bool = True) -> dict:
+    """The compiler the reinsertion runs, for the patch record."""
+    # Patcherex2's "clang19" component runs `clang-19` from PATH.
+    path = shutil.which("clang-19")
+    version = None
+    if path:
+        result = subprocess.run([path, "--version"], capture_output=True, text=True, check=False)
+        version = result.stdout.splitlines()[0] if result.stdout else None
+    return {
+        "path": str(Path(path).resolve()) if path else None,
+        "version": version,
+        "target": patch_dependencies.PATCH_TARGET,
+        "flags": [*compiler_flags, "-mthumb" if thumb else "-mno-thumb"],
+    }
+
+
+def verify_patch_record(
+    original_elf: Path,
+    rewritten_elf: Path,
+    target_function: str,
+    applied: list[patch_record.Applied],
+    unattributed: list[tuple[int, bytes]],
+    compiler_flags: list[str],
+    dependencies_report_path: Path,
+    trampoline_report_path: Path,
+    record_path: Path,
+    bindings_report_path: Path,
+) -> dict[str, str]:
+    """Write the record of what the rewriter did and check it against the image."""
+    dependencies = json.loads(dependencies_report_path.read_text(encoding="utf-8"))
+    references = {row["function"]: row["undefined"] for row in dependencies["functions"]}
+    record = patch_record.build_record(
+        original_elf,
+        rewritten_elf,
+        target_function,
+        applied,
+        patch_compiler_info(compiler_flags),
+        references,
+        unattributed,
+    )
+    record_path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+    trampoline = json.loads(trampoline_report_path.read_text(encoding="utf-8"))
+    problems = patch_record.check_record(record, rewritten_elf, trampoline)
+    # Where the binding check found each entity, against where it was linked.
+    bindings = json.loads(bindings_report_path.read_text(encoding="utf-8"))
+    addresses = {name: int(value, 16) for name, value in bindings["absolute_symbols"].items()}
+    addresses.update({
+        row.get("symbol", row["name"]): int(row["address"], 16)
+        for row in bindings["bindings"]
+        if row["verdict"] == "match" and row.get("address")
+    })
+    function_names = {
+        row.get("symbol", row["name"]) for row in bindings["bindings"]
+        if row["kind"] == "function"
+    }
+    mismatched = patch_record.link_address_problems(record, addresses, function_names)
+    record_path.with_name("patch_record_check.json").write_text(
+        json.dumps({"problems": problems, "link_addresses": mismatched}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    if mismatched:
+        problems = {**problems, "link-address-mismatch": "; ".join(mismatched)}
+    return problems
 
 
 def original_object_addresses(bindings_path: Path) -> dict[str, int]:
@@ -597,6 +942,87 @@ def verify_bindings(
             for row in failed
         )
         raise RuntimeError(f"Binding check failed against {original_elf}: {details}")
+
+
+def verify_dependencies(
+    patched_ll: Path,
+    provided: set[str],
+    compiler_flags: list[str],
+    target_function: str,
+    report_path: Path,
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Split the patched module per function and check what it depends on.
+
+    Returns the snippets, in the order to insert them (helpers before their
+    callers, the target last), and the problems found, keyed by verdict:
+
+    - `writable-state`: the module defines a writable global.  The patch link
+      places code and read-only data only, and the runtime passes no
+      `insert_points`, so the global would have no storage in RAM and no
+      startup copy or clearing.
+    - `unresolved-dependency`: a symbol neither the original image nor an
+      earlier snippet defines, or inserted functions that reference each other.
+    """
+    tools = patch_dependencies.Tools.from_environment()
+    snippets = patch_dependencies.split_module(patched_ll, tools)
+    report = patch_dependencies.check_snippets(snippets, provided, tools, compiler_flags)
+    state = patch_dependencies.writable_state(patched_ll, tools, compiler_flags)
+    report["writable_state"] = state
+    order, stuck = patch_dependencies.insertion_order(report, target_function)
+    report["insertion_order"] = order
+    report["mutually_dependent"] = stuck
+    report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+
+    ordered = {name: snippets[name] for name in order}
+    if target_function in snippets:
+        ordered[target_function] = snippets[target_function]
+
+    problems: dict[str, str] = {}
+    if state:
+        problems[WRITABLE_STATE] = (
+            "the inserted code owns writable globals with no storage in RAM: "
+            + patch_dependencies.describe_state(state)
+        )
+    owned = {row["name"] for row in state}
+    missing = sorted(
+        {name for name in patch_dependencies.failures(report) if name not in owned} | set(stuck)
+    )
+    if missing:
+        problems[UNRESOLVED_DEPENDENCY] = (
+            "the inserted code references symbols nothing provides: " + ", ".join(missing)
+        )
+    return ordered, problems
+
+
+def verify_applied_bytes(
+    record_path: Path,
+    original_elf: Path,
+    rewritten_elf: Path,
+    snippets: dict[str, str],
+    report_path: Path,
+) -> list[str]:
+    """Compare the rewritten image with a fresh compile of each recorded function."""
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    report = check_applied_bytes.check_applied_bytes(
+        record, original_elf, rewritten_elf, snippets, patch_dependencies.Tools.from_environment()
+    )
+    report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    return check_applied_bytes.failures(report)
+
+
+def verify_static(
+    record_path: Path, original_elf: Path, rewritten_elf: Path, report_path: Path
+) -> tuple[list[str], list[str]]:
+    """Check what the inserted machine code does to state shared with its caller.
+
+    Returns the problems and the reasons a function could not be analyzed.  A
+    function that was not analyzed has not passed.
+    """
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    functions, target = check_static.functions_from_record(record)
+    report = check_static.check_static(original_elf, rewritten_elf, functions, target)
+    report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    return check_static.failures(report), check_static.not_run(report)
 
 
 def verify_trampoline(
@@ -664,7 +1090,7 @@ def main() -> int:
     summary_rows = ["case\tstatus\tartifact"]
     statuses: dict[str, str] = {}
 
-    for case in CASES:
+    def run_case(case: Case, context: dict) -> None:
         case_dir = output_dir / case.name
         case_dir.mkdir(parents=True, exist_ok=True)
 
@@ -678,6 +1104,11 @@ def main() -> int:
         bindings_path = case_dir / "bindings.manifest.json"
         bindings_report_path = case_dir / "bindings.json"
         trampoline_report_path = case_dir / "trampoline.json"
+        dependencies_report_path = case_dir / "dependencies.json"
+        patch_record_path = case_dir / "patch_record.json"
+        applied_bytes_path = case_dir / "applied_bytes.json"
+        static_path = case_dir / "static.json"
+        comparison_path = case_dir / "patch_symdiff.json"
 
         fixture_json_path = fixture_dir / f"{case.function_name}.json"
         if args.refresh_ghidra_fixtures:
@@ -746,19 +1177,85 @@ def main() -> int:
         if case.function_name not in original_symbols:
             raise RuntimeError(f"Original ELF is missing function symbol {case.function_name}.")
 
-        patch_function_in_elf(
-            firmware_elf,
+        data_symbols = original_object_addresses(bindings_path)
+        snippets, dependency_problems = verify_dependencies(
             patched_ll_path,
+            # What the patch linker defines: the image's functions, and the
+            # globals passed to it by address.  Other objects of the image are
+            # not visible to it.
+            {name for name, symbol in original_symbols.items() if symbol.kind == "STT_FUNC"}
+            | set(data_symbols),
+            compiler_flags,
+            case.function_name,
+            dependencies_report_path,
+        )
+        if dependency_problems:
+            if case.expect_reject not in dependency_problems:
+                raise RuntimeError(
+                    f"Dependency check failed for {case.name}: "
+                    f"{'; '.join(dependency_problems.values())} (see {dependencies_report_path})."
+                )
+            statuses[case.name] = f"rejected:{case.expect_reject}"
+            summary_rows.append(f"{case.name}\t{statuses[case.name]}\t-")
+            return
+        if case.expect_reject in (UNRESOLVED_DEPENDENCY, WRITABLE_STATE):
+            raise RuntimeError(
+                f"Case {case.name} should have been rejected for {case.expect_reject}; "
+                f"the dependency check found no problem (see {dependencies_report_path})."
+            )
+
+        applied, unattributed = patch_function_in_elf(
+            firmware_elf,
+            snippets,
             case.function_name,
             rewritten_elf_path,
             compiler_flags,
-            original_object_addresses(bindings_path),
+            data_symbols,
         )
         verify_bindings(bindings_path, firmware_elf, rewritten_elf_path, bindings_report_path)
 
         problems = verify_trampoline(
             firmware_elf, rewritten_elf_path, case.function_name, json_path, trampoline_report_path
         )
+        record_problems = verify_patch_record(
+            firmware_elf,
+            rewritten_elf_path,
+            case.function_name,
+            applied,
+            unattributed,
+            compiler_flags,
+            dependencies_report_path,
+            trampoline_report_path,
+            patch_record_path,
+            bindings_report_path,
+        )
+        if record_problems:
+            raise RuntimeError(
+                f"Patch record check failed for {case.name}: "
+                f"{'; '.join(f'{kind}: {detail}' for kind, detail in record_problems.items())} "
+                f"(see {patch_record_path})."
+            )
+
+        byte_problems = verify_applied_bytes(
+            patch_record_path, firmware_elf, rewritten_elf_path, snippets, applied_bytes_path
+        )
+        if byte_problems:
+            raise RuntimeError(
+                f"Applied bytes check failed for {case.name}: {', '.join(byte_problems)} "
+                f"(see {applied_bytes_path})."
+            )
+
+        static_problems, static_skipped = verify_static(
+            patch_record_path, firmware_elf, rewritten_elf_path, static_path
+        )
+        if static_problems or tuple(static_skipped) != case.static_not_run:
+            raise RuntimeError(
+                f"Static checks failed for {case.name}: "
+                f"{', '.join(static_problems) or 'not run: ' + (', '.join(static_skipped) or 'nothing')} "
+                f"(expected not run: {', '.join(case.static_not_run) or 'nothing'}; "
+                f"see {static_path})."
+            )
+
         if case.expect_reject is not None:
             if case.expect_reject not in problems:
                 raise RuntimeError(
@@ -768,7 +1265,7 @@ def main() -> int:
                 )
             statuses[case.name] = f"rejected:{case.expect_reject}"
             summary_rows.append(f"{case.name}\t{statuses[case.name]}\t{rewritten_elf_path}")
-            continue
+            return
         if problems:
             raise RuntimeError(
                 f"Reinsertion check failed for {case.name}: {', '.join(problems)} "
@@ -777,13 +1274,92 @@ def main() -> int:
 
         transcript_lines = run_qemu(args.qemu_system_arm, rewritten_elf_path)
         write_lines(transcript_path, transcript_lines)
+        context["runtime"] = {
+            "verdict": "tested" if transcript_lines == case.expected_lines else "failed",
+            "report": transcript_path.name,
+            "detail": "the UART transcript under QEMU "
+            + ("is the expected one" if transcript_lines == case.expected_lines
+               else "differs from the expected one"),
+        }
         if transcript_lines != case.expected_lines:
             raise RuntimeError(
                 f"Transcript mismatch for {case.name}.\nExpected: {case.expected_lines}\nObserved: {transcript_lines}"
             )
 
+        # The rewritten function against the original, in machine code.  The
+        # firmware is Thumb only.  The engine runs in its own environment.
+        declared = {"mmio_regions": [list(UART_REGION)], **(case.compare or {})}
+        comparison = patch_symdiff.compare_in_own_environment(
+            firmware_elf,
+            rewritten_elf_path,
+            original_symbols[case.function_name].addr,
+            True,
+            patch_symdiff.declaration_from_ir(
+                declared, patched_ll_path.read_text(encoding="utf-8"), case.function_name
+            ),
+            comparison_path,
+        )
+        differing = sorted(patch_symdiff.kinds_of(comparison))
+        if differing != sorted(case.compare_differs) or (
+            not differing and comparison["verdict"] != "proven"
+        ):
+            raise RuntimeError(
+                f"Binary comparison of {case.name}: {comparison['verdict']}, "
+                f"differs in {', '.join(differing) or 'nothing'} "
+                f"(declared: {', '.join(case.compare_differs) or 'nothing'}; "
+                f"see {comparison_path})."
+            )
+
         statuses[case.name] = "pass"
         summary_rows.append(f"{case.name}\tpass\t{rewritten_elf_path}")
+
+    firmware_digest = hashlib.sha256(firmware_elf.read_bytes()).hexdigest()
+    for case in CASES:
+        case_dir = output_dir / case.name
+        case_dir.mkdir(parents=True, exist_ok=True)
+        fixture = fixture_dir / f"{case.function_name}.json"
+        # What the suite knows about the case and no report holds.
+        context = {
+            "suite": "qemu-firmware-runtime",
+            "case": case.name,
+            "function": case.function_name,
+            "binary": str(firmware_elf),
+            "binary_sha256": firmware_digest,
+            "patch": case.spec_name,
+            "fixture": {
+                "path": str(fixture),
+                "hand_written": case.function_name in HAND_WRITTEN_FIXTURES,
+                "regenerated": bool(args.refresh_ghidra_fixtures),
+            },
+            "runtime": {"verdict": "not-run",
+                        "detail": "the case stopped before the image was run"},
+            "expected": f"rejected:{case.expect_reject}" if case.expect_reject else "pass",
+            "comparison": {"declared_differences": list(case.compare_differs)},
+        }
+        for stale in ("case.json", "validation.json", *evidence.REPORT_FILES):
+            (case_dir / stale).unlink(missing_ok=True)
+        try:
+            run_case(case, context)
+        finally:
+            # Written whatever happened, from the reports the case got to.
+            context["status"] = statuses.get(case.name, "error")
+            (case_dir / "case.json").write_text(
+                json.dumps(context, indent=2) + "\n", encoding="utf-8"
+            )
+            built = evidence.write_evidence(case_dir)
+        failed = [name for name, row in built["checks"].items() if row["verdict"] == "failed"]
+        if statuses[case.name] == "pass" and (
+            failed or built["checks"]["runtime-transcript"]["verdict"] != "tested"
+        ):
+            raise RuntimeError(
+                f"Case {case.name} passed but its evidence does not say so: "
+                f"failed {failed or 'nothing'} (see {case_dir / 'validation.json'})."
+            )
+        if statuses[case.name].startswith("rejected:") and not failed:
+            raise RuntimeError(
+                f"Case {case.name} was rejected but no check in its evidence failed "
+                f"(see {case_dir / 'validation.json'})."
+            )
 
     write_lines(output_dir / "patch-compiler-flags.txt", compiler_flags)
     summary_tsv = output_dir / "summary.tsv"

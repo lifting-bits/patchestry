@@ -1,0 +1,116 @@
+[
+  {
+    "name": "httpd-fun-0007ae8c",
+    "binary": "cve-2018-18732/ground-truth/binary",
+    "sha256": "69961109c2afabca1c858b0415afd8cf622a2ac9b52197b5fa1a7e99d32f75b4",
+    "fixture": "test/patchir-decomp/cve_2018_18732_fun_0007ae8c.json",
+    "function": "FUN_0007ae8c",
+    "compare": {
+      "arg_buffers": {
+        "0": 3,
+        "1": 3
+      },
+      "arg_ranges": {
+        "2": [
+          0,
+          8
+        ]
+      },
+      "max_seconds": 120
+    },
+    "expect": "pass"
+  },
+  {
+    "name": "httpd-fun-00067c0c",
+    "binary": "cve-2018-18732/ground-truth/binary",
+    "sha256": "69961109c2afabca1c858b0415afd8cf622a2ac9b52197b5fa1a7e99d32f75b4",
+    "fixture": "test/patchir-decomp/cve_2018_18732_fun_00067c0c.json",
+    "function": "FUN_00067c0c",
+    "compare": {
+      "max_seconds": 120
+    },
+    "expect": "pass"
+  },
+  {
+    "name": "httpd-form-get-upnp-lists",
+    "binary": "cve-2018-18732/ground-truth/binary",
+    "sha256": "69961109c2afabca1c858b0415afd8cf622a2ac9b52197b5fa1a7e99d32f75b4",
+    "fixture": "test/patchir-decomp/cve_2018_18732_form_get_upnp_lists.json",
+    "function": "formGetUpnpLists",
+    "expect": "pass"
+  },
+  {
+    "name": "cgibin-fun-00026534",
+    "binary": "cve-2016-6563/ground-truth/binary",
+    "sha256": "e9ce16a2f6ce2f1748a14bbc8dd5c3d95946c5eca88486c054f5dfbd1e746414",
+    "fixture": "test/patchir-decomp/cve_2016_6563_fun_00026534.json",
+    "function": "FUN_00026534",
+    "compare": {
+      "arg_buffers": {
+        "1": 4
+      },
+      "arg_suffixes": {
+        "1": "39393b"
+      },
+      "arg_ranges": {
+        "2": [
+          0,
+          4
+        ]
+      },
+      "follow_callees": [
+        "FUN_0002609c",
+        "FUN_0002619c"
+      ],
+      "max_seconds": 120
+    },
+    "expect": "pass"
+  },
+  {
+    "name": "cgibin-fun-00026534--changed-separator",
+    "binary": "cve-2016-6563/ground-truth/binary",
+    "sha256": "e9ce16a2f6ce2f1748a14bbc8dd5c3d95946c5eca88486c054f5dfbd1e746414",
+    "fixture": "test/patchir-decomp/cve_2016_6563_fun_00026534.json",
+    "function": "FUN_00026534",
+    "alter": {
+      "pattern": "(icmp ne i32 %[0-9]+), 59$",
+      "replacement": "\\1, 58"
+    },
+    "compare": {
+      "arg_buffers": {
+        "1": 4
+      },
+      "arg_suffixes": {
+        "1": "39393b"
+      },
+      "arg_ranges": {
+        "2": [
+          0,
+          4
+        ]
+      },
+      "follow_callees": [
+        "FUN_0002609c",
+        "FUN_0002619c"
+      ],
+      "max_seconds": 120
+    },
+    "expect": "rejected:differs"
+  },
+  {
+    "name": "cgibin-fun-00011708",
+    "binary": "cve-2016-6563/ground-truth/binary",
+    "sha256": "e9ce16a2f6ce2f1748a14bbc8dd5c3d95946c5eca88486c054f5dfbd1e746414",
+    "fixture": "test/patchir-decomp/cve_2016_6563_fun_00011708.json",
+    "function": "FUN_00011708",
+    "expect": "rejected:unresolved-dependency"
+  },
+  {
+    "name": "wolfssl-fun-000c4214",
+    "binary": "cve-2022-39173/ground-truth/binary",
+    "sha256": "0c874f7f14a7fed8274a83e32a7f9b57624700ed697e9fb72467c07e29e352a1",
+    "fixture": "test/patchir-decomp/cve_2022_39173_fun_000c4214.json",
+    "function": "FUN_000c4214",
+    "expect": "rejected:unsupported-image"
+  }
+]

@@ -162,6 +162,34 @@ PATCHESTRY_LLVM_PREFIX="$llvm_prefix" PATCHESTRY_LD_LLD="$ld_lld" \
   uv run --python "$python_bin" "${patcherex_env[@]}" \
   python "$repo_root/scripts/patch-runtime/test_check_trampoline.py"
 
+PATCHESTRY_LLVM_PREFIX="$llvm_prefix" \
+  uv run --python "$python_bin" "${patcherex_env[@]}" \
+  python "$repo_root/scripts/patch-runtime/test_patch_dependencies.py"
+
+PATCHESTRY_LLVM_PREFIX="$llvm_prefix" PATCHESTRY_LD_LLD="$ld_lld" \
+  uv run --python "$python_bin" "${patcherex_env[@]}" \
+  python "$repo_root/scripts/patch-runtime/test_patch_record.py"
+
+PATCHESTRY_LLVM_PREFIX="$llvm_prefix" PATCHESTRY_LD_LLD="$ld_lld" \
+  uv run --python "$python_bin" "${patcherex_env[@]}" \
+  python "$repo_root/scripts/patch-runtime/test_check_applied_bytes.py"
+
+PATCHESTRY_LLVM_PREFIX="$llvm_prefix" PATCHESTRY_LD_LLD="$ld_lld" \
+  uv run --python "$python_bin" "${patcherex_env[@]}" \
+  python "$repo_root/scripts/patch-runtime/test_linux_arm_images.py"
+
+PATCHESTRY_LLVM_PREFIX="$llvm_prefix" PATCHESTRY_LD_LLD="$ld_lld" \
+  uv run --python "$python_bin" "${patcherex_env[@]}" \
+  python "$repo_root/scripts/patch-runtime/test_check_abi.py"
+
+PATCHESTRY_LLVM_PREFIX="$llvm_prefix" PATCHESTRY_LD_LLD="$ld_lld" \
+  uv run --python "$python_bin" "${patcherex_env[@]}" \
+  python "$repo_root/scripts/patch-runtime/test_check_static.py"
+
+PATCHESTRY_LLVM_PREFIX="$llvm_prefix" PATCHESTRY_LD_LLD="$ld_lld" \
+  uv run --python "$python_bin" "${patcherex_env[@]}" \
+  python "$repo_root/scripts/patch-runtime/test_evidence.py"
+
 runtime_args=(
   "$repo_root/scripts/patch-runtime/qemu_firmware_runtime.py"
   --repo-root "$repo_root"
@@ -175,4 +203,7 @@ if [[ "$refresh_ghidra" == "1" ]]; then
   runtime_args+=(--refresh-ghidra-fixtures)
 fi
 
-uv run --python "$python_bin" "${patcherex_env[@]}" python "${runtime_args[@]}"
+# The runtime splits the patched module and checks its dependencies with the
+# LLVM tools in this directory.
+PATCHESTRY_LLVM_PREFIX="$llvm_prefix" PATCHESTRY_LD_LLD="$ld_lld" \
+  uv run --python "$python_bin" "${patcherex_env[@]}" python "${runtime_args[@]}"
