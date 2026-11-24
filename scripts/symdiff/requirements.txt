@@ -43,7 +43,7 @@ pyparsing==3.3.3
 pyvex==9.2.130
 rich==15.0.0
 # unicorn 2.0.1 imports pkg_resources, which setuptools 81 removed.
-setuptools==80.9.0
+setuptools==84.1.0
 smmap==5.0.3
 sortedcontainers==2.4.0
 sympy==1.14.0
