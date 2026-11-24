@@ -704,13 +704,19 @@ int main(int argc, char **argv) {
     }
 
     // On 32-bit ARM a _Bool result is the whole register.
-    if (unsigned widened = patchestry::codegen::widen_bool_results(*llvm_module)) {
+    const unsigned widened = patchestry::codegen::widen_bool_results(*llvm_module);
+    if (widened != 0) {
         LOG(INFO) << "Widened " << widened << " _Bool result(s) to the register width\n";
     }
 
     // A _Bool is passed zero-extended; ClangIR does not say so.
-    if (unsigned added = patchestry::codegen::add_bool_extension_attributes(*llvm_module)) {
+    const unsigned added = patchestry::codegen::add_bool_extension_attributes(*llvm_module);
+    if (added != 0) {
         LOG(INFO) << "Added zeroext to " << added << " _Bool argument(s) and result(s)\n";
+    }
+    if (widened + added != 0 && llvm::verifyModule(*llvm_module, &llvm::errs())) {
+        LOG(ERROR) << "LLVM module is invalid after the _Bool ABI rewrite\n";
+        return EXIT_FAILURE;
     }
 
     stripDeadInternalGlobals(*llvm_module);

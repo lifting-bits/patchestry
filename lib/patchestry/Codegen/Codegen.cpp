@@ -177,8 +177,12 @@ namespace patchestry::codegen {
             }
             // 32-bit ARM: a _Bool result is the whole register, and ClangIR
             // drops the `zeroext` of a _Bool argument.
-            (void) widen_bool_results(*llvm_mod);
-            (void) add_bool_extension_attributes(*llvm_mod);
+            unsigned rewritten  = widen_bool_results(*llvm_mod);
+            rewritten          += add_bool_extension_attributes(*llvm_mod);
+            if (rewritten != 0 && llvm::verifyModule(*llvm_mod, &llvm::errs())) {
+                LOG(ERROR) << "LLVM module is invalid after the _Bool ABI rewrite\n";
+                return false;
+            }
             if (!Serializer::SerializeToFile(llvm_mod.get(), options.output_prefix + ".ll")) {
                 return false;
             }

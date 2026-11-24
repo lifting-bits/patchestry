@@ -9,6 +9,7 @@
 
 #include <vector>
 
+#include <llvm/IR/AttributeMask.h>
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
@@ -16,6 +17,7 @@
 #include <llvm/IR/InstrTypes.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Module.h>
+#include <llvm/IR/Verifier.h>
 #include <llvm/TargetParser/Triple.h>
 
 namespace patchestry::codegen {
@@ -36,6 +38,17 @@ namespace patchestry::codegen {
                 || attributes.hasAttribute(llvm::Attribute::SExt);
         }
 
+        // The `musttail` call a return belongs to, if any.  LLVM allows only
+        // an optional bitcast of the call's result between the two.
+        inline llvm::CallInst *musttail_before(llvm::ReturnInst *ret) {
+            llvm::Instruction *previous = ret->getPrevNode();
+            if (previous != nullptr && llvm::isa< llvm::BitCastInst >(previous)) {
+                previous = previous->getPrevNode();
+            }
+            auto *call = llvm::dyn_cast_or_null< llvm::CallInst >(previous);
+            return call != nullptr && call->isMustTailCall() ? call : nullptr;
+        }
+
     } // namespace detail
 
     // On 32-bit ARM a function returns a `_Bool` in the whole of r0, and the
@@ -48,9 +61,20 @@ namespace patchestry::codegen {
     //
     // This gives every `i1`-returning function and call in the module an
     // `i32` result.  A definition returns its `i1` zero-extended, which the
-    // ABI requires of it anyway; a call compares the whole result with zero
-    // to get its `i1` back.  Functions and calls are rewritten together, so
-    // the two always agree on the type.
+    // ABI requires of it anyway, or sign-extended if its result says
+    // `signext`; a call compares the whole result with zero to get its `i1`
+    // back.  Functions and calls are rewritten together, so the two always
+    // agree on the type.
+    //
+    // A `musttail` call stays one.  The return that follows it, of the
+    // call's result or of `undef`, is in a function that is widened too, so
+    // it returns the wide result or a wide `undef` and nothing comes between
+    // the two.  A `musttail` call in any other position is not valid LLVM
+    // and is left for the verifier to reject; callers verify the module
+    // after this.
+    //
+    // Attributes that describe the old `i1` result are removed: its
+    // extension, a `range`, and `returned` on a parameter.
     //
     // It is done here, on the lowered module, and not in the C types: the
     // rule belongs to this one ABI (on x86-64 a `_Bool` result occupies al
@@ -69,9 +93,20 @@ namespace patchestry::codegen {
         auto widened_type          = [&](const llvm::FunctionType *type) {
             return llvm::FunctionType::get(wide, type->params(), type->isVarArg());
         };
-        auto without_result_extension = [&](llvm::AttributeList attributes) {
-            return attributes.removeRetAttribute(context, llvm::Attribute::ZExt)
-                .removeRetAttribute(context, llvm::Attribute::SExt);
+        // The attribute list of a function or call whose result went from
+        // `i1` to `i32`, with `parameters` parameters or arguments.
+        auto for_wide_result = [&](llvm::AttributeList attributes, unsigned parameters) {
+            llvm::AttributeMask stale =
+                llvm::AttributeFuncs::typeIncompatible(wide, attributes.getRetAttrs());
+            stale.addAttribute(llvm::Attribute::ZExt);
+            stale.addAttribute(llvm::Attribute::SExt);
+            attributes = attributes.removeRetAttributes(context, stale);
+            // A `returned` parameter had the old result type.
+            for (unsigned index = 0; index < parameters; ++index) {
+                attributes =
+                    attributes.removeParamAttribute(context, index, llvm::Attribute::Returned);
+            }
+            return attributes;
         };
 
         unsigned changed = 0;
@@ -88,8 +123,13 @@ namespace patchestry::codegen {
                 old_function->getAddressSpace()
             );
             module.getFunctionList().insert(old_function->getIterator(), function);
+            const bool is_signed = old_function->hasRetAttribute(llvm::Attribute::SExt);
             function->copyAttributesFrom(old_function);
-            function->setAttributes(without_result_extension(function->getAttributes()));
+            function->setAttributes(
+                for_wide_result(
+                    function->getAttributes(), static_cast< unsigned >(function->arg_size())
+                )
+            );
             function->setComdat(old_function->getComdat());
             function->copyMetadata(old_function, 0);
             function->takeName(old_function);
@@ -106,8 +146,17 @@ namespace patchestry::codegen {
                 if (ret == nullptr || ret->getReturnValue() == nullptr) {
                     continue;
                 }
+                // Nothing may come between a `musttail` call and its return;
+                // the call rewrite below gives this return its wide value.
+                if (detail::musttail_before(ret) != nullptr) {
+                    continue;
+                }
+                llvm::Value *narrow = ret->getReturnValue();
                 ret->setOperand(
-                    0, new llvm::ZExtInst(ret->getReturnValue(), wide, "", ret->getIterator())
+                    0, is_signed ? static_cast< llvm::Value * >(new llvm::SExtInst(
+                                       narrow, wide, "", ret->getIterator()
+                                   ))
+                                 : new llvm::ZExtInst(narrow, wide, "", ret->getIterator())
                 );
             }
 
@@ -144,14 +193,41 @@ namespace patchestry::codegen {
                 arguments, bundles, "", old_call->getIterator()
             );
             call->setCallingConv(old_call->getCallingConv());
-            call->setAttributes(without_result_extension(old_call->getAttributes()));
+            call->setAttributes(for_wide_result(old_call->getAttributes(), call->arg_size()));
             call->setDebugLoc(old_call->getDebugLoc());
-            // A comparison follows the call, so it can no longer be a
-            // guaranteed tail call.
-            call->setTailCallKind(
-                old_call->isMustTailCall() ? llvm::CallInst::TCK_Tail
-                                           : old_call->getTailCallKind()
-            );
+            call->setTailCallKind(old_call->getTailCallKind());
+
+            // A `musttail` call is followed by a return of its result, of a
+            // bitcast of its result, or of `undef`.  The function rewrite
+            // above left that return alone: give it the wide equivalent.
+            if (old_call->isMustTailCall()) {
+                llvm::Instruction *next = old_call->getNextNode();
+                if (auto *bitcast = llvm::dyn_cast_or_null< llvm::BitCastInst >(next);
+                    bitcast != nullptr && bitcast->getOperand(0) == old_call)
+                {
+                    next = bitcast->getNextNode();
+                    bitcast->replaceAllUsesWith(old_call);
+                    bitcast->eraseFromParent();
+                }
+                auto *ret             = llvm::dyn_cast_or_null< llvm::ReturnInst >(next);
+                llvm::Value *returned = ret != nullptr ? ret->getReturnValue() : nullptr;
+                if (returned == old_call) {
+                    ret->setOperand(0, call);
+                } else if (returned != nullptr && llvm::isa< llvm::PoisonValue >(returned)) {
+                    ret->setOperand(0, llvm::PoisonValue::get(wide));
+                } else if (returned != nullptr && llvm::isa< llvm::UndefValue >(returned)) {
+                    ret->setOperand(0, llvm::UndefValue::get(wide));
+                }
+                if (old_call->use_empty()) {
+                    call->takeName(old_call);
+                    old_call->eraseFromParent();
+                    ++changed;
+                    continue;
+                }
+                // Its result is used some other way, which LLVM does not
+                // allow.  The comparison below keeps the types right and the
+                // verifier rejects the call.
+            }
 
             auto *truth = new llvm::ICmpInst(
                 old_call->getIterator(), llvm::ICmpInst::ICMP_NE, call,

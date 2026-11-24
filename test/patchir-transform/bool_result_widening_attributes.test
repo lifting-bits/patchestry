@@ -1,0 +1,77 @@
+// On 32-bit ARM an `i1` result is widened to `i32` in the LLVM module.  The
+// rewrite must leave a valid module and keep what the old result promised.
+//
+// RUN: %patchir-cir2llvm -S -target arm-unknown-linux-gnueabihf %s -o %t.ll >> /dev/null 2>&1
+// RUN: %file-check -vv %s --input-file %t.ll
+//
+// The tool verifies the module after the rewrite and fails if it is invalid,
+// so a zero exit above also means the output passes the LLVM verifier.
+//
+// A `range` on the `i1` result does not fit an `i32` and is removed.
+// CHECK-LABEL: define i32 @ranged(i32 %0)
+// CHECK: ret i32
+//
+// So is `returned` on an `i1` parameter: it no longer has the result's type.
+// CHECK-LABEL: define i32 @passthrough(i1 zeroext %0)
+// CHECK: zext i1 %0 to i32
+//
+// A `signext` result is sign-extended, as its callers were promised.
+// CHECK-LABEL: define i32 @all_ones()
+// CHECK: sext i1 true to i32
+//
+// CHECK-LABEL: declare i32 @next(i32)
+//
+// A `musttail` call stays one: the wide result is returned as it is.
+// CHECK-LABEL: define i32 @trampoline(i32 %0)
+// CHECK-NEXT: [[R:%.*]] = musttail call i32 @next(i32 %0)
+// CHECK-NEXT: ret i32 [[R]]
+//
+// So does one followed by a return of `undef`, which LLVM also allows.
+// CHECK-LABEL: define i32 @trampoline_undef(i32 %0)
+// CHECK-NEXT: musttail call i32 @next(i32 %0)
+// CHECK-NEXT: ret i32 undef
+//
+// An ordinary call tests the whole result.
+// CHECK-LABEL: define i32 @user(i32 %0)
+// CHECK: [[C:%.*]] = call i32 @next(i32 %0)
+// CHECK: icmp ne i32 [[C]], 0
+//
+// CHECK-NOT: range(
+// CHECK-NOT: returned
+// CHECK-NOT: signext
+//
+// Other targets are not rewritten.
+// RUN: %patchir-cir2llvm -S -target x86_64-unknown-linux-gnu %s -o %t.x64.ll >> /dev/null 2>&1
+// RUN: %file-check -vv -check-prefix=X64 %s --input-file %t.x64.ll
+// X64-DAG: define range(i1 0, -1) i1 @ranged(i32 %0)
+// X64-DAG: define signext i1 @all_ones()
+// X64-DAG: musttail call i1 @next(i32 %0)
+
+module {
+  llvm.func @ranged(%arg0: i32) -> (i1 {llvm.range = #llvm.constant_range<i1, 0, -1>}) {
+    %c = llvm.mlir.constant(false) : i1
+    llvm.return %c : i1
+  }
+  llvm.func @passthrough(%arg0: i1 {llvm.returned}) -> i1 {
+    llvm.return %arg0 : i1
+  }
+  llvm.func @all_ones() -> (i1 {llvm.signext}) {
+    %c = llvm.mlir.constant(true) : i1
+    llvm.return %c : i1
+  }
+  llvm.func @next(i32) -> i1
+  llvm.func @trampoline(%arg0: i32) -> i1 {
+    %r = llvm.call musttail @next(%arg0) : (i32) -> i1
+    llvm.return %r : i1
+  }
+  llvm.func @trampoline_undef(%arg0: i32) -> i1 {
+    %u = llvm.mlir.undef : i1
+    %r = llvm.call musttail @next(%arg0) : (i32) -> i1
+    llvm.return %u : i1
+  }
+  llvm.func @user(%arg0: i32) -> i32 {
+    %r = llvm.call @next(%arg0) : (i32) -> i1
+    %z = llvm.zext %r : i1 to i32
+    llvm.return %z : i32
+  }
+}
