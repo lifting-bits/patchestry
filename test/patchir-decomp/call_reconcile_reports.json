@@ -1,0 +1,147 @@
+// Every way the lifter reconciles a call site with a disagreeing declaration
+// is reported.  By default the reports are warnings and the lift completes;
+// under -strict each one is an error and nothing is lowered.
+//
+//   ext_short(a)            declared (int, int): one zero argument synthesized
+//   ext_extra(a, b, 42)     declared (int, int): declaration promoted to variadic
+//   ext_void(a) -> int      declared void:       return type taken from the call
+//   ext_bad(a, <bad>, b)    one argument cannot be built: the call is dropped,
+//                           not emitted with `b` shifted into parameter 1
+//   EXTERNAL:0000dead(a)    unknown callee: replaced by __patchestry_error
+//
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-cir -print-tu -output %t > %t.log 2>&1
+// RUN: %file-check -vv -check-prefix=WARN %s --input-file %t.log
+// RUN: %file-check -vv -check-prefix=C %s --input-file %t.c
+// RUN: not %patchir-decomp -input %t.json -emit-cir -strict -output %t.strict > %t.strict.log 2>&1
+// RUN: %file-check -vv -check-prefix=ERR %s --input-file %t.strict.log
+// RUN: test ! -e %t.strict.cir
+//
+// WARN-DAG: Diag Warning: {{.*}}lossy lift [arg-synthesized]: call to 'ext_short' (operation 'call_short') in function 'call_reconcile_reports': 1 argument(s) were recovered but the declaration requires 2; the missing ones are filled with zero
+// WARN-DAG: Diag Warning: {{.*}}lossy lift [call-variadic-promoted]: call to 'ext_extra' (operation 'call_extra') in function 'call_reconcile_reports': 3 args but the declaration has 2 params; declaration promoted to variadic
+// WARN-DAG: Diag Warning: {{.*}}lossy lift [call-prototype-rebuilt]: call to 'ext_void' (operation 'call_void') in function 'call_reconcile_reports': declared return type void replaced by call-site type 'unsigned int'
+// WARN-DAG: Diag Warning: {{.*}}lossy lift [op-dropped]: CALL operation 'call_bad' in function 'call_reconcile_reports' produced no statement
+// WARN-DAG: Diag Warning: {{.*}}lossy lift [error-placeholder]: an operation in function 'call_reconcile_reports' could not be lifted and is replaced with __patchestry_error("missing_call_EXTERNAL_0000dead")
+// WARN-NOT: Diag Error
+//
+// C-DAG: ext_short(a, 0U)
+// C-DAG: ext_extra(a, b, 42U)
+// C-DAG: ext_void(a)
+// C-DAG: __patchestry_error("missing_call_EXTERNAL_0000dead")
+// C-NOT: ext_bad(a
+//
+// ERR-DAG: Diag Error: {{.*}}lossy lift [arg-synthesized]
+// ERR-DAG: Diag Error: {{.*}}lossy lift [call-variadic-promoted]
+// ERR-DAG: Diag Error: {{.*}}lossy lift [call-prototype-rebuilt]
+// ERR-DAG: Diag Error: {{.*}}lossy lift [op-dropped]
+// ERR-DAG: Diag Error: {{.*}}lossy lift [error-placeholder]
+// ERR: Skipping code generation due to prior diagnostics errors
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "call_reconcile_reports",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["type_int", "type_int"]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "p0": { "mnemonic": "DECLARE_PARAMETER", "name": "a", "type": "type_int", "kind": "parameter", "index": 0 },
+            "p1": { "mnemonic": "DECLARE_PARAMETER", "name": "b", "type": "type_int", "kind": "parameter", "index": 1 },
+            "local0": { "mnemonic": "DECLARE_LOCAL", "kind": "local", "name": "result", "type": "type_int" },
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:10000000:0:basic" }
+          },
+          "ordered_operations": ["p0", "p1", "local0", "br"]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "call_short": {
+              "mnemonic": "CALL",
+              "has_return_value": false,
+              "target": { "kind": "function", "function": "EXTERNAL:00000001", "is_variadic": false, "is_noreturn": false },
+              "inputs": [
+                { "type": "type_int", "kind": "parameter", "operation": "p0" }
+              ]
+            },
+            "call_extra": {
+              "mnemonic": "CALL",
+              "has_return_value": false,
+              "target": { "kind": "function", "function": "EXTERNAL:00000002", "is_variadic": false, "is_noreturn": false },
+              "inputs": [
+                { "type": "type_int", "kind": "parameter", "operation": "p0" },
+                { "type": "type_int", "kind": "parameter", "operation": "p1" },
+                { "type": "type_int", "kind": "constant", "value": 42 }
+              ]
+            },
+            "call_void": {
+              "mnemonic": "CALL",
+              "type": "type_int",
+              "has_return_value": true,
+              "output": { "kind": "local", "operation": "local0" },
+              "target": { "kind": "function", "function": "EXTERNAL:00000003", "is_variadic": false, "is_noreturn": false },
+              "inputs": [
+                { "type": "type_int", "kind": "parameter", "operation": "p0" }
+              ]
+            },
+            "call_bad": {
+              "mnemonic": "CALL",
+              "has_return_value": false,
+              "target": { "kind": "function", "function": "EXTERNAL:00000004", "is_variadic": false, "is_noreturn": false },
+              "inputs": [
+                { "type": "type_int", "kind": "parameter", "operation": "p0" },
+                { "type": "type_int", "kind": "local", "operation": "no_such_operation" },
+                { "type": "type_int", "kind": "parameter", "operation": "p1" }
+              ]
+            },
+            "call_missing": {
+              "mnemonic": "CALL",
+              "has_return_value": false,
+              "target": { "kind": "function", "function": "EXTERNAL:0000dead", "is_variadic": false, "is_noreturn": false },
+              "inputs": [
+                { "type": "type_int", "kind": "parameter", "operation": "p0" }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": []
+            }
+          },
+          "ordered_operations": ["call_short", "call_extra", "call_void", "call_bad", "call_missing", "ret"]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    },
+    "EXTERNAL:00000001": {
+      "name": "ext_short",
+      "is_intrinsic": false,
+      "type": { "return_type": "type_void", "is_variadic": false, "is_noreturn": false, "parameter_types": ["type_int", "type_int"] }
+    },
+    "EXTERNAL:00000002": {
+      "name": "ext_extra",
+      "is_intrinsic": false,
+      "type": { "return_type": "type_void", "is_variadic": false, "is_noreturn": false, "parameter_types": ["type_int", "type_int"] }
+    },
+    "EXTERNAL:00000003": {
+      "name": "ext_void",
+      "is_intrinsic": false,
+      "type": { "return_type": "type_void", "is_variadic": false, "is_noreturn": false, "parameter_types": ["type_int"] }
+    },
+    "EXTERNAL:00000004": {
+      "name": "ext_bad",
+      "is_intrinsic": false,
+      "type": { "return_type": "type_void", "is_variadic": false, "is_noreturn": false, "parameter_types": ["type_int", "type_int", "type_int"] }
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": { "name": "unsigned int", "size": 4, "kind": "integer" },
+    "type_void": { "name": "void", "size": 0, "kind": "void" }
+  }
+}

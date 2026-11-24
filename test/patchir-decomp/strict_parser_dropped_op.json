@@ -1,0 +1,64 @@
+// An operation the JSON parser rejects never reaches the operation builders:
+// its key stays in `ordered_operations` but the operation itself is gone.  The
+// lifter reports that as a dropped operation, a warning by default and an
+// error under `-strict`.  The rejected operation here has a mnemonic the
+// parser does not know (MULTIEQUAL).
+//
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-cir -output %t > %t.log 2>&1
+// RUN: %file-check -vv -check-prefix=WARN %s --input-file %t.log
+// RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
+// RUN: not %patchir-decomp -input %t.json -emit-cir -strict -output %t.strict > %t.strict.log 2>&1
+// RUN: %file-check -vv -check-prefix=ERR %s --input-file %t.strict.log
+// RUN: test ! -e %t.strict.cir
+//
+// WARN: Diag Warning: {{.*}}lossy lift [op-dropped]: operation 'phi' in block 'ram:1b000000:0:basic' of function 'strict_parser_dropped_op' is listed in ordered_operations but was not read: unsupported mnemonic 'MULTIEQUAL'
+// WARN-NOT: Diag Error
+// CIR: cir.func{{.*}}@strict_parser_dropped_op
+// ERR: Diag Error: {{.*}}lossy lift [op-dropped]: operation 'phi' in block 'ram:1b000000:0:basic' of function 'strict_parser_dropped_op' is listed in ordered_operations but was not read: unsupported mnemonic 'MULTIEQUAL'
+// ERR: Skipping code generation due to prior diagnostics errors
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:1b000000": {
+      "name": "strict_parser_dropped_op",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["type_int"]
+      },
+      "basic_blocks": {
+        "ram:1b000000:entry": {
+          "operations": {
+            "p0": { "mnemonic": "DECLARE_PARAMETER", "name": "a", "type": "type_int", "kind": "parameter", "index": 0 },
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:1b000000:0:basic" }
+          },
+          "ordered_operations": ["p0", "br"]
+        },
+        "ram:1b000000:0:basic": {
+          "operations": {
+            "phi": {
+              "mnemonic": "MULTIEQUAL",
+              "inputs": []
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": []
+            }
+          },
+          "ordered_operations": ["phi", "ret"]
+        }
+      },
+      "entry_block": "ram:1b000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": { "name": "unsigned int", "size": 4, "kind": "integer" },
+    "type_void": { "name": "void", "size": 0, "kind": "void" }
+  }
+}
