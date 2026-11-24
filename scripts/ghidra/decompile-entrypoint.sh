@@ -65,6 +65,12 @@ Options:
       --no-repair-function-boundaries (or --repair-function-boundaries=off)
       to disable. Forwarded to PatchestryDecompileFunctions.
 
+  --emit-instructions
+      Add a per-function `instructions` map to the JSON: for every
+      instruction in the body, keyed by address, the disassembly text,
+      the encoded length and the raw P-Code strings. Default: off.
+      Forwarded to PatchestryDecompileFunctions.
+
 Examples:
   ./decompile-entrypoint.sh --input /path/to/file --command list-functions --output /path/to/output.json
   ./decompile-entrypoint.sh --input /path/to/file --command decompile --function main --output /path/to/output.json
@@ -146,6 +152,9 @@ function parse_args {
                 SCRIPT_EXTRA_ARGS+=("--no-repair-function-boundaries")
                 ;;
             --repair-function-boundaries=*)
+                SCRIPT_EXTRA_ARGS+=("$1")
+                ;;
+            --emit-instructions)
                 SCRIPT_EXTRA_ARGS+=("$1")
                 ;;
             *)

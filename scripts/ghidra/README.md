@@ -32,6 +32,19 @@ The script also list all functions in the binary using the `--list-functions` fl
 
 ```sh ./decompile-headless.sh --input <binary> --list-functions --output <output-file> ```
 
+`--emit-instructions` adds a per-function `instructions` map to the JSON: for
+every instruction in the body, keyed by address, the disassembly text, the
+encoded length and the raw P-Code, one string per op with register names
+(`RSP = INT_SUB RSP, 0x8:8`, `STORE ram, RSP, u_4f900:8`). Constant operands
+use `0x<value>:<size>` with size in bytes; `CALLOTHER` selectors use the
+SLEIGH userop name when known, otherwise the sized numeric ID. `length` is
+the parsed encoded byte length, even when the listing length is overridden.
+Raw P-Code excludes flow overrides and can therefore differ from the
+decompiler's high P-Code. It is off by default;
+`patchir-decomp` ignores the key, the LLM decompilation stage reads it.
+
+```sh ./decompile-headless.sh --input <binary> --function <function-name> --output <output-file> --emit-instructions ```
+
 ## Running Patchestry via Ghidra GUI
 
 1. Ensure Patchestry is available via PATH:

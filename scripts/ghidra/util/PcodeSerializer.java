@@ -356,6 +356,10 @@ public class PcodeSerializer {
 		// Mirrors --[no-]repair-function-boundaries: suppresses TAIL_CALL
 		// rewrites and boundary_repairs even if prior state survives.
 		private boolean repairFunctionBoundaries = true;
+
+		// --emit-instructions (default off): add a per-function `instructions`
+		// map (disassembly text, length and raw P-Code per instruction).
+		private boolean emitInstructions = false;
 		
 		// Sometimes we need to arrange for some operations to exist prior to
 		// another one, e.g. if there is a `CALL foo, SP` that decompiles to
@@ -486,6 +490,11 @@ public class PcodeSerializer {
 		// See --[no-]repair-function-boundaries.
 		public void setRepairFunctionBoundaries(boolean enabled) {
 			this.repairFunctionBoundaries = enabled;
+		}
+
+		// See --emit-instructions.
+		public void setEmitInstructions(boolean enabled) {
+			this.emitInstructions = enabled;
 		}
 
 		// Resolve the effective Tier 2 enablement from the CLI mode and the
@@ -5750,6 +5759,9 @@ public class PcodeSerializer {
 				writer.endObject();
 			}
 			serializeAddressRanges(functionToSerialize);
+			if (emitInstructions) {
+				serializeInstructions(functionToSerialize);
+			}
 
 			// If we have a high P-Code function, then serialize the blocks.
 			if (highFunction != null) {
@@ -5900,7 +5912,94 @@ public class PcodeSerializer {
 			}
 			writer.endArray();
 		}
-		
+
+		// Opt-in (--emit-instructions): the listing's view of the function
+		// body, one entry per instruction keyed by address, in address order.
+		// `text` is Ghidra's disassembly rendering, `length` the encoded size
+		// in bytes and `pcode` the raw (low) P-Code of the instruction, one
+		// string per op with register names (see renderPcodeOp). Emitted
+		// next to address_ranges so it is present even when the decompiler
+		// produced no high function. The C++ lifter ignores the key; it is
+		// the machine-level input for the out-of-process LLM decompilation
+		// stage, beside the high P-Code.
+		void serializeInstructions(Function function) throws Exception {
+			Language language = currentProgram.getLanguage();
+			writer.name("instructions").beginObject();
+			AddressSetView body = function.getBody();
+			if (body != null && !body.isEmpty()) {
+				InstructionIterator iter =
+					currentProgram.getListing().getInstructions(body, true);
+				while (iter.hasNext()) {
+					Instruction insn = iter.next();
+					writer.name(label(insn.getMinAddress())).beginObject();
+					writer.name("text").value(insn.toString());
+					writer.name("length").value(insn.getParsedLength());
+					writer.name("pcode").beginArray();
+					// Deliberately export raw semantics, without flow overrides.
+					for (PcodeOp op : insn.getPcode()) {
+						writer.value(renderPcodeOp(op, language));
+					}
+					writer.endArray();
+					writer.endObject();
+				}
+			}
+			writer.endObject();
+		}
+
+		// `r0 = INT_ADD r0, 0x1:4` rather than PcodeOp.toString()'s
+		// `(register, 0x20, 4) INT_ADD (register, 0x20, 4) , (const, 0x1, 4)`.
+		// Varnode.toString(Language) names registers, spells uniques as
+		// `u_<offset>:<size>`, constants as `0x<value>` and other memory as
+		// `A_<address>:<size>`; an LLM reader does not have to know the
+		// register file layout. Append constant sizes in bytes to preserve
+		// operand widths (for example, STORE of 0x0:1 versus 0x0:8). The
+		// first input of LOAD and STORE is the address space id as a
+		// constant; it prints as the space name (`STORE ram, sp, r0`), the
+		// way Ghidra's own listing formatter resolves it. CALLOTHER
+		// selectors use SLEIGH userop names, with a sized numeric fallback.
+		static String renderPcodeOp(PcodeOp op, Language language) {
+			StringBuilder sb = new StringBuilder();
+			Varnode output = op.getOutput();
+			if (output != null) {
+				sb.append(output.toString(language)).append(" = ");
+			}
+			int opcode = op.getOpcode();
+			sb.append(op.getMnemonic());
+			Varnode[] inputs = op.getInputs();
+			for (int i = 0; i < inputs.length; ++i) {
+				sb.append(i == 0 ? " " : ", ");
+				Varnode input = inputs[i];
+				if (input == null) {
+					sb.append("null");
+					continue;
+				}
+				if (i == 0 && (opcode == PcodeOp.LOAD || opcode == PcodeOp.STORE)
+						&& input.isConstant()) {
+					AddressSpace space = language.getAddressFactory()
+						.getAddressSpace((int) input.getOffset());
+					if (space != null) {
+						sb.append(space.getName());
+						continue;
+					}
+				}
+				if (i == 0 && opcode == PcodeOp.CALLOTHER && input.isConstant()) {
+					long index = input.getOffset();
+					if (index >= 0 && index < language.getNumberOfUserDefinedOpNames()) {
+						String name = language.getUserDefinedOpName((int) index);
+						if (name != null && !name.isEmpty()) {
+							sb.append(name);
+							continue;
+						}
+					}
+				}
+				sb.append(input.toString(language));
+				if (input.isConstant()) {
+					sb.append(":").append(input.getSize());
+				}
+			}
+			return sb.toString();
+		}
+
 		// Skip entries at function-entry addresses — emitting both as
 		// function and global trips the lifter's CIRGen FuncOp assertion (#226).
 		void serializeGlobals() throws Exception {
