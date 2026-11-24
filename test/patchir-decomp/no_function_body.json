@@ -1,0 +1,49 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: not %patchir-decomp -input %t.json -emit-llvm -print-tu -output %t > %t.log 2>&1
+// RUN: %file-check -vv -check-prefix=ERR %s --input-file %t.log
+// RUN: test ! -e %t.ll
+// RUN: test ! -e %t.c
+//
+// Ghidra can export a function it failed to decompile: name, prototype and
+// address ranges, but no basic blocks.  The lifter used to accept that, exit
+// 0 and write a module holding only a declaration, so the failure surfaced
+// later as a missing symbol.  With no function body anywhere in the input it
+// now fails and names the functions that have code but no body.
+//
+// `helper` is a callee: it has ranges and no blocks in every export, and is
+// listed too because nothing else here has a body.  Inputs that carry only
+// declarations without address ranges still lift (return_storage_wider.json).
+//
+// ERR: Nothing to lift: no function in the input has basic blocks.
+// ERR-SAME: 'helper' (ram:00020000), 'target' (ram:00010000)
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:v7",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:00010000": {
+      "name": "target",
+      "is_intrinsic": false,
+      "entry_point": "ram:00010000",
+      "address_ranges": [{ "start": "ram:00010000", "end": "ram:0001003f" }],
+      "type": {
+        "return_type": "t_int", "is_variadic": false, "is_noreturn": false,
+        "parameter_types": ["t_int"]
+      }
+    },
+    "ram:00020000": {
+      "name": "helper",
+      "is_intrinsic": false,
+      "entry_point": "ram:00020000",
+      "address_ranges": [{ "start": "ram:00020000", "end": "ram:0002000f" }],
+      "type": {
+        "return_type": "t_int", "is_variadic": false, "is_noreturn": false,
+        "parameter_types": []
+      }
+    }
+  },
+  "globals": {},
+  "types": {
+    "t_int": { "is_signed": true, "name": "int", "size": 4, "kind": "integer" }
+  }
+}

@@ -25,6 +25,9 @@
 
 namespace patchestry::ast {
 
+    extern std::optional< Operation >
+    operationFromKey(const Function &function, const std::string &lookup_key); // NOLINT
+
     namespace {
 
         bool starts_with(std::string_view value, std::string_view prefix) {
@@ -639,6 +642,47 @@ namespace patchestry::ast {
             return std::nullopt;
         }
 
+        // A coprocessor register operand (CRn, CRm, CRd) names a register; it
+        // is not a value.  SLEIGH passes the register varnode itself, and the
+        // decompiler, seeing a register read that nothing defines, exports it
+        // as a live-in local stored in `cr<N>` (`in_cr13`).  Lifted as that
+        // local, the operand is an uninitialised variable where the
+        // instruction encodes N.  Give back the constant N for such an
+        // operand; anything else is returned unchanged.
+        ghidra::Varnode coproc_register_operand(
+            const ghidra::Function &fn, const ghidra::Varnode &operand
+        ) {
+            if (operand.kind != ghidra::Varnode::VARNODE_LOCAL || !operand.operation) {
+                return operand;
+            }
+            auto declaration = operationFromKey(fn, *operand.operation);
+            if (!declaration || !declaration->storage || declaration->storage->size() != 1U) {
+                return operand;
+            }
+            const auto &piece = declaration->storage->front();
+            const std::string &name = piece.register_name;
+            if (piece.kind != "register" || name.size() < 3U || name.size() > 4U
+                || name.compare(0, 2, "cr") != 0)
+            {
+                return operand;
+            }
+            uint64_t number = 0;
+            for (std::size_t i = 2; i < name.size(); ++i) {
+                if (std::isdigit(static_cast< unsigned char >(name[i])) == 0) {
+                    return operand;
+                }
+                number = number * 10U + static_cast< uint64_t >(name[i] - '0');
+            }
+            if (number > 15U) {
+                return operand;
+            }
+            ghidra::Varnode constant = operand;
+            constant.kind            = ghidra::Varnode::VARNODE_CONSTANT;
+            constant.operation.reset();
+            constant.value = number;
+            return constant;
+        }
+
         // Coprocessor MCR/MRC/CDP: SLEIGH operand order differs from ACLE (opc2
         // last), so reorder the inputs. Single-register forms only; wrong-arity
         // (MCRR/MRRC, odd movefromRt) falls through rather than emit a bad call.
@@ -652,15 +696,16 @@ namespace patchestry::ast {
             const auto &in = op.inputs;
             ghidra::Operation reordered = op;
             std::string name;
+            auto reg = [&](std::size_t index) { return coproc_register_operand(fn, in[index]); };
             if (klass == "coproc_write" && in.size() == 6) {
                 name             = "__arm_mcr";
-                reordered.inputs = { in[0], in[1], in[3], in[4], in[5], in[2] };
+                reordered.inputs = { in[0], in[1], in[3], reg(4), reg(5), in[2] };
             } else if (klass == "coproc_read" && in.size() == 5) {
                 name             = "__arm_mrc";
-                reordered.inputs = { in[0], in[1], in[3], in[4], in[2] };
+                reordered.inputs = { in[0], in[1], reg(3), reg(4), in[2] };
             } else if (klass == "coproc_cdp" && in.size() == 6) {
                 name             = "__arm_cdp";
-                reordered.inputs = { in[0], in[1], in[3], in[4], in[5], in[2] };
+                reordered.inputs = { in[0], in[1], reg(3), reg(4), reg(5), in[2] };
             } else {
                 return std::nullopt;
             }

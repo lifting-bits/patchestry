@@ -6,11 +6,13 @@
  * the LICENSE file found in the root directory of this source tree.
  */
 
+#include <algorithm>
 #include <cstdlib>
 #include <memory>
 #include <optional>
 #include <string>
 #include <system_error>
+#include <vector>
 
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Decl.h>
@@ -129,6 +131,40 @@ namespace {
             .strict                     = strict.getValue(),
             .bindings_file              = emit_bindings.getValue(),
         };
+    }
+
+    // An export can describe a function (name, prototype, address ranges)
+    // and carry no basic blocks for it: the decompiler failed or timed out
+    // on it.  Lifting such an input succeeds and writes a module with
+    // nothing but declarations, and the failure shows up later as a missing
+    // symbol in whatever consumes the module.  Fail here instead.
+    //
+    // Only when no function has a body.  Callees are always exported
+    // without blocks, so one body is enough for the input to be a real
+    // lift.  An input whose functions have no address ranges either is a
+    // set of declarations written as such, and is left alone.
+    bool validateHasFunctionBody(const patchestry::ghidra::Program &program) {
+        std::vector< std::string > names;
+        for (const auto &[key, function] : program.serialized_functions) {
+            if (!function.basic_blocks.empty()) {
+                return true;
+            }
+            if (!function.address_ranges.empty()) {
+                names.push_back("'" + function.name + "' (" + key + ")");
+            }
+        }
+        if (names.empty()) {
+            return true;
+        }
+        // The map is unordered; keep the message stable.
+        std::sort(names.begin(), names.end());
+        std::string without_body;
+        for (const auto &name : names) {
+            without_body += (without_body.empty() ? "" : ", ") + name;
+        }
+        LOG(ERROR) << "Nothing to lift: no function in the input has basic blocks.  "
+                   << "Exported with code but without a body: " << without_body << "\n";
+        return false;
     }
 
     bool validateBranchindSwitchMetadata(const patchestry::ghidra::Program &program) {
@@ -277,6 +313,8 @@ int main(int argc, char **argv) {
 
     auto program = loadProgram(options.input_file);
     if (!program.has_value()) { return EXIT_FAILURE; }
+
+    if (!validateHasFunctionBody(*program)) { return EXIT_FAILURE; }
 
     if (!validateBranchindSwitchMetadata(*program)) { return EXIT_FAILURE; }
 

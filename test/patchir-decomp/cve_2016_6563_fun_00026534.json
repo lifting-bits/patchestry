@@ -10,6 +10,10 @@
 // routes its output assignment through create_assign_operation.
 //
 // CIR: cir.func dso_local @FUN_00026534
+//
+// The signed subtraction `1 - (int)param_2` wraps, as `rsb` does in the
+// binary. ClangIR used to emit it as a saturating subtract under -fwrapv.
+// CIR-NOT: cir.binop(sub, {{.*}}) sat
 // STDERR-NOT: SUBPIECE invalid output assignment
 // STDERR-NOT: incompatible type
 // STDERR-NOT: Skipping code generation due to prior diagnostics

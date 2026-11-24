@@ -5,7 +5,8 @@
 // CIR: cir.func dso_local @ptradd_test
 // CIR: cir.ptr_stride
 // LL: define {{.*}} @ptradd_test
-// LL: getelementptr i32
+// PTRADD with scale 1 on an `int *` moves bytes, not elements.
+// LL: getelementptr i8
 {
   "architecture": "ARM",
   "id": "ARM:LE:32:Cortex",

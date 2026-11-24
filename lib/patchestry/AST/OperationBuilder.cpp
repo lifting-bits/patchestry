@@ -88,6 +88,41 @@ namespace patchestry::ast {
             return {};
         }
 
+        // A pointer-typed operand that names a global which is not a pointer
+        // is the global's address, not its content.  Ghidra has the address
+        // as a constant; the serializer, finding data defined there, writes
+        // it as `kind: "global"` with the constant's pointer type.  For
+        // aggregate storage the decay below yields the address.  For scalar
+        // storage (a string Ghidra did not type as one is a 1-byte
+        // `undefined1` named `null_47h_...`) the operand used to be the value:
+        // `strcmp(s, (char *) 0x47)` where the original passes the address of
+        // "GET".  A global that holds a pointer is read as one, since its
+        // operand has the global's own type.  ADDRESS_OF passes
+        // narrow_to_size_hint=false and takes the address itself.
+        if (narrow_to_size_hint && vnode.kind == Varnode::VARNODE_GLOBAL
+            && !vnode.type_key.empty())
+        {
+            auto *ref = clang::dyn_cast< clang::DeclRefExpr >(result);
+            if (ref != nullptr && clang::isa< clang::VarDecl >(ref->getDecl())) {
+                auto storage_type = ref->getType();
+                auto declared     = type_builder().GetSerializedType(vnode.type_key);
+                if (!declared.isNull() && declared->isPointerType()
+                    && !storage_type->isPointerType() && !storage_type->isArrayType()
+                    && !storage_type->isRecordType())
+                {
+                    auto address = sema().CreateBuiltinUnaryOp(loc, clang::UO_AddrOf, ref);
+                    if (!address.isInvalid()) {
+                        if (auto *pointer = make_explicit_cast(
+                                ctx, address.getAs< clang::Expr >(), declared, loc
+                            ))
+                        {
+                            return pointer;
+                        }
+                    }
+                }
+            }
+        }
+
         // Per-varnode-truthful narrowing (#225): aggregate storage + a
         // width hint always narrows here, so every consumer sees a
         // correctly-typed Expr.  Output varnodes (vnode.size == 0)
@@ -109,6 +144,28 @@ namespace patchestry::ast {
                             if (auto *decayed = make_cast(ctx, expr, declared, loc)) {
                                 return decayed;
                             }
+                        }
+                    }
+                    // A string operand is a pointer constant whatever type the
+                    // consumer gives it: an integer-typed one (a parameter
+                    // Ghidra typed `int`) wants the address as an integer.
+                    // Narrowing would load the first bytes of the text.
+                    // Only for an operand as wide as a pointer.
+                    if (vnode.kind == Varnode::VARNODE_STRING && storage_type->isArrayType()
+                        && vnode.size * 8U == ctx.getTypeSize(ctx.VoidPtrTy))
+                    {
+                        auto *address =
+                            make_cast(ctx, expr, ctx.getArrayDecayedType(storage_type), loc);
+                        auto declared = vnode.type_key.empty()
+                                            ? clang::QualType()
+                                            : type_builder().GetSerializedType(vnode.type_key);
+                        if (address != nullptr && !declared.isNull() && declared->isScalarType()) {
+                            if (auto *value = make_explicit_cast(ctx, address, declared, loc)) {
+                                return value;
+                            }
+                        }
+                        if (address != nullptr) {
+                            return address;
                         }
                     }
                     auto *narrowed = narrow_aggregate_to_integer(

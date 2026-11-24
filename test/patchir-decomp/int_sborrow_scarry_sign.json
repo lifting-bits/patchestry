@@ -1,0 +1,344 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-llvm -output %t >> /dev/null 2>&1
+// RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
+//
+// INT_SBORROW and INT_SCARRY leave their flag in the top bit of a bitwise
+// expression, and the lifter reads it with `< 0`.  That comparison used to be
+// done in the type of the operands:
+//
+//   - unsigned operands (Ghidra types most registers `unsigned int`) made it
+//     `icmp ult x, 0`, which is always false, so the flag was never set;
+//   - operands narrower than int were promoted, so the bit tested was bit 31
+//     of the promoted value, not the top bit of the operand.
+//
+// The expression is now cast to the signed type of the operand's width
+// before the comparison.
+//
+// LL-LABEL: define dso_local i32 @sborrow_s8
+// LL: [[B:%.*]] = trunc i32 {{%.*}} to i8
+// LL: [[W:%.*]] = sext i8 [[B]] to i32
+// LL: icmp slt i32 [[W]], 0
+// LL-LABEL: define dso_local i32 @sborrow_u32
+// LL-NOT: icmp ult
+// LL: icmp slt i32 {{%.*}}, 0
+// LL-LABEL: define dso_local i32 @scarry_u32
+// LL-NOT: icmp ult
+// LL: icmp slt i32 {{%.*}}, 0
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:v7",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:00010000": {
+      "name": "sborrow_u32",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "t_uint",
+          "t_uint"
+        ]
+      },
+      "basic_blocks": {
+        "ram:00010000:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "a",
+              "type": "t_uint",
+              "kind": "parameter",
+              "index": 0
+            },
+            "p1": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "b",
+              "type": "t_uint",
+              "kind": "parameter",
+              "index": 1
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:00010000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "p1",
+            "entry.exit"
+          ]
+        },
+        "ram:00010000:0:basic": {
+          "operations": {
+            "flag": {
+              "mnemonic": "INT_SBORROW",
+              "type": "t_bool",
+              "size": 1,
+              "inputs": [
+                {
+                  "type": "t_uint",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "p0"
+                },
+                {
+                  "type": "t_uint",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "p1"
+                }
+              ]
+            },
+            "wide": {
+              "mnemonic": "INT_ZEXT",
+              "type": "t_int",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t_bool",
+                  "size": 1,
+                  "kind": "temporary",
+                  "operation": "flag"
+                }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "t_int",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "wide"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "flag",
+            "wide",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:00010000:entry"
+    },
+    "ram:00020000": {
+      "name": "scarry_u32",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "t_uint",
+          "t_uint"
+        ]
+      },
+      "basic_blocks": {
+        "ram:00020000:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "a",
+              "type": "t_uint",
+              "kind": "parameter",
+              "index": 0
+            },
+            "p1": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "b",
+              "type": "t_uint",
+              "kind": "parameter",
+              "index": 1
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:00020000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "p1",
+            "entry.exit"
+          ]
+        },
+        "ram:00020000:0:basic": {
+          "operations": {
+            "flag": {
+              "mnemonic": "INT_SCARRY",
+              "type": "t_bool",
+              "size": 1,
+              "inputs": [
+                {
+                  "type": "t_uint",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "p0"
+                },
+                {
+                  "type": "t_uint",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "p1"
+                }
+              ]
+            },
+            "wide": {
+              "mnemonic": "INT_ZEXT",
+              "type": "t_int",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t_bool",
+                  "size": 1,
+                  "kind": "temporary",
+                  "operation": "flag"
+                }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "t_int",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "wide"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "flag",
+            "wide",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:00020000:entry"
+    },
+    "ram:00030000": {
+      "name": "sborrow_s8",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "t_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "t_schar",
+          "t_schar"
+        ]
+      },
+      "basic_blocks": {
+        "ram:00030000:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "a",
+              "type": "t_schar",
+              "kind": "parameter",
+              "index": 0
+            },
+            "p1": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "b",
+              "type": "t_schar",
+              "kind": "parameter",
+              "index": 1
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:00030000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "p1",
+            "entry.exit"
+          ]
+        },
+        "ram:00030000:0:basic": {
+          "operations": {
+            "flag": {
+              "mnemonic": "INT_SBORROW",
+              "type": "t_bool",
+              "size": 1,
+              "inputs": [
+                {
+                  "type": "t_schar",
+                  "size": 1,
+                  "kind": "parameter",
+                  "operation": "p0"
+                },
+                {
+                  "type": "t_schar",
+                  "size": 1,
+                  "kind": "parameter",
+                  "operation": "p1"
+                }
+              ]
+            },
+            "wide": {
+              "mnemonic": "INT_ZEXT",
+              "type": "t_int",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t_bool",
+                  "size": 1,
+                  "kind": "temporary",
+                  "operation": "flag"
+                }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "t_int",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "wide"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "flag",
+            "wide",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:00030000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "t_int": {
+      "is_signed": true,
+      "name": "int",
+      "size": 4,
+      "kind": "integer"
+    },
+    "t_uint": {
+      "is_signed": false,
+      "name": "unsigned int",
+      "size": 4,
+      "kind": "integer"
+    },
+    "t_schar": {
+      "is_signed": true,
+      "name": "char",
+      "size": 1,
+      "kind": "integer"
+    },
+    "t_bool": {
+      "name": "bool",
+      "size": 1,
+      "kind": "boolean"
+    }
+  }
+}

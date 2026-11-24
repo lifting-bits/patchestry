@@ -3379,6 +3379,33 @@ namespace patchestry::ast {
                  false };
     }
 
+    // `value < 0` as a test of the sign bit of an operand `width_bytes` wide.
+    // INT_SCARRY and INT_SBORROW compute their flag into the top bit of a
+    // bitwise expression.  Comparing that expression with 0 in its own type is
+    // wrong twice over: an unsigned type makes `< 0` always false, and a type
+    // narrower than int is promoted, which moves the sign bit away from the
+    // operand's top bit.  Casting to the signed type of exactly the operand's
+    // width first keeps the low bits and makes the comparison signed.
+    static clang::Expr *sign_bit_is_set(
+        OpBuilder &builder, clang::ASTContext &ctx, clang::Sema &sema, clang::Expr *value,
+        clang::QualType operand_type, unsigned width_bytes, clang::SourceLocation loc
+    ) {
+        auto bits = width_bytes != 0U ? uint64_t{ width_bytes } * 8U
+                                      : ctx.getTypeSize(operand_type);
+        auto signed_type = ctx.getIntTypeForBitwidth(static_cast< unsigned >(bits), 1);
+        clang::Expr *tested = value;
+        auto zero_type      = operand_type;
+        if (!signed_type.isNull()) {
+            if (auto *cast = builder.make_explicit_cast(ctx, value, signed_type, loc)) {
+                tested    = cast;
+                zero_type = signed_type;
+            }
+        }
+        auto *zero   = MakeIntLiteralPrintable(ctx, 0, zero_type, /*is_signed=*/true, loc);
+        auto compare = sema.BuildBinOp(sema.getCurScope(), loc, clang::BO_LT, tested, zero);
+        return compare.isInvalid() ? nullptr : compare.getAs< clang::Expr >();
+    }
+
     std::pair< clang::Stmt *, bool > OpBuilder::create_int_scarry(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
@@ -3433,18 +3460,18 @@ namespace patchestry::ast {
         );
         assert(!and_result.isInvalid() && "Failed to create and operation");
 
-        // scarry = and_result < 0
-        auto *zero = MakeIntLiteralPrintable(
-            ctx, 0, input0->getType(), /*is_signed=*/true, op_loc
+        // scarry = the sign bit of and_result, at the width of the operands
+        auto *scarry = sign_bit_is_set(
+            *this, ctx, sema(), and_result.getAs< clang::Expr >(), input0->getType(),
+            op.inputs[0].size, op_loc
         );
-        auto scarry = sema().BuildBinOp(
-            sema().getCurScope(), op_loc, clang::BO_LT, and_result.getAs< clang::Expr >(),
-            zero
-        );
-        assert(!scarry.isInvalid() && "Failed to create scarry comparison");
+        if (scarry == nullptr) {
+            LOG(ERROR) << "Failed to create scarry comparison. key: " << op.key << "\n";
+            return {};
+        }
 
         if (!op.output.has_value()) {
-            return { scarry.getAs< clang::Stmt >(), true };
+            return { scarry, true };
         }
 
         auto *output =
@@ -3453,7 +3480,7 @@ namespace patchestry::ast {
             return {};
         }
 
-        return { create_assign_operation(ctx, scarry.getAs< clang::Expr >(), output, op_loc),
+        return { create_assign_operation(ctx, scarry, output, op_loc),
                  false };
     }
 
@@ -3503,18 +3530,18 @@ namespace patchestry::ast {
         );
         assert(!and_result.isInvalid() && "Failed to create and operation");
 
-        // sborrow = and_result < 0
-        auto *zero = MakeIntLiteralPrintable(
-            ctx, 0, input0->getType(), /*is_signed=*/true, op_loc
+        // sborrow = the sign bit of and_result, at the width of the operands
+        auto *sborrow = sign_bit_is_set(
+            *this, ctx, sema(), and_result.getAs< clang::Expr >(), input0->getType(),
+            op.inputs[0].size, op_loc
         );
-        auto sborrow = sema().BuildBinOp(
-            sema().getCurScope(), op_loc, clang::BO_LT, and_result.getAs< clang::Expr >(),
-            zero
-        );
-        assert(!sborrow.isInvalid() && "Failed to create sborrow comparison");
+        if (sborrow == nullptr) {
+            LOG(ERROR) << "Failed to create sborrow comparison. key: " << op.key << "\n";
+            return {};
+        }
 
         if (!op.output.has_value()) {
-            return { sborrow.getAs< clang::Stmt >(), true };
+            return { sborrow, true };
         }
 
         auto *output =
@@ -3523,7 +3550,7 @@ namespace patchestry::ast {
             return {};
         }
 
-        return { create_assign_operation(ctx, sborrow.getAs< clang::Expr >(), output, op_loc),
+        return { create_assign_operation(ctx, sborrow, output, op_loc),
                  false };
     }
 
@@ -4278,6 +4305,7 @@ namespace patchestry::ast {
             // reinterpret as char* for well-defined byte arithmetic.
             clang::Expr *arith_base = base;
             auto char_ptr_ty        = ctx.getPointerType(ctx.CharTy);
+            clang::QualType byte_arith_type; // set when the sum is cast back
             if (base->getType()->isRecordType()) {
                 arith_base = make_reinterpret_cast(ctx, base, char_ptr_ty, op_loc);
             } else if (base->getType()->isPointerType()
@@ -4291,6 +4319,18 @@ namespace patchestry::ast {
                 // -Wstring-plus-int. An explicit char* cast (not looked through
                 // by the diagnostic) keeps byte arithmetic well-defined.
                 arith_base = make_explicit_cast(ctx, base, char_ptr_ty, op_loc);
+            } else if (base_is_arith_pointer
+                       && ctx.getTypeSizeInChars(base->getType()->getPointeeType()).getQuantity()
+                              != 1)
+            {
+                // PTRADD is base + index * scale in bytes.  C scales `+` on a
+                // pointer by the size of its pointee, which is not `scale`
+                // here: a struct exported without fields has size 0 (every
+                // offset collapses to 0), and an `int *` advanced by `n * 1`
+                // would move 4 * n bytes.  Do the arithmetic on char* and
+                // give the result the type of the base again.
+                arith_base     = make_explicit_cast(ctx, base, char_ptr_ty, op_loc);
+                byte_arith_type = base->getType();
             }
             if (!arith_base) {
                 LOG(ERROR) << "PTRADD: failed to reinterpret base for "
@@ -4307,6 +4347,13 @@ namespace patchestry::ast {
                 return std::make_pair(nullptr, false);
             }
             result_expr = add_result.getAs< clang::Expr >();
+            if (!byte_arith_type.isNull()) {
+                if (auto *typed =
+                        make_explicit_cast(ctx, result_expr, byte_arith_type, op_loc))
+                {
+                    result_expr = typed;
+                }
+            }
         }
 
         if (merge_to_next) {
@@ -4821,22 +4868,44 @@ namespace patchestry::ast {
         return func_decl;
     }
 
+    // The type an intrinsic call returns.  Prefer the typed output, fall back
+    // to op.type: Ghidra exports a result that is a reference to a local as
+    // `{"kind": "local", "operation": ...}` with the type on the operation
+    // only, and get_varnode_type() returns a null type for such a varnode.
+    // Void when the op has neither.  Null only when there is an output and
+    // nothing types it; the caller must not build a declaration from that.
+    static clang::QualType intrinsic_result_type(
+        OpBuilder &builder, clang::ASTContext &ctx, const Operation &op
+    ) {
+        clang::QualType from_output;
+        if (op.output && !(op.output->type_key.empty() && op.output->size == 0U)) {
+            from_output = builder.get_varnode_type(ctx, *op.output);
+        }
+        if (!from_output.isNull()) {
+            return from_output;
+        }
+        if (op.type) {
+            auto from_op = builder.type_builder().GetSerializedType(*op.type);
+            if (!from_op.isNull()) {
+                return from_op;
+            }
+        }
+        return op.output ? clang::QualType() : clang::QualType(ctx.VoidTy);
+    }
+
     std::pair< clang::Stmt *, bool > OpBuilder::create_intrinsic_call(
         clang::ASTContext &ctx, const Function &function, const Operation &op,
         const std::string &name, std::optional< std::size_t > pointer_arg_index
     ) {
         auto op_loc = SourceLocation(ctx.getSourceManager(), op.key);
 
-        // Determine return type.  Prefer the typed output, fall back to
-        // op.type for ops whose value flows through a temporary reference
-        // rather than a named output (default-void otherwise corrupts
-        // every downstream consumer).
-        clang::QualType ret_type = ctx.VoidTy;
-        if (op.output) {
-            ret_type = get_varnode_type(ctx, *op.output);
-        } else if (op.type) {
-            auto t = type_builder().GetSerializedType(*op.type);
-            if (!t.isNull()) ret_type = t;
+        // Determine return type (default-void otherwise corrupts every
+        // downstream consumer).
+        clang::QualType ret_type = intrinsic_result_type(*this, ctx, op);
+        if (ret_type.isNull()) {
+            LOG(ERROR) << "Intrinsic '" << name << "' has an output with no type. key: "
+                       << op.key << "\n";
+            return {};
         }
 
         // Build arguments from inputs
@@ -5014,15 +5083,12 @@ namespace patchestry::ast {
         );
         (void) original_label; // debug metadata is currently dropped (see below)
 
-        // Determine return type.  Prefer the typed output, fall back to
-        // op.type for ops whose value flows through a temporary reference
-        // rather than a named output.
-        clang::QualType ret_type = ctx.VoidTy;
-        if (op.output) {
-            ret_type = get_varnode_type(ctx, *op.output);
-        } else if (op.type) {
-            auto t = type_builder().GetSerializedType(*op.type);
-            if (!t.isNull()) ret_type = t;
+        // Determine return type.
+        clang::QualType ret_type = intrinsic_result_type(*this, ctx, op);
+        if (ret_type.isNull()) {
+            LOG(ERROR) << "Missing intrinsic '" << original_name
+                       << "' has an output with no type. key: " << op.key << "\n";
+            return {};
         }
 
         // Build the fixed-arity prototype up front so the cache key encodes
