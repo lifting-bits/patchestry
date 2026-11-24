@@ -28,15 +28,18 @@ namespace patchestry::logging {
     }
 } // namespace patchestry::logging
 
+// Every level goes to stderr.  stdout carries only output the user asked for
+// (`-print-tu` without `-output` writes the translation unit there), and a log
+// line in it makes that output unusable.
 #define LOG(level) \
     (((level) < ::patchestry::logging::MinLogLevel()) \
          ? ::patchestry::logging::NullLogStream() \
-         : ((((level) == DEBUG)     ? llvm::outs() << "[DEBUG] " \
-              : ((level) == INFO)    ? llvm::outs() << "[INFO] " \
-              : ((level) == WARNING) ? llvm::outs() << "[WARNING] " \
+         : ((((level) == DEBUG)     ? llvm::errs() << "[DEBUG] " \
+              : ((level) == INFO)    ? llvm::errs() << "[INFO] " \
+              : ((level) == WARNING) ? llvm::errs() << "[WARNING] " \
               : ((level) == FATAL)   ? llvm::errs() << "[FATAL] " \
               : ((level) == ERROR)   ? llvm::errs() << "[ERROR] " \
-                                     : llvm::outs()) \
+                                     : llvm::errs()) \
             << "(" << __FILE__ << ":" << __LINE__ << ") "))
 
 #define LOG_FATAL(...) \

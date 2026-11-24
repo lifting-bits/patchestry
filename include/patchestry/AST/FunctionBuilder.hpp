@@ -121,6 +121,8 @@ namespace patchestry::ast {
         /// Access to the ghidra::Function for CGraph building.
         const Function &get_function() const { return function.get(); }
 
+        const LossReporter &get_loss_reporter() const { return loss_reporter.get(); }
+
         /// Architecture identifier from the source Program (e.g. "AARCH64",
         /// "x86"). Empty if unavailable. Used by intrinsic-name normalization
         /// to dispatch arch-specific handlers without prefix sniffing.

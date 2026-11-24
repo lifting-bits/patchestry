@@ -224,6 +224,10 @@ namespace patchestry::ghidra {
         std::string key;
         std::unordered_map< std::string, Operation > operations;
         std::vector< std::string > ordered_operations;
+        // Operations the deserializer could not model, by key, with the
+        // reason.  They are absent from `operations` but their keys may still
+        // be listed in `ordered_operations`; the lifter reports those.
+        std::unordered_map< std::string, std::string > dropped_operations;
         bool is_entry_block;
     };
 

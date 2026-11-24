@@ -249,6 +249,21 @@ namespace patchestry::ast {
             clang::SourceLocation loc
         );
 
+        /// Give a value that must be computed exactly once, at its own
+        /// position (a volatile read), a temporary: the declaration goes to
+        /// pending for hoisting, `tmp = value` is returned to be emitted in
+        /// place, and consumers of `op` resolve to the temporary.  A mergeable
+        /// value would instead be emitted once per consumer, at the
+        /// consumer's position, and not at all when nothing consumes it.
+        std::pair< clang::Stmt *, bool > materialize_once(
+            clang::ASTContext &ctx, clang::Expr *value, clang::QualType type,
+            const Operation &op, const std::string &name_prefix, clang::SourceLocation loc
+        );
+
+        /// Make consumers of `op` resolve to `value` instead of the statement
+        /// the operation returns.  Must run before the operation returns.
+        void set_operation_value(const Operation &op, clang::Stmt *value);
+
       private:
         clang::FunctionDecl *get_or_create_intrinsic_decl(
             clang::ASTContext &ctx, const std::string &name, clang::QualType return_type,

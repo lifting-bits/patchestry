@@ -1,0 +1,145 @@
+// A type the builder cannot create is replaced with a stand-in, which changes
+// a signature or a layout while every statement still builds.  Here a
+// function-pointer parameter names an unknown parameter type and gets
+// `void *`.  The default lift reports the substitution as a warning and still
+// lowers; `-strict` turns the report into an error and stops before lowering.
+//
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-cir -print-tu -output %t > %t.log 2>&1
+// RUN: %file-check -vv -check-prefix=WARN %s --input-file %t.log
+// RUN: %file-check -vv -check-prefix=TU %s --input-file %t.c
+// RUN: not %patchir-decomp -input %t.json -emit-cir -strict -output %t.strict > %t.strict.log 2>&1
+// RUN: %file-check -vv -check-prefix=ERR %s --input-file %t.strict.log
+// RUN: test ! -e %t.strict.cir
+//
+// WARN: Diag Warning: {{.*}}lossy lift [type-fallback]: type 'type_fn': unknown parameter type 'type_nope' of a function type is replaced with void *
+// WARN-NOT: Diag Error
+// TU: void (*cb)(unsigned int, void *)
+// ERR: Diag Error: {{.*}}lossy lift [type-fallback]: type 'type_fn': unknown parameter type 'type_nope' of a function type is replaced with void *
+// ERR: Skipping code generation due to prior diagnostics errors
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "strict_type_fallback",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "type_int",
+          "type_fn"
+        ]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "p0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "code",
+              "type": "type_int",
+              "kind": "parameter",
+              "index": 0
+            },
+            "p1": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "cb",
+              "type": "type_fn",
+              "kind": "parameter",
+              "index": 1
+            },
+            "br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:10000000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "p0",
+            "p1",
+            "br"
+          ]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "call_ext": {
+              "mnemonic": "CALL",
+              "has_return_value": false,
+              "target": {
+                "kind": "function",
+                "function": "EXTERNAL:00000001",
+                "is_variadic": false,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "kind": "parameter",
+                  "operation": "p0"
+                }
+              ]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": []
+            }
+          },
+          "ordered_operations": [
+            "call_ext",
+            "ret"
+          ]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    },
+    "EXTERNAL:00000001": {
+      "name": "ext_func",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": [
+          "type_int"
+        ]
+      }
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": {
+      "name": "unsigned int",
+      "size": 4,
+      "kind": "integer"
+    },
+    "type_char": {
+      "name": "char",
+      "size": 1,
+      "kind": "integer"
+    },
+    "type_charptr": {
+      "kind": "pointer",
+      "size": 4,
+      "element_type": "type_char"
+    },
+    "type_void": {
+      "name": "void",
+      "size": 0,
+      "kind": "void"
+    },
+    "type_fn": {
+      "name": "cb_t",
+      "kind": "function",
+      "size": 4,
+      "return_type": "type_void",
+      "is_variadic": false,
+      "is_noreturn": false,
+      "parameter_types": [
+        "type_int",
+        "type_nope"
+      ]
+    }
+  }
+}

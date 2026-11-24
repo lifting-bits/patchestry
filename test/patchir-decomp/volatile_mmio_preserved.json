@@ -3,6 +3,8 @@
 // RUN: %file-check -vv -check-prefix=TU %s --input-file %t.c
 // RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
 // RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
+// The register is read exactly once.
+// RUN: grep -c "load volatile" %t.ll | grep -x 1
 
 // MMIO / peripheral register accesses must keep volatile end-to-end, including
 // for CONSTANT register addresses (the common case, e.g. 0x40020000). An

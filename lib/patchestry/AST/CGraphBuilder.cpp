@@ -184,6 +184,18 @@ namespace patchestry::ast {
         g.nodes.resize(rpo.size());
         g.entry = 0;
 
+        // Branch terminators never reach create_operation, where a failed
+        // build is reported, so a terminator (or one of its edges) that this
+        // function cannot reproduce is reported here.
+        auto report_terminator = [&](const ghidra::Operation &op, const std::string &block_key,
+                                     const std::string &what) {
+            builder.get_loss_reporter().report(
+                SourceLocation(ctx.getSourceManager(), op.key), "terminator-dropped",
+                std::string(ghidra::to_string(op.mnemonic)) + " operation '" + op.key
+                    + "' in block '" + block_key + "' of function '" + func.name + "': " + what
+            );
+        };
+
         // Build each CNode
         for (size_t i = 0; i < rpo.size(); ++i) {
             const auto &key = rpo[i];
@@ -221,6 +233,14 @@ namespace patchestry::ast {
                 if (term->target_block && key_to_index.contains(*term->target_block)) {
                     add_source_edge(g, node, key, *term->target_block,
                                     key_to_index[*term->target_block], "branch");
+                } else {
+                    report_terminator(
+                        *term, key,
+                        term->target_block
+                            ? "target block '" + *term->target_block
+                                  + "' is not in the function; the branch is not emitted"
+                            : std::string("it has no target block; the branch is not emitted")
+                    );
                 }
 
                 // Build terminal GotoStmt for goto reconstruction
@@ -239,13 +259,32 @@ namespace patchestry::ast {
 
                 if (term->not_taken_block && key_to_index.contains(*term->not_taken_block)) {
                     not_taken = key_to_index[*term->not_taken_block];
-                } else if (i + 1 < rpo.size()) {
-                    // Fallthrough for not-taken
-                    not_taken = i + 1;
+                } else {
+                    // An absent not-taken block is the ordinary encoding of
+                    // fallthrough; one that names an unknown block is a loss.
+                    if (term->not_taken_block) {
+                        report_terminator(
+                            *term, key,
+                            "not-taken block '" + *term->not_taken_block
+                                + "' is not in the function"
+                        );
+                    }
+                    if (i + 1 < rpo.size()) {
+                        // Fallthrough for not-taken
+                        not_taken = i + 1;
+                    }
                 }
 
                 if (term->taken_block && key_to_index.contains(*term->taken_block)) {
                     taken = key_to_index[*term->taken_block];
+                } else {
+                    report_terminator(
+                        *term, key,
+                        term->taken_block
+                            ? "taken block '" + *term->taken_block
+                                  + "' is not in the function; the branch is not emitted"
+                            : std::string("it has no taken block; the branch is not emitted")
+                    );
                 }
 
                 if (not_taken != CNode::kNone) {
@@ -259,6 +298,11 @@ namespace patchestry::ast {
 
                 node.is_conditional = (node.succs.size() == 2);
                 node.branch_cond = builder.create_branch_condition(ctx, *term);
+                if (node.branch_cond == nullptr) {
+                    report_terminator(
+                        *term, key, "its condition could not be built; the branch is not emitted"
+                    );
+                }
 
                 // Build terminal IfStmt for goto reconstruction
                 if (node.branch_cond && node.succs.size() == 2) {
@@ -298,11 +342,22 @@ namespace patchestry::ast {
                     // Each entry carries its own is_default flag from
                     // the Ghidra ClangCaseToken markup recovery.
                     node.branch_cond = builder.create_switch_discriminant(ctx, *term);
+                    if (node.branch_cond == nullptr) {
+                        report_terminator(*term, key, "its switch discriminant could not be built");
+                    }
 
                     std::unordered_set<size_t> seen_succs;
                     bool any_default = false;
                     for (const auto &sc : term->switch_cases) {
-                        if (!key_to_index.contains(sc.target_block)) continue;
+                        if (!key_to_index.contains(sc.target_block)) {
+                            report_terminator(
+                                *term, key,
+                                "switch case " + std::to_string(sc.value) + " targets block '"
+                                    + sc.target_block
+                                    + "', which is not in the function; the case is not emitted"
+                            );
+                            continue;
+                        }
                         size_t target_idx = key_to_index[sc.target_block];
                         if (seen_succs.insert(target_idx).second) {
                             add_source_edge(g, node, key, sc.target_block,
@@ -355,10 +410,20 @@ namespace patchestry::ast {
                         }
                     }
                     node.branch_cond = disc;
+                    if (disc == nullptr) {
+                        report_terminator(*term, key, "its switch discriminant could not be built");
+                    }
 
                     std::unordered_set<size_t> seen_succs;
                     for (const auto &block_key : term->successor_blocks) {
-                        if (!key_to_index.contains(block_key)) continue;
+                        if (!key_to_index.contains(block_key)) {
+                            report_terminator(
+                                *term, key,
+                                "successor block '" + block_key
+                                    + "' is not in the function; the case is not emitted"
+                            );
+                            continue;
+                        }
                         size_t target_idx = key_to_index[block_key];
                         if (seen_succs.insert(target_idx).second) {
                             add_source_edge(g, node, key, block_key, target_idx,
@@ -378,19 +443,28 @@ namespace patchestry::ast {
                             static_cast<int64_t>(*addr), succ_idx, false});
                     }
                 } else {
-                    // Constant BRANCHIND target in the EXC_RETURN range: an
-                    // exception return that escaped InterruptAnalysis. Diagnose
-                    // here; the goto refusal is in create_branchind.
+                    // No recovered targets, so there is no edge and no
+                    // statement to emit: the block ends without its jump.  A
+                    // constant target in the EXC_RETURN range is an exception
+                    // return that escaped InterruptAnalysis; the goto refusal
+                    // is in create_branchind.
                     if (!term->inputs.empty()
                         && term->inputs[0].kind == ghidra::Varnode::VARNODE_CONSTANT
                         && term->inputs[0].value
                         && *term->inputs[0].value >= ghidra::kArmExcReturnLow)
                     {
-                        LOG(ERROR)
-                            << "BRANCHIND target " << *term->inputs[0].value
-                            << " is an un-reclassified ARM EXC_RETURN value; "
-                            << "InterruptAnalysis should have rewritten this "
-                            << "exception return. key: " << term->key << "\n";
+                        report_terminator(
+                            *term, key,
+                            "target " + std::to_string(*term->inputs[0].value)
+                                + " is an un-reclassified ARM EXC_RETURN value; "
+                                  "InterruptAnalysis should have rewritten this exception "
+                                  "return, and the jump is not emitted"
+                        );
+                    } else {
+                        report_terminator(
+                            *term, key,
+                            "the indirect jump has no recovered targets and is not emitted"
+                        );
                     }
                 }
 

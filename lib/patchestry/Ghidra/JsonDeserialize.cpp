@@ -1058,6 +1058,7 @@ namespace patchestry::ghidra {
             if (operation_object == nullptr) {
                 LOG(WARNING) << "Basic Block \"" << block_key
                              << "\": Skipping invalid operation: " << operation_key << "\n";
+                block.dropped_operations.emplace(operation_key, "its value is not a JSON object");
                 continue;
             }
 
@@ -1065,6 +1066,13 @@ namespace patchestry::ghidra {
                 maybe_operation->key              = operation_key;
                 maybe_operation->parent_block_key = block_key;
                 block.operations.emplace(operation_key, std::move(*maybe_operation));
+            } else if (auto mnemonic = get_string_if_valid(*operation_object, "mnemonic")) {
+                // create_operation fails only on the mnemonic.
+                block.dropped_operations.emplace(
+                    operation_key, "unsupported mnemonic '" + *mnemonic + "'"
+                );
+            } else {
+                block.dropped_operations.emplace(operation_key, "it has no mnemonic");
             }
         }
 

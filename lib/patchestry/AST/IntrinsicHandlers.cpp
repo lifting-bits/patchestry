@@ -367,28 +367,42 @@ namespace patchestry::ast {
                 return {};
             }
 
-            // If no output, return the deref expression directly
-            if (!op.output) { return { deref.getAs< clang::Stmt >(), true }; }
+            // The read is a hardware access: it must happen exactly once, where
+            // the operation stands, whether or not anything uses the value.
+            auto read_once = [&]() {
+                return b.materialize_once(
+                    ctx, deref.getAs< clang::Expr >(), result_type, op, "__volatile_read_",
+                    op_loc
+                );
+            };
 
-            // Self-referential output (operation points back at this op): return
-            // the read as a mergeable value; resolving it as an assignment target
-            // would recurse into create_varnode and stack-overflow.
-            if (op.output->operation && *op.output->operation == op.key) {
-                return { deref.getAs< clang::Stmt >(), true };
-            }
+            if (!op.output) { return read_once(); }
+
+            // Self-referential output (operation points back at this op):
+            // resolving it as an assignment target would recurse into
+            // create_varnode and stack-overflow.
+            if (op.output->operation && *op.output->operation == op.key) { return read_once(); }
 
             // Assign to output; if it won't resolve to an lvalue, loud-fail and
-            // emit just the read rather than assigning through null.
+            // keep the read rather than assigning through null.
             auto *out = clang::dyn_cast_or_null< clang::Expr >(
                 b.create_varnode(ctx, fn, *op.output));
             if (out == nullptr) {
                 LOG(ERROR) << "volatile_read output could not be resolved to an "
                               "lvalue; emitting the read without assignment. key: "
                            << op.key << "\n";
-                return { deref.getAs< clang::Stmt >(), true };
+                return read_once();
             }
-            return { b.create_assign_operation(ctx, deref.getAs< clang::Expr >(), out, op_loc),
-                     false };
+            auto *assign =
+                b.create_assign_operation(ctx, deref.getAs< clang::Expr >(), out, op_loc);
+            // A consumer that names this operation gets the output variable.
+            // Handing it the assignment would repeat the read.
+            if (assign != nullptr) {
+                if (auto *value = b.create_varnode(ctx, fn, *op.output)) {
+                    b.set_operation_value(op, value);
+                }
+            }
+            return { assign, false };
         }
 
         std::pair< clang::Stmt *, bool > handle_volatile_write(

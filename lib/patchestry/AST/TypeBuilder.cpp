@@ -121,6 +121,12 @@ namespace patchestry::ast {
                     auto it = lifted_types_->find(fn_type.return_type_key);
                     if (it != lifted_types_->end()) {
                         return_type = create_type(ctx, it->second);
+                    } else {
+                        report_fallback(
+                            ctx, fn_type.key,
+                            "unknown return type '" + fn_type.return_type_key
+                                + "' of a function type is replaced with void"
+                        );
                     }
                 }
 
@@ -132,9 +138,11 @@ namespace patchestry::ast {
                         if (it != lifted_types_->end()) {
                             param_types.push_back(create_type(ctx, it->second));
                         } else {
-                            LOG(ERROR) << "Unknown param type key '" << pk
-                                         << "' in function type '" << fn_type.key
-                                         << "'; using void*\n";
+                            report_fallback(
+                                ctx, fn_type.key,
+                                "unknown parameter type '" + pk
+                                    + "' of a function type is replaced with void *"
+                            );
                             param_types.push_back(ctx.getPointerType(ctx.VoidTy));
                         }
                     }
@@ -267,6 +275,19 @@ namespace patchestry::ast {
         return ctx.getTypedefType(clang::ElaboratedTypeKeyword::None, std::nullopt, typedef_decl);
     }
 
+    void TypeBuilder::report_fallback(
+        clang::ASTContext &ctx, const std::string &type_key, const std::string &what
+    ) const {
+        if (loss_reporter == nullptr) {
+            LOG(ERROR) << "type '" << type_key << "': " << what << "\n";
+            return;
+        }
+        loss_reporter->report(
+            SourceLocation(ctx.getSourceManager(), type_key), "type-fallback",
+            "type '" + type_key + "': " + what
+        );
+    }
+
     /**
      * @brief Creates a `clang::QualType` for a ghidra pointer type.
      *
@@ -288,15 +309,17 @@ namespace patchestry::ast {
     clang::QualType
     TypeBuilder::create_pointer(clang::ASTContext &ctx, const PointerType &pointer_type) {
         if (!pointer_type.GetPointeeType()) {
-            LOG(ERROR) << "Pointer type must have a valid pointee. Key: " << pointer_type.key
-                       << "\n";
+            report_fallback(
+                ctx, pointer_type.key, "a pointer with no pointee type is replaced with void *"
+            );
             return ctx.VoidPtrTy;
         }
 
         const auto &pointee = pointer_type.GetPointeeType();
         if (pointee->key == pointer_type.key) {
-            LOG(ERROR) << "Pointer type cannot reference itself. Key: " << pointer_type.key
-                       << "\n";
+            report_fallback(
+                ctx, pointer_type.key, "a pointer to itself is replaced with void *"
+            );
             return ctx.VoidPtrTy;
         }
 
@@ -380,8 +403,11 @@ namespace patchestry::ast {
             // Resolve the type of the current component.
             auto iter = clang_types.find(component.type->key);
             if (iter == clang_types.end()) {
-                LOG(ERROR) << "Record component does not have type key. Key: " << varnode.key
-                           << "\n";
+                report_fallback(
+                    ctx, varnode.key,
+                    "a record field of unknown type '" + component.type->key
+                        + "' is left out, which moves every later field"
+                );
                 continue;
             }
 
@@ -493,6 +519,11 @@ namespace patchestry::ast {
         auto underlying_type =
             GetTypeFromSize(ctx, bit_width, /*is_signed=*/true, /*is_integer=*/true);
         if (underlying_type.isNull()) {
+            report_fallback(
+                ctx, enum_type.key,
+                "an enum of " + std::to_string(enum_type.size)
+                    + " byte(s) has no matching integer type and is given int"
+            );
             underlying_type = ctx.IntTy;
             bit_width       = TypeBuilder::kNumBitsUint;
         }
@@ -550,7 +581,11 @@ namespace patchestry::ast {
         );
 
         if (base_type.isNull()) {
-            LOG(ERROR) << "Unable to determine base type for undefined type.\n";
+            report_fallback(
+                ctx, undefined_type.key,
+                "an undefined type of " + std::to_string(undefined_type.size)
+                    + " byte(s) has no matching integer type and is given int"
+            );
             base_type = ctx.IntTy;
         }
 

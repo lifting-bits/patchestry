@@ -1,0 +1,79 @@
+// `-print-tu` without `-output` writes the translation unit to stdout.  Log
+// lines, including the lossy-lift warning this input produces, must go to
+// stderr so that stdout stays compilable C.
+//
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -print-tu > %t.out.c 2> %t.err
+// RUN: %file-check -vv -check-prefix=ERRS %s --input-file %t.err
+// RUN: %file-check -vv -check-prefix=OUT %s --input-file %t.out.c
+// RUN: %patchir-decomp -input %t.json -print-tu -verbose > %t.verbose.c 2> /dev/null
+// RUN: %file-check -vv -check-prefix=OUT %s --input-file %t.verbose.c
+//
+// ERRS: Diag Warning: {{.*}}lossy lift [op-dropped]
+// OUT-NOT: WARNING
+// OUT-NOT: INFO
+// OUT-NOT: lossy lift
+// OUT: unsigned int print_tu_stdout_clean(void)
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:1a000000": {
+      "name": "print_tu_stdout_clean",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_int",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": []
+      },
+      "basic_blocks": {
+        "ram:1a000000:entry": {
+          "operations": {
+            "shadow": {
+              "mnemonic": "DECLARE_LOCAL",
+              "kind": "local",
+              "name": "shadow",
+              "size": 4
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:1a000000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "shadow",
+            "entry.exit"
+          ]
+        },
+        "ram:1a000000:0:basic": {
+          "operations": {
+            "ret0": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "type_int",
+                  "kind": "constant",
+                  "value": 0
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "ret0"
+          ]
+        }
+      },
+      "entry_block": "ram:1a000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_int": {
+      "name": "int",
+      "size": 4,
+      "kind": "integer"
+    }
+  }
+}

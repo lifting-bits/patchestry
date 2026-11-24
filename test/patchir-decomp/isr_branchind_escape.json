@@ -1,14 +1,21 @@
 // RUN: bash %strip-json-comments %s > %t.json
-// RUN: %patchir-decomp -input %t.json -print-tu -output %t 2> %t.err
+// RUN: %patchir-decomp -input %t.json -print-tu -output %t > %t.err 2>&1
 // RUN: %file-check -check-prefix=ERR %s --input-file %t.err
 // RUN: %file-check -check-prefix=COUT %s --input-file %t.c
+// RUN: not %patchir-decomp -input %t.json -emit-cir -strict -output %t.strict > %t.strict.log 2>&1
+// RUN: %file-check -check-prefix=STRICT %s --input-file %t.strict.log
+// RUN: test ! -e %t.strict.cir
 
 // Negative: a BRANCHIND whose target is a constant in the ARM EXC_RETURN range
 // (0xFFFFFFF9) that was NOT reclassified by InterruptAnalysis. The lifter must
 // loud-fail rather than silently drop the terminator or emit a goto to the
 // unmapped magic address.
 
-// ERR: un-reclassified ARM EXC_RETURN value
+// ERR: Diag Warning: {{.*}}lossy lift [terminator-dropped]: BRANCHIND operation 'bi' in block 'ram:20000000:0:basic' of function 'bad_handler': target 4294967289 is an un-reclassified ARM EXC_RETURN value
+
+// Under -strict the lost jump is an error and nothing is lowered.
+// STRICT: Diag Error: {{.*}}lossy lift [terminator-dropped]: BRANCHIND operation 'bi'
+// STRICT: Skipping code generation due to prior diagnostics errors
 
 // COUT-NOT: goto
 // COUT-NOT: 4294967289

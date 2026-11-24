@@ -2,6 +2,12 @@
 // RUN: %patchir-decomp -input %t.json -emit-cir -emit-llvm -output %t >> /dev/null 2>&1
 // RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
 // RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
+// Under -strict the placeholder is an error and nothing is lowered.
+// RUN: not %patchir-decomp -input %t.json -emit-cir -strict -output %t.strict > %t.strict.log 2>&1
+// RUN: %file-check -vv -check-prefix=STRICT %s --input-file %t.strict.log
+// RUN: test ! -e %t.strict.cir
+// STRICT: Diag Error: {{.*}}lossy lift [call-placeholder]: CALLOTHER operation 'call_op' in function 'unknown_intrinsic_test': 'some_unknown_intrinsic' has no lifting and is replaced with a call to '__patchestry_missing_some_unknown_intrinsic'
+// STRICT: Skipping code generation due to prior diagnostics errors
 // CIR: cir.func dso_local @unknown_intrinsic_test
 // CIR: __patchestry_missing_some_unknown
 // LL: define {{.*}} void @unknown_intrinsic_test

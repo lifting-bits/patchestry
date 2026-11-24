@@ -1,0 +1,158 @@
+// A volatile read is a hardware access, so it must survive when nothing uses
+// its value.  Both shapes below used to be returned as a value for a later
+// operation to consume and vanished without a consumer: a read with no output,
+// and a read whose output names the operation itself.  Each must be emitted as
+// its own statement, exactly once.
+//
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-llvm -print-tu -strict -output %t > %t.log 2>&1
+// RUN: grep -c "__volatile_read_[0-9]* = \*(volatile" %t.c | grep -x 2
+// RUN: grep -c "load volatile" %t.ll | grep -x 2
+//
+// The checks count matches instead of following the two functions in order:
+// `-print-tu` does not print functions in a stable order.
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:v7",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:20000100": {
+      "name": "read_no_output",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_uint",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": []
+      },
+      "basic_blocks": {
+        "ram:20000100:entry": {
+          "operations": {
+            "t0": {
+              "mnemonic": "DECLARE_TEMPORARY",
+              "name": "val",
+              "kind": "temporary",
+              "type": "type_uint",
+              "address": "ram:20000100:0:b:vr"
+            },
+            "rbr": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:20000100:0:b"
+            }
+          },
+          "ordered_operations": [
+            "t0",
+            "rbr"
+          ]
+        },
+        "ram:20000100:0:b": {
+          "operations": {
+            "vr": {
+              "mnemonic": "CALLOTHER",
+              "target": {
+                "kind": "intrinsic",
+                "function": "volatile_read:type_uint",
+                "is_variadic": true,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "type_ptr_uint",
+                  "kind": "constant",
+                  "value": 1073741824
+                }
+              ]
+            },
+            "rret": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "type_uint",
+                  "kind": "constant",
+                  "value": 0
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "vr",
+            "rret"
+          ]
+        }
+      },
+      "entry_block": "ram:20000100:entry"
+    },
+    "ram:20000200": {
+      "name": "read_self_output",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_uint",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": []
+      },
+      "basic_blocks": {
+        "ram:20000200:0:b": {
+          "operations": {
+            "vr": {
+              "mnemonic": "CALLOTHER",
+              "type": "type_uint",
+              "size": 4,
+              "output": {
+                "kind": "local",
+                "operation": "vr"
+              },
+              "target": {
+                "kind": "intrinsic",
+                "function": "volatile_read:type_uint",
+                "is_variadic": true,
+                "is_noreturn": false
+              },
+              "inputs": [
+                {
+                  "type": "type_ptr_uint",
+                  "kind": "constant",
+                  "value": 1073872896
+                }
+              ]
+            },
+            "rt": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "type_uint",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 0
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "vr",
+            "rt"
+          ]
+        }
+      },
+      "entry_block": "ram:20000200:0:b"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_uint": {
+      "name": "unsigned int",
+      "size": 4,
+      "kind": "integer"
+    },
+    "type_ptr_uint": {
+      "kind": "pointer",
+      "size": 4,
+      "element_type": "type_uint"
+    },
+    "type_void": {
+      "name": "void",
+      "size": 0,
+      "kind": "void"
+    }
+  }
+}

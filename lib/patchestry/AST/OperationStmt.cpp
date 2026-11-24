@@ -650,6 +650,36 @@ namespace patchestry::ast {
         return std::make_pair(clang::dyn_cast< clang::Stmt >(void_cast), false);
     }
 
+    std::pair< clang::Stmt *, bool > OpBuilder::materialize_once(
+        clang::ASTContext &ctx, clang::Expr *value, clang::QualType type, const Operation &op,
+        const std::string &name_prefix, clang::SourceLocation loc
+    ) {
+        auto var_name = name_prefix + std::to_string(function_builder().call_ret_counter++);
+        auto *var_decl = create_variable_decl(ctx, sema().CurContext, var_name, type, loc);
+        var_decl->setIsUsed();
+        sema().CurContext->addDecl(var_decl);
+        function_builder().pending_materialized.push_back(create_decl_stmt(ctx, var_decl, loc));
+
+        auto make_ref = [&]() {
+            return clang::DeclRefExpr::Create(
+                ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(), var_decl, false,
+                loc, type, clang::VK_LValue
+            );
+        };
+        auto *assign = create_assign_operation(ctx, value, make_ref(), loc);
+        if (assign == nullptr) { return {}; }
+        // Both operand kinds must resolve to the temporary: a `temporary`
+        // operand reads the cached value, and a `local` operand naming an
+        // operation without a declared variable would build it again.
+        function_builder().local_variables.insert_or_assign(op.key, var_decl);
+        set_operation_value(op, make_ref());
+        return { assign, false };
+    }
+
+    void OpBuilder::set_operation_value(const Operation &op, clang::Stmt *value) {
+        function_builder().operation_stmts.insert_or_assign(op.key, value);
+    }
+
     clang::Stmt *OpBuilder::create_assign_operation(
         clang::ASTContext &ctx, clang::Expr *input_expr, clang::Expr *output_expr,
         clang::SourceLocation loc
@@ -1599,14 +1629,37 @@ namespace patchestry::ast {
             }
         }
 
+        // The call below is still built when an argument is lost or invented,
+        // so the caller's null-statement check cannot see it; report it here.
+        auto report_argument_loss = [&](llvm::StringRef category, const std::string &what) {
+            function_builder().loss_reporter.get().report(
+                SourceLocation(ctx.getSourceManager(), op.key), category,
+                "call to '" + callee->getNameAsString() + "' (operation '" + op.key
+                    + "') in function '" + function.name + "': " + what
+            );
+        };
+
         unsigned index = 0;
+        unsigned input_index = 0;
         std::vector< clang::Expr * > arguments;
         for (const auto &input : op.inputs) {
+            const unsigned this_input = input_index++;
             if (index >= num_params && !proto_type->isVariadic()) {
+                report_argument_loss(
+                    "arg-dropped",
+                    "input " + std::to_string(this_input) + " is beyond the "
+                        + std::to_string(num_params) + " declared parameter(s) and is not passed"
+                );
                 continue;
             }
             auto *vnode_stmt = create_varnode(ctx, function, input);
             if (!vnode_stmt) {
+                report_argument_loss(
+                    "arg-dropped",
+                    "input " + std::to_string(this_input)
+                        + " could not be built and is not passed; later arguments move up "
+                          "one position"
+                );
                 LOG(ERROR)
                     << "Failed to create varnode for call argument " << index
                     << " of '" << callee->getNameAsString()
@@ -1616,6 +1669,12 @@ namespace patchestry::ast {
             }
             auto *vnode_expr = clang::dyn_cast< clang::Expr >(vnode_stmt);
             if (!vnode_expr) {
+                report_argument_loss(
+                    "arg-dropped",
+                    "input " + std::to_string(this_input)
+                        + " is not an expression and is not passed; later arguments move up "
+                          "one position"
+                );
                 LOG(ERROR)
                     << "Varnode for call argument " << index
                     << " of '" << callee->getNameAsString()
@@ -1641,6 +1700,12 @@ namespace patchestry::ast {
         // extend it with the default value.
         unsigned min_args = callee->getMinRequiredArguments();
         if (arguments.size() < min_args) {
+            report_argument_loss(
+                "arg-synthesized",
+                std::to_string(arguments.size()) + " argument(s) were recovered but the "
+                    "declaration requires " + std::to_string(min_args)
+                    + "; the missing ones are filled with zero"
+            );
             if (!extend_callexpr_arguments(ctx, callee, arguments)) {
                 LOG(ERROR) << "Dropping under-applied call to '"
                            << callee->getNameAsString() << "'. key: " << op.key << "\n";
@@ -2165,6 +2230,13 @@ namespace patchestry::ast {
         }
 
         std::string fn_name = "__patchestry_userdefined_" + SanitizeKeyToIdent(op.key);
+
+        function_builder().loss_reporter.get().report(
+            op_loc, "call-placeholder",
+            std::string(to_string(op.mnemonic)) + " operation '" + op.key + "' in function '"
+                + function.name + "' has no lifting and is replaced with a call to '" + fn_name
+                + "'"
+        );
 
         llvm::SmallVector< clang::QualType, 4 > param_types;
         for (const auto &input : op.inputs) {
@@ -4329,6 +4401,15 @@ namespace patchestry::ast {
 
         // Build descriptive function name: __patchestry_missing_<original_name>
         std::string func_name = "__patchestry_missing_" + original_name;
+
+        // The placeholder is a valid call, so the caller's null-statement
+        // check cannot tell that the real operation is absent.
+        function_builder().loss_reporter.get().report(
+            op_loc, "call-placeholder",
+            std::string(to_string(op.mnemonic)) + " operation '" + op.key + "' in function '"
+                + function.name + "': '" + original_name
+                + "' has no lifting and is replaced with a call to '" + func_name + "'"
+        );
         (void) original_label; // debug metadata is currently dropped (see below)
 
         // Determine return type.  Prefer the typed output, fall back to
@@ -4461,6 +4542,15 @@ namespace patchestry::ast {
         clang::ASTContext &ctx, const std::string &reason, clang::SourceLocation loc
     ) {
         if (loc.isInvalid()) loc = VirtualLoc(ctx);
+
+        // The placeholder is a valid expression, so the caller's
+        // null-statement check cannot tell that the real operation is absent.
+        function_builder().loss_reporter.get().report(
+            loc, "error-placeholder",
+            "an operation in function '" + function_builder().get_function().name
+                + "' could not be lifted and is replaced with __patchestry_error(\""
+                + reason + "\")"
+        );
 
         const std::string func_name = "__patchestry_error";
         auto it = intrinsic_decls().find(func_name);

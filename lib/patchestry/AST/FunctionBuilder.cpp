@@ -465,8 +465,19 @@ namespace patchestry::ast {
         std::vector<clang::Stmt *> stmt_vec;
         for (const auto &operation_key : block.ordered_operations) {
             if (!block.operations.contains(operation_key)) {
-                LOG(ERROR) << "Skipping, invalid operations key in the block. key "
-                           << operation_key << "\n";
+                // The deserializer discarded the operation, or the key never
+                // had one.  Either way the block is missing a step the input
+                // lists, so it is a loss like a failed build below.
+                auto dropped = block.dropped_operations.find(operation_key);
+                loss_reporter.get().report(
+                    SourceLocation(ctx.getSourceManager(), operation_key), "op-dropped",
+                    "operation '" + operation_key + "' in block '" + block.key
+                        + "' of function '" + function.get().name
+                        + "' is listed in ordered_operations but was not read: "
+                        + (dropped != block.dropped_operations.end()
+                               ? dropped->second
+                               : std::string("the block has no operation with that key"))
+                );
                 continue;
             }
 

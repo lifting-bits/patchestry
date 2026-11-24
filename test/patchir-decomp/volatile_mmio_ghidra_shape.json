@@ -3,6 +3,8 @@
 // RUN: %file-check -vv -check-prefix=TU %s --input-file %t.c
 // RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
 // RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
+// The register is read exactly once.
+// RUN: grep -c "load volatile" %t.ll | grep -x 1
 
 // Locks down the *Ghidra-produced* shape of read_volatile / write_volatile
 // (as emitted by util.PcodeSerializer.serializeVolatileOp): the access address
@@ -14,7 +16,10 @@
 // op.type result-type fallbacks in handle_volatile_read.
 
 // TU-DAG: *(volatile unsigned int *){{.*}} = param_1
-// TU-DAG: return *(volatile unsigned int *)
+// The read gets a temporary so it happens once, where the operation stands,
+// however many operations consume it.
+// TU-DAG: __volatile_read_0 = *(volatile unsigned int *)
+// TU-DAG: return __volatile_read_0;
 
 // CIR-DAG: cir.store volatile
 // CIR-DAG: cir.load volatile

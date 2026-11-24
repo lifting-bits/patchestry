@@ -1,0 +1,75 @@
+// A branch terminator is turned into a control-flow edge, not a statement, so
+// it never reaches the statement builder's loss report.  Here a BRANCH names a
+// block the function does not have: no edge and no goto can be built and the
+// block ends without its jump.  The default lift reports that as a warning and
+// still lowers; `-strict` turns the report into an error and stops before
+// lowering.
+//
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-cir -output %t > %t.log 2>&1
+// RUN: %file-check -vv -check-prefix=WARN %s --input-file %t.log
+// RUN: %file-check -vv -check-prefix=CIR %s --input-file %t.cir
+// RUN: not %patchir-decomp -input %t.json -emit-cir -strict -output %t.strict > %t.strict.log 2>&1
+// RUN: %file-check -vv -check-prefix=ERR %s --input-file %t.strict.log
+// RUN: test ! -e %t.strict.cir
+//
+// WARN: Diag Warning: {{.*}}lossy lift [terminator-dropped]: BRANCH operation 'bi' in block 'ram:20000000:0:basic' of function 'strict_branch_missing_target': target block 'ram:20000000:9:missing' is not in the function; the branch is not emitted
+// WARN-NOT: Diag Error
+// CIR: cir.func{{.*}}@strict_branch_missing_target
+// ERR: Diag Error: {{.*}}lossy lift [terminator-dropped]: BRANCH operation 'bi' in block 'ram:20000000:0:basic' of function 'strict_branch_missing_target': target block 'ram:20000000:9:missing' is not in the function; the branch is not emitted
+// ERR: Skipping code generation due to prior diagnostics errors
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:v7",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:20000000": {
+      "name": "strict_branch_missing_target",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_void",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": []
+      },
+      "basic_blocks": {
+        "ram:20000000:entry": {
+          "operations": {
+            "e_br": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:20000000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "e_br"
+          ]
+        },
+        "ram:20000000:0:basic": {
+          "operations": {
+            "bi": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:20000000:9:missing"
+            }
+          },
+          "ordered_operations": [
+            "bi"
+          ]
+        }
+      },
+      "entry_block": "ram:20000000:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_uint": {
+      "name": "unsigned int",
+      "size": 4,
+      "kind": "integer"
+    },
+    "type_void": {
+      "name": "void",
+      "size": 0,
+      "kind": "void"
+    }
+  }
+}

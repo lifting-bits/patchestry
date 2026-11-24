@@ -12,6 +12,7 @@
 
 #include <clang/AST/ASTContext.h>
 
+#include <patchestry/AST/LossReport.hpp>
 #include <patchestry/Ghidra/JsonDeserialize.hpp>
 #include <patchestry/Util/Log.hpp>
 
@@ -27,7 +28,12 @@ namespace patchestry::ast {
         static constexpr uint32_t kNumBitsInByte = 8U;
         static constexpr uint32_t kNumBitsUint   = 32U;
 
-        explicit TypeBuilder(clang::ASTContext &ctx) : context(ctx), serialized_types({}) {}
+        /// `loss_reporter`, when given, receives every type the builder had to
+        /// substitute for one it could not create; it must outlive the builder.
+        explicit TypeBuilder(
+            clang::ASTContext &ctx, const LossReporter *loss_reporter = nullptr
+        )
+            : context(ctx), serialized_types({}), loss_reporter(loss_reporter) {}
 
         TypeBuilder &operator=(const TypeBuilder &)  = delete;
         TypeBuilder(const TypeBuilder &)             = delete;
@@ -209,8 +215,15 @@ namespace patchestry::ast {
         clang::ASTContext &GetASTContext() { return context.get(); }
 
         std::unordered_map< std::string, clang::Decl * > missing_type_definition;
+        // A substituted type changes signatures and layouts while every
+        // statement still builds; report it as a loss.
+        void report_fallback(
+            clang::ASTContext &ctx, const std::string &type_key, const std::string &what
+        ) const;
+
         std::reference_wrapper< clang::ASTContext > context;
         SerializedTypeMap serialized_types;
+        const LossReporter *loss_reporter;
         const TypeMap *lifted_types_ = nullptr;
     };
 } // namespace patchestry::ast
