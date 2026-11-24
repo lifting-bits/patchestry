@@ -39,6 +39,7 @@
 #include <mlir/Target/LLVMIR/Dialect/All.h>
 #include <mlir/Target/LLVMIR/Import.h>
 
+#include <patchestry/Codegen/AbiAttributes.hpp>
 #include <patchestry/Dialect/Contracts/ContractsDialect.hpp>
 #include <patchestry/Util/Log.hpp>
 
@@ -700,6 +701,11 @@ int main(int argc, char **argv) {
     if (!llvm_module) {
         LOG(ERROR) << "Failed to lower cir to llvm\n";
         return EXIT_FAILURE;
+    }
+
+    // A _Bool is passed and returned zero-extended; ClangIR does not say so.
+    if (unsigned added = patchestry::codegen::add_bool_extension_attributes(*llvm_module)) {
+        LOG(INFO) << "Added zeroext to " << added << " _Bool argument(s) and result(s)\n";
     }
 
     stripDeadInternalGlobals(*llvm_module);

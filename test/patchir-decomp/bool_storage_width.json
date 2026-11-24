@@ -1,0 +1,103 @@
+// A recovered boolean keeps its recovered storage width.  Ghidra can type a
+// four-byte status word as boolean; lifting it as C `bool` would shrink the
+// object to one byte and normalize values such as 2 to 1.  A boolean whose
+// size differs from the target's `bool` lifts as an unsigned integer of the
+// recovered width; a one-byte boolean still lifts as `bool`, except as a
+// return type, which is declared at register width (bool_return_width.json).
+//
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-cir -emit-llvm -print-tu -output %t >> /dev/null 2>&1
+// RUN: %file-check -vv -check-prefix=C  %s --input-file %t.c
+// RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
+//
+// Function order in the printed unit is not stable, so match in any order.
+// C-DAG: unsigned int wide_flag(unsigned int flag) {
+// C-DAG: unsigned int saved;
+// C-DAG: unsigned int narrow_flag(_Bool flag) {
+//
+// LL-DAG: define dso_local i32 @narrow_flag(i1 zeroext
+// LL-DAG: define dso_local i32 @wide_flag(i32
+//
+// RUN: sed -n '/@wide_flag/,/^}/p' %t.ll > %t.wide.ll
+// RUN: %file-check -vv -check-prefix=WIDE %s --input-file %t.wide.ll
+// WIDE: alloca i32
+// WIDE-NOT: i8
+// WIDE-NOT: i1
+// WIDE: ret i32
+{
+  "architecture": "ARM",
+  "id": "ARM:LE:32:Cortex",
+  "format": "Executable and Linking Format (ELF)",
+  "functions": {
+    "ram:10000000": {
+      "name": "wide_flag",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_bool4",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["type_bool4"]
+      },
+      "basic_blocks": {
+        "ram:10000000:entry": {
+          "operations": {
+            "p0": { "mnemonic": "DECLARE_PARAMETER", "name": "flag", "type": "type_bool4", "kind": "parameter", "index": 0 },
+            "local0": { "mnemonic": "DECLARE_LOCAL", "kind": "local", "name": "saved", "type": "type_bool4" },
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:10000000:0:basic" }
+          },
+          "ordered_operations": ["p0", "local0", "br"]
+        },
+        "ram:10000000:0:basic": {
+          "operations": {
+            "store_op": {
+              "mnemonic": "COPY",
+              "type": "type_bool4",
+              "output": { "kind": "local", "operation": "local0" },
+              "inputs": [{ "type": "type_bool4", "kind": "parameter", "operation": "p0" }]
+            },
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [{ "type": "type_bool4", "kind": "local", "operation": "local0" }]
+            }
+          },
+          "ordered_operations": ["store_op", "ret"]
+        }
+      },
+      "entry_block": "ram:10000000:entry"
+    },
+    "ram:10000100": {
+      "name": "narrow_flag",
+      "is_intrinsic": false,
+      "type": {
+        "return_type": "type_bool",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "parameter_types": ["type_bool"]
+      },
+      "basic_blocks": {
+        "ram:10000100:entry": {
+          "operations": {
+            "q0": { "mnemonic": "DECLARE_PARAMETER", "name": "flag", "type": "type_bool", "kind": "parameter", "index": 0 },
+            "br": { "mnemonic": "BRANCH", "target_block": "ram:10000100:0:basic" }
+          },
+          "ordered_operations": ["q0", "br"]
+        },
+        "ram:10000100:0:basic": {
+          "operations": {
+            "ret": {
+              "mnemonic": "RETURN",
+              "inputs": [{ "type": "type_bool", "kind": "parameter", "operation": "q0" }]
+            }
+          },
+          "ordered_operations": ["ret"]
+        }
+      },
+      "entry_block": "ram:10000100:entry"
+    }
+  },
+  "globals": {},
+  "types": {
+    "type_bool4": { "name": "bool", "size": 4, "kind": "boolean" },
+    "type_bool": { "name": "bool", "size": 1, "kind": "boolean" }
+  }
+}

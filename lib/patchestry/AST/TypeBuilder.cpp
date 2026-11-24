@@ -32,6 +32,31 @@ namespace patchestry::ast {
      * `serialized_types` map.
      */
 
+    namespace {
+
+        // `natural` when its storage matches the recovered byte size, otherwise
+        // an integer of the recovered width with `natural`'s signedness.  A
+        // recovered `bool`/`char`/`wchar_t` names how the value is read, not how
+        // many bytes the object occupies: lifting a four-byte boolean as C
+        // `bool` would shrink the object and normalize its values.  Size 0
+        // means the width is unknown, so `natural` stands.
+        clang::QualType storage_faithful(
+            clang::ASTContext &ctx, clang::QualType natural, uint32_t size_in_bytes
+        ) {
+            const auto bit_size = size_in_bytes * TypeBuilder::kNumBitsInByte;
+            if (bit_size == 0 || ctx.getTypeSize(natural) == bit_size) { return natural; }
+
+            const bool is_signed = !natural->isBooleanType() && natural->isSignedIntegerType();
+            auto sized = ctx.getIntTypeForBitwidth(
+                bit_size, static_cast< unsigned int >(is_signed)
+            );
+            // Null when the target has no integer of that width; the caller
+            // reports it and keeps `natural`.
+            return sized;
+        }
+
+    } // namespace
+
     void TypeBuilder::create_types(clang::ASTContext &ctx, TypeMap &lifted_types) {
         lifted_types_ = &lifted_types;
         for (auto &[key, vnode_type] : lifted_types) {
@@ -78,12 +103,27 @@ namespace patchestry::ast {
             return serialized_types[vnode_type->key];
         }
 
+        // A recovered bool/char/wchar_t keeps its recovered byte size.
+        auto with_storage_width = [&](clang::QualType natural) {
+            auto sized = storage_faithful(ctx, natural, vnode_type->size);
+            if (sized.isNull()) {
+                report_fallback(
+                    ctx, vnode_type->key,
+                    "recovered '" + natural.getAsString() + "' of "
+                        + std::to_string(vnode_type->size)
+                        + " byte(s) has no matching integer type and keeps its natural width"
+                );
+                return natural;
+            }
+            return sized;
+        };
+
         switch (vnode_type->kind) {
             case VarnodeType::VT_INVALID:
                 return create_invalid(ctx, vnode_type);
 
             case VarnodeType::VT_BOOLEAN:
-                return ctx.BoolTy;
+                return with_storage_width(ctx.BoolTy);
 
             case VarnodeType::VT_INTEGER: {
                 auto &builtin = dynamic_cast< const BuiltinType & >(*vnode_type);
@@ -94,10 +134,10 @@ namespace patchestry::ast {
             }
 
             case VarnodeType::VT_CHAR:
-                return ctx.CharTy;
+                return with_storage_width(ctx.CharTy);
 
             case VarnodeType::VT_WIDECHAR:
-                return ctx.WideCharTy;
+                return with_storage_width(ctx.WideCharTy);
 
             case VarnodeType::VT_FLOAT:
                 return GetTypeFromSize(

@@ -90,6 +90,31 @@ namespace patchestry::ast {
         clang::QualType
         create_function_type(clang::ASTContext &ctx, const FunctionPrototype &proto);
 
+        // The return type a function is declared with, given the one Ghidra
+        // recovered.  They differ for `bool` only.
+        //
+        // A function Ghidra types as returning `bool` returns in a whole
+        // register, and the code compiled against it tests the whole register
+        // (`cmp r0, #0`).  Declared `_Bool`, the result is read as one bit:
+        // the compiler masks it (`and r0, r0, #1`) before storing or testing
+        // it, so a callee that in fact returns 2 reads as false.  Ghidra
+        // assigns `bool` from how a result is used, not from what the callee
+        // computes, so that does happen.  The result is declared as an
+        // unsigned integer of register width instead.  A caller that wants a
+        // `_Bool` converts it, which is `!= 0` on the whole value; a
+        // definition that returns a `_Bool` widens it to 0 or 1, as the ABI
+        // requires anyway.
+        static clang::QualType
+        declared_return_type(clang::ASTContext &ctx, clang::QualType recovered) {
+            if (recovered.isNull() || !recovered->isBooleanType()) {
+                return recovered;
+            }
+            auto widened = ctx.getIntTypeForBitwidth(
+                static_cast< unsigned >(ctx.getTypeSize(ctx.VoidPtrTy)), 0
+            );
+            return widened.isNull() ? recovered : widened;
+        }
+
         std::vector< clang::ParmVarDecl * > create_default_paramaters(
             clang::ASTContext &ctx, clang::FunctionDecl *func_decl,
             const FunctionPrototype &proto

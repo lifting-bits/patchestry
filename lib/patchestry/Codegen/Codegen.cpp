@@ -41,6 +41,7 @@
 #include <mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h>
 #include <mlir/Target/LLVMIR/Export.h>
 
+#include <patchestry/Codegen/AbiAttributes.hpp>
 #include <patchestry/Codegen/Codegen.hpp>
 #include <patchestry/Codegen/PassManager.hpp>
 #include <patchestry/Codegen/Serializer.hpp>
@@ -174,6 +175,8 @@ namespace patchestry::codegen {
                 LOG(ERROR) << "Failed to translate LLVM dialect to LLVM IR\n";
                 return false;
             }
+            // ClangIR drops the `zeroext` of a _Bool argument or result.
+            (void) add_bool_extension_attributes(*llvm_mod);
             if (!Serializer::SerializeToFile(llvm_mod.get(), options.output_prefix + ".ll")) {
                 return false;
             }
