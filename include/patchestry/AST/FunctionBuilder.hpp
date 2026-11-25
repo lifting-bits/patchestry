@@ -226,6 +226,8 @@ namespace patchestry::ast {
         // Sink for facts the lifter could not reproduce; owned by the consumer.
         std::reference_wrapper< const LossReporter > loss_reporter;
 
+        bool is_stack_canary_operation(const Operation &op) const;
+
         std::unordered_map< std::string, clang::VarDecl * > local_variables;
 
         // Shared stack storage; see `StackRegion` and `LocalView`.
