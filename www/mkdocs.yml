@@ -5,9 +5,14 @@ nav:
   - Getting Started:
     - Build & Run: GettingStarted/build.md
     - Ghidra Integration: GettingStarted/ghidra.md
+    - QEMU Firmware Runtime: GettingStarted/qemu_firmware_runtime.md
+    - Recompilation Fidelity: GettingStarted/recompilation_fidelity.md
     - How to contribute: CONTRIBUTING.md
-  - Dialects:
-    - Pcode: Dialects/Pcode.md
+  - Verification:
+    - Verifiable Patching: verifiable_patching.md
+    - IR-Level Verification: ir_verification.md
+    - KLEE Integration: klee-integration.md
+    - Patch Validation: patch_validation.md
   - About:
     - 'License': 'statement.md'
 

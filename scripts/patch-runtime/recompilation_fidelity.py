@@ -48,7 +48,7 @@ What this does not establish, and the evidence says so as `not-run`:
   budgets.
 - Behaviour at run time.  The binary is not executed.
 
-CLI: identity_reinsertion.py --cases cases.json --binary-root DIR
+CLI: recompilation_fidelity.py --cases cases.json --binary-root DIR
      --output-dir DIR [--build-type Debug] [--only NAME]
 Exit 0 when every case ends as it declares, 1 when one does not.
 """
@@ -455,7 +455,7 @@ def main() -> int:
         # What the suite knows and no report holds; the evidence is built from
         # this and the reports the case got to.
         context = {
-            "suite": "identity-reinsertion",
+            "suite": "recompilation-fidelity",
             "case": case.name,
             "function": case.function,
             "binary": case.binary,

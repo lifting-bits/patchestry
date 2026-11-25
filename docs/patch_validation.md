@@ -1,335 +1,270 @@
-# Patch Validation: Strategy, Stages and Comparison with VeriBin
+# Patch Validation
 
-This document describes how Patchestry checks that a patch does no harm, what
-each stage of the check does and where it lives in the repository, what has
-been run and what has not, and how the approach differs from VeriBin (Wu et
-al., NDSS 2025).
+After reinsertion, Patchestry checks the binary rewrite and compares the
+original and rewritten functions using PatchSymDiff. PatchSymDiff executes
+their machine code symbolically with angr and uses cozy to compare the
+resulting states.
 
-## The claim
+This page describes the validation stages, results, and limitations.
+[IR-level verification](ir_verification.md) covers contract checking before
+compilation, while [Verifiable patching](verifiable_patching.md) explains how
+the workflows connect.
 
-The validator makes one claim per patched function: the patch only restricts
-inputs and changes nothing else. An input the patched function accepts was
-accepted by the original, and on every such input the two behave the same.
+## What the comparison establishes
 
-It does not claim that the vulnerability is fixed. That stays with the
-contract checks in `patchir-klee-verifier` (see `klee-integration.md`). Timing,
-whole-binary equivalence and the behaviour inside stubbed callees are also out
-of scope.
+The comparison checks whether a patch rejects additional inputs while
+preserving the compared behavior for inputs that both versions accept. It
+also checks that the patched function accepts no input rejected by the
+original. Results apply to individual functions under the specified input
+bounds and environment assumptions.
 
-## Strategy
+Contracts describe the properties required of the patch. Binary comparison
+complements those checks but does not establish that the contracts fully
+capture the vulnerability. Timing, whole-binary equivalence, and behavior
+inside stubbed callees remain outside its scope.
 
-Three versions of the function exist during patching:
+## Validation approach
 
-1. the bytes of the function in the original ELF,
-2. the intended patched IR (the lifted function after `patchir-transform`),
-3. the bytes that Patcherex2 wrote into the rewritten ELF.
+Validation uses three representations of the function:
 
-The check is split along those three so that a failure names its cause.
+1. The machine code in the original ELF.
+2. The intended patched IR, produced by `patchir-transform`.
+3. The machine code written into the rewritten ELF by Patcherex2.
 
-The integrity and static checks compare 2 with 3. They ask whether the
-patcher and the toolchain applied what was intended. No reject path and no
-relaxation is allowed: the bytes must be the intended code.
+Integrity checks verify that the rewritten ELF contains the intended code at
+the expected addresses. Static analysis checks the inserted function's stack
+and register use. These requirements apply even when the patch rejects an
+input.
 
-The behavioural check compares 1 with 3, machine code against machine code.
-It asks whether the patched function does harm. Declared reject paths are
-allowed here: the patch may turn an accepted input into a rejected one, and
-nothing else. A comparison of the lifted original with the intended IR, at IR
-level, is not part of the validator.
+Binary comparison checks the original and rewritten machine code, allowing
+the patch to reject additional inputs. It does not compare the lifted original
+and patched functions at the IR level.
 
-Three rules hold across both.
-
-Every check reports one of four verdicts, and the weakest one wins.
+The evidence file records four verdicts. A group or case receives the weakest
+verdict among its checks, ordered from `failed` through `not-run` and `tested`
+to `proven`.
 
 | Verdict | Meaning |
 | --- | --- |
-| `proven` | the claim follows from the reports alone, or from a complete symbolic exploration |
-| `tested` | the claim held on the inputs that were run, and only on those |
-| `failed` | the check found a problem |
-| `not-run` | the check did not run, could not decide, or has nothing declared to check |
+| `proven` | The check established its claim within the specified bounds and assumptions. |
+| `tested` | The claim held for the inputs exercised by the test. |
+| `failed` | The check found a problem. |
+| `not-run` | The check did not run, could not reach a conclusion, or had no declared property to check. |
 
-Nothing counts as passed because nobody looked. A check whose report is absent
-is `not-run`.
+Missing reports receive `not-run`. The evidence also records input bounds,
+callee models, rejection rules, and device address ranges. Regression tests
+include deliberately broken patches to verify that the checks detect failures.
 
-Everything the result depends on is recorded as a named assumption in the
-evidence: that the lift is faithful, which callees were stubbed or modelled,
-which exits count as rejection, which address ranges are device registers,
-that inputs were sampled.
+This evidence covers validation after reinsertion. KLEE and SeaHorn contract
+verification produces separate results; those results are not included in
+`validation.json`.
 
-Every check has seeded harms. A check is only trusted once a deliberately
-broken patch has made it fail.
+## Validation stages
 
-## Stages
+The drivers run the applicable stages in the following order. A case stops
+at the first integrity failure because subsequent checks require a valid
+rewrite.
 
-The stages run in this order. A case stops at the first integrity failure,
-because later stages would compare the wrong things.
-
-| Stage | Question | Where | Verdict it can give |
+| Stage | Check | Script | Possible verdicts |
 | --- | --- | --- | --- |
-| 1. Bindings | Does every global and function the lifted code refers to exist in the image at the address, size and kind the lift assumed? | `check_bindings.py` | proven, failed |
-| 2. Dependencies and ABI | Does the inserted code need anything the image cannot supply (compiler runtime calls, writable state), and was it compiled for the image's ABI (CPU architecture, floating-point unit, float calling convention)? | `patch_dependencies.py`, `check_abi.py` | proven, failed |
-| 3. Reinsertion | Did the rewrite stay inside the function, or branch to new code without overwriting a neighbour, splitting an instruction or leaving a stale entry? | `check_trampoline.py` | proven, failed |
-| 4. Patch record | Which bytes did Patcherex2 write, where, with which compiler and flags? Do they agree with the rewritten ELF? | `patch_record.py` | proven, failed |
-| 5. Applied bytes | Recompile the intended snippets and compare them with the bytes in the rewritten ELF. | `check_applied_bytes.py` | proven, failed |
-| 6. Static discipline | Per inserted function: stack balance, saved registers restored, code size and stack depth against declared budgets. | `check_static.py` | proven, failed, not-run when no budget is declared |
-| 7. Runtime | Does the rewritten firmware still print the expected transcript under QEMU? | `qemu_firmware_runtime.py` | tested, failed |
-| 8. Binary comparison | Does the function in the rewritten ELF behave like the function in the original ELF, apart from declared rejections? | `patch_symdiff.py` (PatchSymDiff) | proven, failed, incomplete |
-| 9. Evidence | Collect every report into one artifact with verdicts and assumptions. | `evidence.py` | |
-
-All scripts are under `scripts/patch-runtime/`.
+| 1. Bindings | Verify that referenced globals and functions exist in the image with the expected addresses, sizes, and kinds. | [check_bindings.py](../scripts/patch-runtime/check_bindings.py) | `proven`, `failed` |
+| 2. Dependencies and ABI | Check that the image supplies the inserted code's dependencies and that the code matches its architecture, floating-point unit, and calling convention. | [patch_dependencies.py](../scripts/patch-runtime/patch_dependencies.py), [check_abi.py](../scripts/patch-runtime/check_abi.py) | `proven`, `failed` |
+| 3. Reinsertion | Check that the rewrite stays within the function or branches to new code without overwriting neighboring code, splitting instructions, or leaving stale entries. | [check_trampoline.py](../scripts/patch-runtime/check_trampoline.py) | `proven`, `failed` |
+| 4. Patch record | Record the bytes, addresses, compiler, and flags used by Patcherex2, and check the record against the rewritten ELF. | [patch_record.py](../scripts/patch-runtime/patch_record.py) | `proven`, `failed` |
+| 5. Applied bytes | Recompile the intended snippets and compare the resulting bytes with the rewritten ELF. | [check_applied_bytes.py](../scripts/patch-runtime/check_applied_bytes.py) | `proven`, `failed` |
+| 6. Static analysis | Check stack and saved-register preservation, along with any declared code-size and stack budgets. | [check_static.py](../scripts/patch-runtime/check_static.py) | `proven`, `failed`, `not-run` |
+| 7. Runtime | Run the rewritten firmware under QEMU and check its output against the expected transcript. | [qemu_firmware_runtime.py](../scripts/patch-runtime/qemu_firmware_runtime.py) | `tested`, `failed` |
+| 8. Binary comparison | Compare the original and rewritten functions under the declared inputs, rejection rules, and environment assumptions. | [patch_symdiff.py](../scripts/patch-runtime/patch_symdiff.py) | `proven`, `failed`, `incomplete` |
+| 9. Evidence | Collect the reports, verdicts, and assumptions into one artifact. | [evidence.py](../scripts/patch-runtime/evidence.py) | Aggregated from the checks above. |
 
 ### Stages 1 to 6: integrity and static checks
 
-These read the two ELF files and the patch record. They do not execute
-anything, and their verdicts are `proven` or `failed`. Stage 5 shows that the
-bytes in the image are the bytes the compiler produced for the intended code.
-It trusts the compiler.
+These stages inspect the ELF files and patch record without executing the
+firmware. Stage 5 recompiles the intended IR and compares the resulting bytes
+with the rewritten image, relying on the compiler's correctness. Static
+analysis reports `not-run` for checks it cannot complete or budgets that have
+not been declared.
 
-### Properties P1 to P4
+### Comparison properties: P1 to P4
 
-The binary comparison answers four properties. The definitions are VeriBin's.
-PatchSymDiff reports kinds of difference; the table gives the kind that
-violates each property.
+PatchSymDiff checks four properties: existing input rejections, caller-visible
+memory results, return values, and modeled external calls. Each property
+compares the original and patched function using the same input and modeled
+initial state, within the specified input bounds.
 
-| Property | Claim | Kind of difference |
+Each case defines rejection through an error return value, a reject handler,
+a write to a declared fault address, or an omitted call listed in
+`reject_skips`. A completed execution that meets none of these rules is
+accepted. An unfinished or unsupported execution makes the comparison
+incomplete.
+
+| Property | Requirement | Reported difference |
 | --- | --- | --- |
-| P1 | An input the patched function accepts, the original accepts. | `accepts-rejected-input` |
-| P2 | When both accept, the final non-local memory is byte-equal. | `memory` |
-| P3 | When both accept, the return values are equal. | `register` (r0, and r1 for a 64-bit result) |
-| P4 | When both accept, the calls of external functions and their arguments are equal, after the declared rules. | `calls` for stubbed callees; `device-writes` for what executed callees write to a device |
+| P1: Preserve existing rejections | The patch must not accept an input that the original rejects. It may reject additional inputs. | `accepts-rejected-input` |
+| P2: Preserve memory results | When both functions accept, caller-visible memory, including globals and output buffers, must contain the same final bytes. Temporary memory below the final stack pointer is excluded. | `memory` |
+| P3: Preserve return values | When both functions accept, their return values must match. | `register` for r0, and r1 for a 64-bit result |
+| P4: Preserve external calls | When both functions accept, modeled external calls must match in order and arguments. | `calls` for stubbed callees |
 
-Two kinds go beyond the four: `register` also covers r4 to r11 and sp, which
-a function must preserve, and `unmatched-path` is a path on one side that no
-path on the other shares an input with.
+For example, a patch may add a guard that rejects oversized messages. For
+messages that pass the guard, changing an output buffer violates P2, changing
+the returned status violates P3, and removing a required external call
+violates P4. Removing an existing rejection violates P1.
+
+Calls to stubbed functions are recorded and compared directly. Other callees
+are executed, and their effects are compared through memory and registers.
+Writes to declared device ranges are compared in order and reported as
+`device-writes`. This checks device effects without requiring the same
+sequence of internal helper calls.
+
+The comparison also checks behavior beyond these four properties. A
+`register` difference can identify a failure to preserve r4 through r11 or sp.
+An `unmatched-path` difference identifies a path whose inputs have no matching
+path in the other function.
 
 ### Stage 8: binary comparison
 
-`patch_symdiff.py` compares the function in the original ELF with the
-function in the rewritten ELF by symbolic execution of the machine code of
-both, in angr, and pairs the final states with cozy. Neither side is lifted
-by Ghidra or `patchir-decomp`, so a lifting error shows up as a difference.
-Reinserting a function unchanged and comparing it this way tests the lift and
-recompile round trip on its own. It is the only comparison engine; the
-earlier `check_binary_equivalence.py` was retired in its favour.
+[patch_symdiff.py](../scripts/patch-runtime/patch_symdiff.py) symbolically
+executes the original and rewritten machine code with angr, then pairs and
+compares their final states with cozy. Neither side uses the Ghidra or
+`patchir-decomp` lift, so the comparison can detect behavioral errors
+introduced during lifting. Reinserting a function without changing its IR
+also allows this comparison to test the lifting and recompilation process.
 
-Both sides start from the same symbolic arguments and argument buffers.
-Globals hold the bytes of the image. r4 to r11 hold one shared symbol each.
-Memory read before it is written is zero. `--arg-range INDEX:LOW:HIGH` bounds
-an integer argument, and `--arg-suffix INDEX:HEX` sets the bytes that follow
-an argument's buffer; without it they are zero.
+Both functions start with the same symbolic arguments and argument buffers.
+Globals contain their initial bytes from the ELF image. Registers r4 through
+r11 each start with a symbolic value shared by both executions. Memory read
+before it is written is initialized to zero. `--arg-range INDEX:LOW:HIGH`
+bounds an integer argument, and `--arg-suffix INDEX:HEX` specifies the bytes
+after an argument buffer. Those bytes default to zero.
 
-Rejection is declared: `--reject-handler NAME`, `--reject-return VALUE`,
-`--reject-write LOW:HIGH`, `--reject-skip NAME`. With `--mmio-region LOW:HIGH`
-the writes to device registers are compared in order.
+Rejection rules tell PatchSymDiff when a function has rejected an input:
 
-Callees are executed on both sides unless stubbed. A stub is a record of the
-call and an unknown result that is the same on both sides for the same callee
-and call index, and it is assumed to write no memory. The suites decide what
-to stub:
+- `--reject-skip NAME`: omitting a call to this function counts as rejection
+  when the remaining modeled calls match the original. The function is stubbed.
 
-- The firmware suite stubs nothing, except a callee named in `reject_skips`.
-  What a function prints is seen as its writes to the UART.
-- The identity-reinsertion suite stubs every function the lifted code is
-  bound to, except those the case lists under `follow_callees`. The rest of
-  a large image is not what is under comparison, and an import has no code.
+Separately, `--mmio-region LOW:HIGH` marks device addresses whose writes are
+compared in order. A conditional write counts only when it executes.
 
-The argument and result registers of a stub come from the declarations in
-the IR the code was compiled from; that, and the return type of the function
-itself, is the only thing taken from the lift. A 64-bit integer is two
-registers. A called stub with a parameter or result that is not placed in
-core registers (floating point, an aggregate, a stack argument, the variable
-arguments of a variadic callee) makes the run `incomplete`.
+For a read or write through an input-dependent address, PatchSymDiff explores
+up to 256 possible addresses. If more addresses are possible, the comparison
+is `incomplete`. Writes through input-dependent addresses are not recorded
+as device writes; if such a write can reach a declared device or rejection
+range, the comparison is `incomplete`. Unresolved jumps or calls, including
+calls through unconstrained input-derived pointers, also make the comparison
+incomplete.
 
-A stubbed read-only string function (`strncmp`, `strncasecmp`, `strcmp`,
-`strcasecmp`, `memcmp`, `strlen`, `strchr`) has its result computed from the
-bytes it is given when the path fixes its pointers and length. If one call
-is computed on some paths and left unknown on others, the differences found
-are listed as `unconfirmed` and the run is `incomplete`, not `failed`: an
-unknown result can separate two paths that agree.
+Callees execute on both sides unless they are stubbed. A stub records the
+call and returns an unknown value shared by both sides for the same callee
+and call index. Stubs are assumed to leave memory unchanged. The suites use
+different stubbing policies:
 
-The address of a local passed to a stub is not compared, and the address of
-read-only data is compared by the bytes there, because the two images lay
-both out differently.
+- The firmware suite stubs only callees named in `reject_skips`. Printed
+  output is observed through writes to the UART.
+- The recompilation-fidelity suite stubs functions referenced by the lifted
+  code's bindings, except those listed in `follow_callees`. This limits
+  execution of the surrounding image and handles imports without available
+  code.
 
-The verdict is `proven` when no input shows a difference and every path of
-both sides returned, `failed` with the input when one exists, and
-`incomplete` when a path stopped at the loop bound or with an error, the time
-ran out, or something above was not modelled.
+Stub argument and result registers are determined from declarations in the
+compiled IR. These declarations and the function's return type are the only
+information taken from the lift. A 64-bit integer occupies two registers.
+Calls to stubs with unsupported parameters or results make the comparison
+incomplete. These include floating-point values, aggregates, stack arguments,
+and variable arguments to variadic functions.
 
-cozy pins an older angr than Patcherex2 uses, so the suites run the script as
-a separate process (`patch_symdiff.compare_in_own_environment`). By default
-`uv` builds the environment from `scripts/symdiff/requirements.txt`;
-`PATCHESTRY_SYMDIFF_PYTHON` names an interpreter that already has cozy.
-`scripts/symdiff/` also has a Docker image for running it by hand.
+For supported read-only string functions (`strncmp`, `strncasecmp`, `strcmp`,
+`strcasecmp`, `memcmp`, `strlen`, and `strchr`), the stub computes its result
+from memory when the path determines the pointers and required length. If a
+call's result is computed on some paths but remains unknown on others,
+reported differences are marked `unconfirmed` and the comparison is
+`incomplete`. An unknown result can otherwise produce an apparent difference
+between equivalent paths.
 
-The identity-reinsertion suite runs it for a case that declares its inputs
-(`compare` in the cases file: buffers, the bytes after them, argument ranges,
-callees to follow, the time limit) and writes `patch_symdiff.json`. The
-evidence reads that as the check `binary-comparison`: `proven`, `failed`, or
-`not-run` when the comparison is incomplete or the case declares nothing. A
-failed comparison fails the case. The firmware suite runs it for every case
-that reaches the end, with the rejections each patch declares; a patch that
-is meant to make a kind of difference declares that kind, and the comparison
-must then find it and nothing else (`not-run` in the evidence).
+Addresses of local variables passed to stubs are excluded from comparison.
+Pointers to read-only data are compared using the bytes they reference,
+allowing the two images to use different layouts.
 
-Results of the two suites:
+PatchSymDiff reports:
 
-| Case | Result |
-| --- | --- |
-| firmware `length`, reject value declared | proven |
-| firmware `length`, nothing declared | failed |
-| firmware `send`, reject handler and device range declared | proven, including the order of the device writes |
-| firmware `forward`, skipped call declared | proven |
-| the nine firmware patches that add a line to the transcript | `device-writes` only, as each declares |
-| `httpd` `FUN_0007ae8c` reinserted unchanged, 3-byte buffers, offset argument 0 to 8 | proven, 16 and 16 paths |
-| `httpd` `FUN_00067c0c` reinserted unchanged | incomplete: it calls `sprintf` and `printf`, whose variable arguments are not compared; nothing differs in what is |
-| `cgibin` `FUN_00026534` reinserted unchanged, 4-byte buffer followed by `99;`, `FUN_0002609c` and `FUN_0002619c` followed | proven, 110 and 113 paths, 23 seconds |
-| the same with one compared character changed (`;` to `:`) | failed: `register` and `calls` |
+- `proven` when every path on both sides returns and no compared input
+  produces a difference.
+- `failed` when it finds a confirmed difference, with an input demonstrating
+  that difference.
+- `incomplete` when execution reaches a loop or time limit, encounters an
+  error or unresolved target, exceeds the address exploration limit, or
+  requires an unsupported model.
 
-Limits: stubs are assumed to write no memory; stack and floating-point
-arguments are not compared; memory that is read before it is written is
-zero; paths are not joined, so the time grows with the number of paths, which
-grows with the size of the input.
+Because cozy pins an older angr version than Patcherex2, the suites run
+PatchSymDiff in a separate process through
+`patch_symdiff.compare_in_own_environment`. By default, `uv` builds this
+environment from
+[scripts/symdiff/requirements.txt](../scripts/symdiff/requirements.txt).
+`PATCHESTRY_SYMDIFF_PYTHON` can select an interpreter with cozy already
+installed. [scripts/symdiff/](../scripts/symdiff/) also provides a Docker image
+for manual runs.
+
+The recompilation-fidelity suite runs comparison for cases with a `compare`
+configuration. This specifies buffers, buffer suffixes, argument ranges,
+callees to follow, and a time limit. Results are written to
+`patch_symdiff.json`. The evidence records them under `binary-comparison` as
+`proven`, `failed`, or `not-run`. Incomplete comparisons and cases without a
+comparison configuration receive `not-run`; failed comparisons fail the case.
+
+The firmware suite compares every case that reaches this stage, using the
+patch's declared rejection rules. Cases designed to change behavior must
+declare the expected difference kind. The comparison must find that kind
+and no others. These cases receive `not-run` for binary comparison in the
+evidence because detecting an expected difference does not prove it safe.
 
 ### Stage 9: evidence
 
-`evidence.py` writes `<case>/validation.json`: one row per check with its
-verdict, the report it came from, the problems found and the facts measured;
-a verdict per group (integrity, static, runtime); and the list of
-assumptions. `collect_reports.py` collects
-these into tables.
+[evidence.py](../scripts/patch-runtime/evidence.py) writes
+`<case>/validation.json`. It records each check's verdict, source report,
+findings, measurements, and assumptions. It also assigns verdicts to the
+integrity, static, runtime, and comparison groups.
+[collect_reports.py](../scripts/patch-runtime/collect_reports.py) converts
+these reports into tables.
 
-## What has been run
+## Recorded results
 
-Two suites drive the stages.
+Results from the [firmware runtime suite](../scripts/test-qemu-firmware-runtime.sh)
+and [recompilation-fidelity suite](../scripts/test-recompilation-fidelity.sh):
 
-`scripts/test-qemu-firmware-runtime.sh` patches the in-repo Cortex-M3 firmware
-`firmwares/serial-qemu` and runs it under QEMU. `scripts/test-identity-reinsertion.sh`
-lifts functions from prebuilt ARM binaries and reinserts them unchanged.
-Both run stages 1 to 7 and 9. The first runs stage 8 on the twelve cases that
-reach the end: the three restricting patches are proven with their declared
-rejections, and the nine that add a line to the transcript differ in
-`device-writes` only, as each declares. The second runs stage 8 on the cases
-that declare inputs (`httpd` `FUN_0007ae8c` and `FUN_00067c0c`, `cgibin`
-`FUN_00026534` with a 4-byte buffer); two are proven and `FUN_00067c0c` is
-incomplete because of its variadic callees, and a fourth case with one
-constant of `FUN_00026534` changed is rejected by the comparison alone.
-
-Known gaps:
-
-- A patch that declares a property as changed gets no check of that property
-  at all. Nine firmware patches declare `device-writes`, so what they print is
-  not compared.
-- It finishes only on small functions. One of the three functions from the
-  prebuilt binaries ends `incomplete`, and another is proven only for 3-byte
-  buffers.
-- A stubbed callee is assumed to write no memory, and behaviour inside it is
-  not checked.
-- A device register nobody declared is compared as ordinary memory.
-- Stages 1 to 6 compare the bytes with the intended IR and trust the lifter
-  for what that IR means. Only stage 8 does not.
-
-## How this differs from VeriBin
-
-VeriBin takes an original and a patched binary and decides whether the patch
-is Safe to Apply (StA). A patch is StA when it does not enlarge the valid
-input space and leaves the output unchanged on valid inputs. The paper splits
-this into the four properties used above: P1 non-increasing input space, P2
-non-local memory writes, P3 return value, P4 function calls.
-
-Patchestry adopts those definitions and changes how each is established. The
-underlying difference is the setting. VeriBin is handed two binaries and must
-discover what the patch is. Patchestry produced the patch, so it already
-holds the patch specification, the intended IR and the record of what the
-patcher wrote. Most of VeriBin's heuristics exist to recover facts that
-Patchestry has, and Patchestry gains a second question VeriBin does not ask:
-was the patch applied as intended.
-
-| | VeriBin | Patchestry |
+| Case | Compare results | Notes |
 | --- | --- | --- |
-| Input | original and patched binaries, plus the address of the patched function | original binary, patch specification, intended IR, rewritten binary, patch record |
-| Question | is the patch safe to apply | was the patch applied as designed, and does the patched function do harm |
-| Function and block matching | BinDiff | not needed; the patch record names the function and the inserted code |
-| Level of comparison | binary, through angr's lifting | binary, through angr's lifting, for behaviour; bytes against a recompilation of the intended IR for integrity |
-| Engine | under-constrained symbolic execution in angr, SMT queries over path constraints | symbolic execution in angr (through cozy) from a shared symbolic start state, SMT queries per pair of final states |
-| Path handling | enumerate complete paths of each function, pair them into matching path pairs by block similarity, then check per pair | enumerate the paths of each function and query every pair one input can take; no pairing heuristic |
-| Loops | each block visited at most twice | bounded by an optional loop bound and a time limit; a run that hits one is `incomplete` |
-| Error exits | heuristics: call to a non-returning or known error function, a return value judged invalid, a path that is short compared with the others | declared per patch: reject handler, reject return value, skipped call |
-| Callees | uninterpreted functions of their arguments; non-constant pointer arguments are treated as outputs | executed, or stubbed: recorded with their arguments, the return value a symbol shared by both sides per callee and call index, assumed to write no memory |
-| Compiler offset noise | content-based comparison of constants, offset matching of locals | read-only data compared by content, locals compared by kind |
-| When a property fails | adaptive mode asks the analyst a question (five kinds, such as whether a changed value or an extra call is acceptable) and re-checks with the answer | no interaction; relaxations are written down before the run |
-| Result | StA or not StA | a verdict per check, per group, and a list of assumptions |
-| Beyond P1 to P4 | none | applied-bytes comparison, reinsertion and binding checks, stack and register discipline, device write order, a runtime transcript |
+| `serial-qemu` firmware (Cortex-M3) | 3 patches `proven`; 9 produced only declared `device-writes` differences | The 9 cases are recorded as `not-run` for comparison; QEMU checks their expected output. The `length` control without a rejection rule fails as expected. |
+| `httpd` — `FUN_0007ae8c` | `proven` | Unchanged reinsertion; 3-byte buffers, offset argument 0–8. |
+| `httpd` — `FUN_00067c0c` | `incomplete` | Variable arguments to `sprintf` and `printf` are unsupported. |
+| `cgibin` — `FUN_00026534` | `proven` | Unchanged reinsertion; 4-byte buffer followed by `99;`, following `FUN_0002609c` and `FUN_0002619c`. |
+| `cgibin` — modified control | `failed`, as expected | Changing `;` to `:` passes insertion checks but produces `register` and `calls` differences. |
 
-Three differences matter most in practice.
+## Limitations
 
-Rejection is declared, not inferred. VeriBin's error-path heuristics are the
-part its authors name as a source of unsoundness: if every path is classified
-as an error path, nothing is compared. Patchestry refuses to guess. With no
-reject path declared, any difference is a violation, which is the strict
-reading. The cost is that someone has to state how the patch rejects.
+Results depend on the input bounds and models used for each case:
 
-Paths are not matched by similarity. VeriBin pairs paths of the two functions
-by block similarity and proves implications between their constraints, which
-needs the pairing to be right. The prototype asks the solver about every pair
-of paths whose constraints one input can satisfy. It finds those pairs from
-inputs: an input of a rewritten path names the original path it follows, and
-the search ends when the solver shows the rewritten path has no other input.
-That avoids a wrong pairing and costs a few queries per path.
+- Declaring a behavioral difference does not prove it safe. For the nine
+  firmware patches that declare `device-writes`, comparison checks the
+  difference kind, while QEMU separately checks the expected transcript.
+- Completed comparisons so far cover small functions and bounded inputs.
+  One of the three prebuilt-binary cases remains incomplete, and another is
+  proven only for 3-byte buffers. Paths are not merged, so larger input
+  spaces can increase the number of paths and execution time.
+- Stubbed callees are assumed to leave memory unchanged. Their internal
+  behavior is not checked, and unsupported arguments or results, including
+  stack and floating-point arguments, make the comparison incomplete.
+- Memory read before it is written is initialized to zero. Results therefore
+  depend on that initial-state assumption.
+- Writes to device registers outside declared device ranges are compared as
+  ordinary memory, without checking their order as device effects.
+- Integrity and static checks rely on the intended IR and do not independently
+  validate the lifter's interpretation of the original code. Stage 8 compares
+  machine code independently, while still using IR declarations for stub
+  signatures and the function's return type.
 
-The maturity is different. VeriBin has an evaluation on 86 patches. The
-binary comparison here is a prototype that has finished on three firmware
-functions and two functions from a prebuilt binary.
+## Related documentation
 
-What VeriBin does that Patchestry does not:
-
-- It works on any pair of binaries, including patches made by someone else
-  with a compiler. Patchestry validates only its own patches.
-- It gives a result without declarations.
-- Its adaptive mode lets an analyst accept a semantically equivalent change
-  found during the run. Patchestry would report it as a failure until a
-  declaration is added and the run repeated.
-- It has a published evaluation.
-
-What Patchestry does that VeriBin does not:
-
-- It checks the patcher: that the bytes in the image are the intended code,
-  that the rewrite did not damage neighbours, and that the inserted code
-  matches the image's ABI and keeps the stack and saved registers intact.
-- It checks the order of device register writes.
-- It runs the rewritten firmware.
-- It records every assumption with the verdict.
-
-### VeriBin's reported results
-
-From the paper: 4,100 lines of Python using BinDiff, IDA Pro and angr. Three
-datasets (MicroPatch Bench, DARPA AMP challenges, FFmpeg patches from
-PatchDB), 125 patch pairs. 86 could be analysed; the rest were excluded for
-binary-diffing failures, an 8-hour timeout, memory limits, or an AVR target
-that angr does not support. On those 86 it reports 93.0% accuracy with no
-false positives and 6 false negatives, an average runtime of 1,293.8 seconds
-excluding preprocessing, and an average of 1.3 analyst questions per patch in
-adaptive mode. On stripped binaries accuracy is 89.4%. The stated limits are
-inaccurate function information from the underlying tools, the error-path and
-offset heuristics, and path explosion on large functions.
-
-Patchestry has no comparable evaluation. Its corpus is 3 firmware cases and
-3 functions from prebuilt ARM binaries.
-
-### Cross-check with VeriBin
-
-The plan lists running unmodified VeriBin on the original and rewritten
-binaries as an independent cross-check, because it shares nothing with
-Patchestry's lifter. This has not been attempted. Whether VeriBin handles
-Cortex-M Thumb images is not known; the paper explains its techniques on
-x86-64 and its AMP dataset includes ARM binaries.
-
-## References
-
-- Wu, Wu, Wu, Sharma, Machiry, Bianchi. VeriBin: Adaptive Verification of
-  Patches at the Binary Level. NDSS 2025.
-  <https://www.ndss-symposium.org/ndss-paper/veribin-adaptive-verification-of-patches-at-the-binary-level/>
-- VeriBin source: <https://github.com/purseclab/VeriBin>
-- `GettingStarted/identity_reinsertion.md`: the identity suite.
-- `GettingStarted/qemu_firmware_runtime.md`: the firmware suite and its
-  reports.
-- `klee-integration.md`: the KLEE image and the KLEE gate.
+- [Recompilation fidelity](GettingStarted/recompilation_fidelity.md): testing
+  lifted and recompiled functions from prebuilt binaries.
+- [QEMU firmware runtime](GettingStarted/qemu_firmware_runtime.md): running
+  patched firmware and inspecting validation reports.
+- [KLEE integration](klee-integration.md): the KLEE image and CI gate.
