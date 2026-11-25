@@ -13,7 +13,6 @@ add_library(patchestry::ghidra ALIAS patchestry_ghidra)
 target_link_libraries(patchestry_ghidra
   PUBLIC
     ${MLIR_LIBS}
-    MLIRPcode
   PRIVATE
     LLVMSupport
     patchestry_settings

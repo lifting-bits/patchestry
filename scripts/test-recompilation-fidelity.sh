@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
 # Lift functions from prebuilt ARM Linux binaries, reinsert each one unchanged
-# and check the rewritten binary (scripts/patch-runtime/identity_reinsertion.py).
+# and check the rewritten binary (scripts/patch-runtime/recompilation_fidelity.py).
 #
-#   scripts/test-identity-reinsertion.sh --binary-root DIR [--cases FILE]
+#   scripts/test-recompilation-fidelity.sh --binary-root DIR [--cases FILE]
 #       [--build-type Debug] [--output-dir DIR] [--only CASE]...
 #
 # The binaries are not in this repository.  --binary-root is the directory the
@@ -23,8 +23,8 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 build_type="Debug"
-output_dir="$repo_root/builds/identity-reinsertion"
-cases="$repo_root/test/identity-reinsertion/aarno_cases.json"
+output_dir="$repo_root/builds/recompilation-fidelity"
+cases="$repo_root/test/recompilation-fidelity/test_binaries_cases.json"
 binary_root=""
 only=()
 
@@ -95,7 +95,7 @@ for test in test_linux_arm_images.py test_check_abi.py test_check_static.py test
 done
 
 uv run --python "$python_bin" "${patcherex_env[@]}" \
-  python "$repo_root/scripts/patch-runtime/identity_reinsertion.py" \
+  python "$repo_root/scripts/patch-runtime/recompilation_fidelity.py" \
   --cases "$cases" \
   --binary-root "$binary_root" \
   --build-type "$build_type" \

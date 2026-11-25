@@ -56,11 +56,22 @@ Main patching path:
     |- LLVM IR text (.ll)     (-S)              [supported]
     \- LLVM bitcode (.bc)     (default mode)    [supported]
 
+IR-level verification path:
+[LLVM IR / bitcode with !static_contract metadata]
+    |
+    |- patchir-klee-verifier --target-function <name>
+    |    -> harness module (x86_64) -> KLEE (scripts/klee/run-klee.sh)
+    |    -> KLEE output directory -> scripts/klee/klee_gate.py   [gated in CI]
+    |
+    \- patchir-seahorn-verifier
+         -> module with __VERIFIER_assume / __VERIFIER_assert
+         -> SeaHorn (external)                                    [not run in CI]
+
 Downstream of this repo:
 [LLVM IR / bitcode with patch + contract metadata]
     |
-    \- external binary rewriting / verification tools
-       e.g. final patched binary, KLEE/SeaHorn-style analysis
+    \- external binary rewriting tools
+       e.g. final patched binary
 
 Current firmware runtime-validation path:
 [Checked-in Ghidra JSON fixture]
@@ -82,6 +93,18 @@ Current firmware runtime-validation path:
        -> linked patch blob at reserved firmware patch arena address
        -> patcherex2 raw-byte rewrite of original ELF
        -> qemu-system-arm runtime validation
+
+Validation after insertion (scripts/patch-runtime/, run by
+scripts/test-qemu-firmware-runtime.sh and scripts/test-recompilation-fidelity.sh):
+[original ELF] + [patched LLVM IR] + [patch record] + [rewritten ELF]
+    |
+    |- check_bindings.py, patch_dependencies.py, check_abi.py,
+    |  check_trampoline.py, patch_record.py, check_applied_bytes.py,
+    |  check_static.py            intended IR against the rewritten ELF
+    |- qemu_firmware_runtime.py   transcript of the rewritten firmware
+    |- patch_symdiff.py           original ELF against the rewritten ELF
+    v
+[<case>/validation.json]          evidence.py; tables by collect_reports.py
 ```
 
 ## Notes on Outputs

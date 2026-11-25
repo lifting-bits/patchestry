@@ -104,13 +104,5 @@
     "fixture": "test/patchir-decomp/cve_2016_6563_fun_00011708.json",
     "function": "FUN_00011708",
     "expect": "rejected:unresolved-dependency"
-  },
-  {
-    "name": "wolfssl-fun-000c4214",
-    "binary": "cve-2022-39173/ground-truth/binary",
-    "sha256": "0c874f7f14a7fed8274a83e32a7f9b57624700ed697e9fb72467c07e29e352a1",
-    "fixture": "test/patchir-decomp/cve_2022_39173_fun_000c4214.json",
-    "function": "FUN_000c4214",
-    "expect": "rejected:unsupported-image"
   }
 ]

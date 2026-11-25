@@ -171,8 +171,6 @@ transformation, and mixing of IR dialects. With MLIR, the decompilation and
 patching process is stratified into a Tower of IRs (IR dialects), where each IR
 represents the same program at a different level of abstraction. This enables:
 
-- Creation of an MLIR dialect specifically for P-Code to optimize integration
-  with the Ghidra decompiler.
 - Use of an LLVM IR dialect to compile back to the executable.
 - LLVM-based contract validation through symbolic executors such as KLEE or
   SeaHorn.
@@ -227,16 +225,24 @@ Patchestry's technical approach enables the following workflow:
    Alternatively, the developer defines patches declaratively using YAML
    specifications (see [Patching Interface](#patching-interface)).
 
-5. Contracts are verified. Patchestry generates output compatible with LLVM-based
-   analysis tools such as KLEE or SeaHorn to ensure that the patched code
-   satisfies developer-defined contracts (see
-   [Contracts Interface](#contracts-interface)).
+5. The developer checks contracts on the patched LLVM IR.
+   `patchir-klee-verifier` generates a harness for KLEE, while
+   `patchir-seahorn-verifier` instruments the IR for SeaHorn. These tools check
+   the contracts under the assumptions of the chosen harness and models (see
+   [Contracts Interface](#contracts-interface) and
+   [IR-level verification](ir_verification.md)).
 
 6. Patchestry recompiles the patched function(s) through the MLIR pipeline to
    LLVM IR, then to machine code. The resulting binary patch is packaged for
    insertion into the original binary using a tool such as Patcherex or OFRAK.
 
-7. The developer loads the patched binary onto the device.
+7. The validation scripts check patch placement, compiled bytes, ABI
+   compatibility, and stack and register use. The firmware suite also runs the
+   rewritten image under QEMU. PatchSymDiff compares the original and patched
+   machine code for behavior changes beyond the declared rejections (see
+   [Patch validation](patch_validation.md) for the supported cases and limits).
+
+8. The developer loads the patched binary onto the device.
 
 ## Patching Interface
 
@@ -398,6 +404,25 @@ the attribute lands on:
 `apply_at_entrypoint`, `replace`, and `erase` are patch-only. For a check that
 needs to run at the caller's entry block, write a patch with
 `mode: apply_at_entrypoint`.
+
+## Verifiable Patching
+
+Patchestry checks the contracts that describe the intended fix, then validates
+the compiled patch and its insertion into the binary. Each method covers a
+different source of errors:
+
+| Claim | Checked on | Method |
+| --- | --- | --- |
+| The patched code satisfies its contracts | patched LLVM IR | `patchir-klee-verifier` and KLEE; `patchir-seahorn-verifier` and SeaHorn |
+| The rewrite contains the intended code and preserves the calling convention | intended IR and rewritten ELF | binding, dependency, ABI, reinsertion, patch-record, applied-bytes, and static checks |
+| The firmware produces the expected output | rewritten ELF | QEMU transcript for the tested inputs |
+| Behavior is preserved on inputs the patch still accepts | original and rewritten ELF | PatchSymDiff, within the declared input bounds and models |
+
+Reports include verdicts and the assumptions behind them. The evidence file
+combines those results, treating missing or incomplete checks as `not-run`.
+See [Verifiable patching](verifiable_patching.md) for an overview,
+[IR-level verification](ir_verification.md) for contract checks, and
+[Patch validation](patch_validation.md) for checks after insertion.
 
 ## Architecture
 

@@ -8,7 +8,7 @@
 """Collect the per-case validation reports of a run into tables for analysis.
 
 The serial-qemu runtime (scripts/test-qemu-firmware-runtime.sh) and the
-identity run (scripts/test-identity-reinsertion.sh) each write one directory
+recompilation-fidelity run (scripts/test-recompilation-fidelity.sh) each write one directory
 per case with a JSON report per check.  This reads every case directory under
 the given output directories and writes:
 

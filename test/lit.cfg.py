@@ -1,3 +1,4 @@
+import inspect
 import os
 import platform
 import subprocess
@@ -12,8 +13,14 @@ from lit.llvm.subst import FindTool
 # Configuration name
 config.name = 'PatchestryTest'
 
-# Set the test format to ShTest (shell-based tests)
-config.test_format = lit.formats.ShTest(not llvm_config.use_lit_shell)
+# Set the test format to ShTest (shell-based tests). The RUN lines need a real
+# shell. lit 23 rejects execute_external=True unless force_execute_external is
+# also set; older lit does not have that parameter.
+execute_external = not llvm_config.use_lit_shell
+shtest_args = {}
+if 'force_execute_external' in inspect.signature(lit.formats.ShTest.__init__).parameters:
+    shtest_args['force_execute_external'] = execute_external
+config.test_format = lit.formats.ShTest(execute_external, **shtest_args)
 
 # Set up macOS SDK path if on Darwin
 if platform.system() == 'Darwin':

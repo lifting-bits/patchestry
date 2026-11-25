@@ -1,7 +1,9 @@
 # KLEE Integration
 
 This document describes the KLEE symbolic execution setup used in Patchestry,
-including architecture, usage, and known limitations.
+including architecture, usage, and known limitations. See
+[IR-level verification](ir_verification.md) for harness generation and the
+meaning of the verification results.
 
 ## Overview
 
@@ -98,10 +100,10 @@ KLEE_IMAGE=my-klee:dev ./scripts/klee/build-klee-docker.sh
 ./scripts/klee/run-klee.sh --input harness.c --output ./results
 
 # Run pre-compiled bitcode
-./scripts/klee/run-klee.sh --input harness.bc --output ./results
+./scripts/klee/run-klee.sh --run-bitcode --input harness.bc --output ./results
 
 # Use CI-pushed image
-./scripts/klee/run-klee.sh --image ghcr.io/lifting-bits/patchestry-klee-ubuntu-22.04-llvm-20:latest --input harness.bc
+./scripts/klee/run-klee.sh --image ghcr.io/lifting-bits/patchestry-klee-ubuntu-22.04-llvm-22:latest --run-bitcode --input harness.bc
 ```
 
 ### Scripts
