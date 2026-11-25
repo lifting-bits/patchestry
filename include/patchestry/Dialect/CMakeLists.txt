@@ -4,4 +4,3 @@
 # LICENSE file found in the root directory of this source tree.
 
 add_subdirectory(Contracts)
-add_subdirectory(Pcode)
