@@ -548,13 +548,11 @@ namespace patchestry::ast {
         // Binding strength of an expression as the printer writes it, on the
         // scale of the C grammar: 16 for a primary or postfix expression down
         // to 1 for the comma operator.
-        enum : unsigned {
-            kPrecComma       = 1,
-            kPrecAssign      = 2,
-            kPrecConditional = 3,
-            kPrecUnary       = 14,
-            kPrecPostfix     = 16,
-        };
+        constexpr unsigned kPrecComma       = 1;
+        constexpr unsigned kPrecAssign      = 2;
+        constexpr unsigned kPrecConditional = 3;
+        constexpr unsigned kPrecUnary       = 14;
+        constexpr unsigned kPrecPostfix     = 16;
 
         unsigned BinaryPrecedence(clang::BinaryOperatorKind kind) {
             switch (kind) {
@@ -650,13 +648,13 @@ namespace patchestry::ast {
             if (const auto *sizeof_expr =
                     llvm::dyn_cast< clang::UnaryExprOrTypeTraitExpr >(parent))
             {
-                return sizeof_expr->isArgumentType() ? 0 : kPrecUnary;
+                return sizeof_expr->isArgumentType() ? 0U : kPrecUnary;
             }
             if (llvm::isa< clang::MemberExpr >(parent)) {
                 return kPrecPostfix;
             }
             if (llvm::isa< clang::ArraySubscriptExpr >(parent)) {
-                return index == 0 ? kPrecPostfix : 0;
+                return index == 0 ? kPrecPostfix : 0U;
             }
             if (llvm::isa< clang::CallExpr >(parent)) {
                 // The callee is a postfix expression; an argument is an
