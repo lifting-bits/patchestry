@@ -199,17 +199,22 @@ and reporting. Use the opt-in CTest target by configuring with
 You shouldn't need to do this directly in the current build *most of the time*. Prefer working in the headless container. 
 You may want Ghidra locally for Ghidra script debugging.
 
-Get Java JDK (x64)
+The versions below match the headless container
+(`scripts/ghidra/decompile-headless.dockerfile`). The scripts are compiled for
+Java 25 and use P-Code operations that first appear in Ghidra 12.2, so an older
+JDK or Ghidra cannot build them.
+
+Get the Java 25 JDK (Eclipse Temurin, x64; replace `x64` with `aarch64` on ARM)
 ```shell
-wget -c https://download.oracle.com/java/22/latest/jdk-22_linux-x64_bin.tar.gz -O jdk.tar.gz
-tar xvf jdk.tar.gz
-mv jdk-22.0.1 ~/jdk
+wget -c https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.5.1%2B2/OpenJDK25U-jdk_x64_linux_hotspot_25.0.5.1_2.tar.gz -O jdk.tar.gz
+mkdir -p ~/jdk
+tar xvf jdk.tar.gz -C ~/jdk --strip-components=1
 echo "export PATH=\$PATH:~/jdk/bin" >> ~/.bashrc
 ```
 
-Get Ghidra
+Get Ghidra 12.2
 ```shell
-wget -c https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_11.1.1_build/ghidra_11.1.1_PUBLIC_20240614.zip -O ghidra.zip
+wget -c https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_12.2_build/ghidra_12.2_PUBLIC_20261016.zip -O ghidra.zip
 unzip ghidra.zip
-mv ghidra_11.1.1_PUBLIC ~/ghidra
+mv ghidra_12.2_PUBLIC ~/ghidra
 ```
