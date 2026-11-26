@@ -3844,6 +3844,285 @@ namespace patchestry::ast {
         return create_builtin_call_expr(ctx, function, op, clang::Builtin::BI__builtin_clz);
     }
 
+    namespace {
+        // Bit position and bit count of a ZPULL, SPULL or INSERT.  Both are
+        // constants in Ghidra; anything else is refused.
+        struct BitRange
+        {
+            unsigned position;
+            unsigned size;
+        };
+
+        std::optional< BitRange > read_bit_range(
+            const Varnode &position, const Varnode &size, unsigned container_bits
+        ) {
+            if (position.kind != Varnode::VARNODE_CONSTANT || !position.value
+                || size.kind != Varnode::VARNODE_CONSTANT || !size.value)
+            {
+                return std::nullopt;
+            }
+            auto pos   = *position.value;
+            auto count = *size.value;
+            if (count == 0 || count > container_bits || pos > container_bits - count) {
+                return std::nullopt;
+            }
+            return BitRange{ static_cast< unsigned >(pos), static_cast< unsigned >(count) };
+        }
+
+        clang::Expr *make_unsigned_literal(
+            clang::ASTContext &ctx, const llvm::APInt &value, clang::QualType type,
+            clang::SourceLocation loc
+        ) {
+            return clang::IntegerLiteral::Create(ctx, value, type, loc);
+        }
+    } // namespace
+
+    clang::Expr *OpBuilder::bit_range_operand(
+        clang::ASTContext &ctx, const Function &function, const Varnode &vnode,
+        clang::SourceLocation loc, const std::string &op_key
+    ) {
+        auto *expr = AS_EXPR_OR_NULL(create_varnode(ctx, function, vnode), op_key);
+        if (!expr) {
+            return nullptr;
+        }
+
+        if (expr->getType()->isArrayType()) {
+            expr = narrow_aggregate_to_integer(ctx, expr, loc, vnode.size);
+        } else {
+            expr = coerce_record_to_integer(ctx, expr, loc);
+        }
+        if (!expr) {
+            return nullptr;
+        }
+
+        auto type = expr->getType();
+        if (!type->isIntegralOrEnumerationType() && !type->isPointerType()) {
+            return nullptr;
+        }
+
+        auto bits = vnode.size != 0 ? vnode.size * 8U
+                                    : static_cast< unsigned >(ctx.getTypeSize(type));
+        auto unsigned_type = ctx.getIntTypeForBitwidth(bits, /*Signed=*/false);
+        if (unsigned_type.isNull()) {
+            return nullptr;
+        }
+        if (ctx.hasSameUnqualifiedType(type, unsigned_type)) {
+            return expr;
+        }
+        return make_explicit_cast(ctx, expr, unsigned_type, loc);
+    }
+
+    std::pair< clang::Stmt *, bool > OpBuilder::create_bit_pull(
+        clang::ASTContext &ctx, const Function &function, const Operation &op
+    ) {
+        const bool is_signed = op.mnemonic == Mnemonic::OP_SPULL;
+        const char *name     = is_signed ? "SPULL" : "ZPULL";
+        if (op.inputs.size() != 3U
+            || (op.mnemonic != Mnemonic::OP_ZPULL && op.mnemonic != Mnemonic::OP_SPULL))
+        {
+            LOG(ERROR) << name << " operation is invalid or has invalid input operands. key: "
+                       << op.key << "\n";
+            return {};
+        }
+
+        auto op_loc  = SourceLocation(ctx.getSourceManager(), op.key);
+        auto *source = bit_range_operand(ctx, function, op.inputs[0], op_loc, op.key);
+        if (!source) {
+            LOG(ERROR) << name << " source has no integer view. key: " << op.key << "\n";
+            return {};
+        }
+
+        auto source_bits = static_cast< unsigned >(ctx.getTypeSize(source->getType()));
+        auto range       = read_bit_range(op.inputs[1], op.inputs[2], source_bits);
+        if (!range) {
+            LOG(ERROR) << name << " bit range is not constant or exceeds its " << source_bits
+                       << "-bit source. key: " << op.key << "\n";
+            return {};
+        }
+
+        auto target_type_opt = lookup_op_type(op);
+        if (!target_type_opt) {
+            return {};
+        }
+        auto target_type =
+            integer_target_for_int_ext(ctx, *target_type_opt, op.output ? op.output->size : 0U);
+        auto target_bits = static_cast< unsigned >(ctx.getTypeSize(target_type));
+        if (!target_type->isIntegralOrEnumerationType() || range->size > target_bits) {
+            LOG(ERROR) << name << " of " << range->size << " bits does not fit its "
+                       << target_bits << "-bit output. key: " << op.key << "\n";
+            return {};
+        }
+
+        // The arithmetic runs in an unsigned type at least as wide as int, so
+        // integer promotion cannot change it, and wide enough for both the
+        // source and the output.
+        auto work_bits = std::max({ source_bits, target_bits, 32U });
+        auto work_type = ctx.getIntTypeForBitwidth(work_bits, /*Signed=*/false);
+        if (work_type.isNull()) {
+            LOG(ERROR) << name << " has no " << work_bits << "-bit integer type. key: "
+                       << op.key << "\n";
+            return {};
+        }
+
+        auto paren = [&](clang::Expr *expr) -> clang::Expr * {
+            return new (ctx) clang::ParenExpr(op_loc, op_loc, expr);
+        };
+        auto binary = [&](clang::BinaryOperatorKind kind, clang::Expr *lhs,
+                          clang::Expr *rhs) -> clang::Expr * {
+            if (!lhs || !rhs) {
+                return nullptr;
+            }
+            auto result = sema().CreateBuiltinBinOp(op_loc, kind, lhs, rhs);
+            return result.isInvalid() ? nullptr : paren(result.getAs< clang::Expr >());
+        };
+        auto literal = [&](const llvm::APInt &value) {
+            return make_unsigned_literal(ctx, value, work_type, op_loc);
+        };
+
+        // (source >> position) & mask
+        clang::Expr *value = make_cast(ctx, source, work_type, op_loc);
+        if (range->position != 0) {
+            value = binary(clang::BO_Shr, value, literal(llvm::APInt(work_bits, range->position)));
+        }
+        if (range->size < work_bits) {
+            value = binary(
+                clang::BO_And, value,
+                literal(llvm::APInt::getLowBitsSet(work_bits, range->size))
+            );
+            // Sign extension: (value ^ sign) - sign, where sign is the top
+            // bit of the field.  Unsigned arithmetic, so it wraps as needed.
+            if (is_signed) {
+                auto sign = llvm::APInt::getOneBitSet(work_bits, range->size - 1U);
+                value     = binary(clang::BO_Xor, value, literal(sign));
+                value     = binary(clang::BO_Sub, value, literal(sign));
+            }
+        }
+        if (!value) {
+            LOG(ERROR) << name << " expression could not be built. key: " << op.key << "\n";
+            return {};
+        }
+
+        // An explicit cast, so the printed C states the result type.
+        if (!ctx.hasSameUnqualifiedType(value->getType(), target_type)) {
+            value = make_explicit_cast(ctx, value, target_type, op_loc);
+            if (!value) {
+                return {};
+            }
+        }
+
+        if (!op.output.has_value()) {
+            return { value, true };
+        }
+        auto *output_expr =
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+        if (!output_expr) {
+            return {};
+        }
+        return { create_assign_operation(ctx, value, output_expr, op_loc), false };
+    }
+
+    std::pair< clang::Stmt *, bool > OpBuilder::create_bit_insert(
+        clang::ASTContext &ctx, const Function &function, const Operation &op
+    ) {
+        if (op.inputs.size() != 4U || op.mnemonic != Mnemonic::OP_INSERT) {
+            LOG(ERROR) << "INSERT operation is invalid or has invalid input operands. key: "
+                       << op.key << "\n";
+            return {};
+        }
+
+        auto op_loc     = SourceLocation(ctx.getSourceManager(), op.key);
+        auto *container = bit_range_operand(ctx, function, op.inputs[0], op_loc, op.key);
+        auto *field     = bit_range_operand(ctx, function, op.inputs[1], op_loc, op.key);
+        if (!container || !field) {
+            LOG(ERROR) << "INSERT operand has no integer view. key: " << op.key << "\n";
+            return {};
+        }
+
+        auto container_bits = static_cast< unsigned >(ctx.getTypeSize(container->getType()));
+        auto field_bits     = static_cast< unsigned >(ctx.getTypeSize(field->getType()));
+        auto range          = read_bit_range(op.inputs[2], op.inputs[3], container_bits);
+        if (!range || range->size > field_bits) {
+            LOG(ERROR) << "INSERT bit range is not constant or exceeds its operands. key: "
+                       << op.key << "\n";
+            return {};
+        }
+
+        auto work_bits = std::max(container_bits, 32U);
+        auto work_type = ctx.getIntTypeForBitwidth(work_bits, /*Signed=*/false);
+        if (work_type.isNull()) {
+            LOG(ERROR) << "INSERT has no " << work_bits << "-bit integer type. key: " << op.key
+                       << "\n";
+            return {};
+        }
+
+        auto paren = [&](clang::Expr *expr) -> clang::Expr * {
+            return new (ctx) clang::ParenExpr(op_loc, op_loc, expr);
+        };
+        auto binary = [&](clang::BinaryOperatorKind kind, clang::Expr *lhs,
+                          clang::Expr *rhs) -> clang::Expr * {
+            if (!lhs || !rhs) {
+                return nullptr;
+            }
+            auto result = sema().CreateBuiltinBinOp(op_loc, kind, lhs, rhs);
+            return result.isInvalid() ? nullptr : paren(result.getAs< clang::Expr >());
+        };
+        auto literal = [&](const llvm::APInt &value) {
+            return make_unsigned_literal(ctx, value, work_type, op_loc);
+        };
+
+        // (container & ~(mask << position)) | ((field & mask) << position)
+        auto low_mask   = llvm::APInt::getLowBitsSet(work_bits, range->size);
+        auto field_mask = low_mask.shl(range->position);
+
+        // Only the low `size` bits of the field are used, so narrowing a
+        // wider field to the working type loses nothing.
+        clang::Expr *inserted = make_cast(ctx, field, work_type, op_loc);
+        inserted              = binary(clang::BO_And, inserted, literal(low_mask));
+        if (range->position != 0) {
+            inserted =
+                binary(clang::BO_Shl, inserted, literal(llvm::APInt(work_bits, range->position)));
+        }
+
+        clang::Expr *kept = make_cast(ctx, container, work_type, op_loc);
+        kept              = binary(clang::BO_And, kept, literal(~field_mask));
+
+        auto *value = binary(clang::BO_Or, kept, inserted);
+        if (!value) {
+            LOG(ERROR) << "INSERT expression could not be built. key: " << op.key << "\n";
+            return {};
+        }
+
+        // The result has the container's width.  Use the operation type when
+        // it is an integer of that width, else the unsigned container type.
+        auto target_type = container->getType();
+        if (op.type) {
+            auto it = type_builder().GetSerializedTypes().find(*op.type);
+            if (it != type_builder().GetSerializedTypes().end()
+                && it->second->isIntegralOrEnumerationType()
+                && ctx.getTypeSize(it->second) == container_bits)
+            {
+                target_type = it->second;
+            }
+        }
+        // An explicit cast, so the printed C states the result type.
+        if (!ctx.hasSameUnqualifiedType(value->getType(), target_type)) {
+            value = make_explicit_cast(ctx, value, target_type, op_loc);
+            if (!value) {
+                return {};
+            }
+        }
+
+        if (!op.output.has_value()) {
+            return { value, true };
+        }
+        auto *output_expr =
+            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+        if (!output_expr) {
+            return {};
+        }
+        return { create_assign_operation(ctx, value, output_expr, op_loc), false };
+    }
+
     std::pair< clang::Stmt *, bool > OpBuilder::create_builtin_call_expr(
         clang::ASTContext &ctx, const Function &function, const Operation &op,
         clang::Builtin::ID id

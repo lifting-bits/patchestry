@@ -179,6 +179,27 @@ namespace patchestry::ast {
         std::pair< clang::Stmt *, bool >
         create_lzcount(clang::ASTContext &ctx, const Function &function, const Operation &op);
 
+        // ZPULL and SPULL read `size` bits of input0 starting at bit
+        // `position` and zero or sign extend them to the output.  Ghidra 12.2
+        // emits them for bit-field reads.
+        std::pair< clang::Stmt *, bool >
+        create_bit_pull(clang::ASTContext &ctx, const Function &function, const Operation &op);
+
+        // INSERT yields input0 with `size` bits at bit `position` replaced by
+        // the low bits of input1.  Ghidra 12.2 emits it for bit-field writes.
+        std::pair< clang::Stmt *, bool > create_bit_insert(
+            clang::ASTContext &ctx, const Function &function, const Operation &op
+        );
+
+        // Operand of a bit-range operation as an unsigned integer of the
+        // varnode's width.  A record or array operand (the LOAD of the struct
+        // that holds the bit-field) is reinterpreted.  Returns nullptr when
+        // the operand has no integer view.
+        clang::Expr *bit_range_operand(
+            clang::ASTContext &ctx, const Function &function, const Varnode &vnode,
+            clang::SourceLocation loc, const std::string &op_key
+        );
+
         std::pair< clang::Stmt *, bool > create_builtin_call_expr(
             clang::ASTContext &ctx, const Function &function, const Operation &op,
             clang::Builtin::ID id

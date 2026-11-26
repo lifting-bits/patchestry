@@ -1245,6 +1245,11 @@ namespace patchestry::ast {
                 return op_builder->create_popcount(ctx, function, op);
             case Mnemonic::OP_LZCOUNT:
                 return op_builder->create_lzcount(ctx, function, op);
+            case Mnemonic::OP_INSERT:
+                return op_builder->create_bit_insert(ctx, function, op);
+            case Mnemonic::OP_ZPULL:
+            case Mnemonic::OP_SPULL:
+                return op_builder->create_bit_pull(ctx, function, op);
             case Mnemonic::OP_UNKNOWN:
                 llvm_unreachable("Encountered OP_UNKNOWN P-Code mnemonic");
         }
