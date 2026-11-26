@@ -1,0 +1,1244 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+      
+        <link rel="prev" href="../klee-integration/">
+      
+      
+        <link rel="next" href="../statement/">
+      
+      <link rel="icon" href="../assets/img/favicon.ico">
+      <meta name="generator" content="mkdocs-1.4.2, mkdocs-material-9.0.6">
+    
+    
+      
+        <title>Patch Validation - Patchestry</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.558e4712.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.2505c338.min.css">
+      
+      
+
+    
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce((e,_)=>(e<<5)-e+_.charCodeAt(0),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="pink">
+  
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&"object"==typeof palette.color)for(var key of Object.keys(palette.color))document.body.setAttribute("data-md-color-"+key,palette.color[key])</script>
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#patch-validation" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="Patchestry" class="md-header__button md-logo" aria-label="Patchestry" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54Z"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3V6m0 5h18v2H3v-2m0 5h18v2H3v-2Z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Patchestry
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Patch Validation
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      <form class="md-header__option" data-md-component="palette">
+        
+          
+          <input class="md-option" data-md-color-media="(prefers-color-scheme)" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="pink"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+          
+            <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_3" hidden>
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m14.3 16-.7-2h-3.2l-.7 2H7.8L11 7h2l3.2 9h-1.9M20 8.69V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12 20 8.69m-9.15 3.96h2.3L12 9l-1.15 3.65Z"/></svg>
+            </label>
+          
+        
+          
+          <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="pink"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_2">
+          
+            <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12 20 8.69Z"/></svg>
+            </label>
+          
+        
+          
+          <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="black" data-md-color-accent="pink"  aria-label="Switch to system preference"  type="radio" name="__palette" id="__palette_3">
+          
+            <label class="md-header__button md-icon" title="Switch to system preference" for="__palette_2" hidden>
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12c0-2.42-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12 20 8.69Z"/></svg>
+            </label>
+          
+        
+      </form>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.516 6.516 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5Z"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.516 6.516 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5Z"/></svg>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11h12Z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7 0-.24-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91 1.61 0 2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08Z"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41Z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/lifting-bits/patchestry" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.1 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81z"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="Patchestry" class="md-nav__button md-logo" aria-label="Patchestry" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54Z"/></svg>
+
+    </a>
+    Patchestry
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/lifting-bits/patchestry" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.1 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81z"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+      
+
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        Introduction
+      </a>
+    </li>
+  
+
+    
+      
+      
+      
+
+  
+  
+  
+    
+      
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+      
+      
+      
+        
+      
+      <input class="md-nav__toggle md-toggle md-toggle--indeterminate" data-md-toggle="__nav_2" type="checkbox" id="__nav_2" >
+      
+      
+        
+          
+        
+          
+        
+          
+        
+          
+        
+          
+        
+      
+      
+        <label class="md-nav__link" for="__nav_2" tabindex="0" aria-expanded="false">
+          Getting Started
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <nav class="md-nav" aria-label="Getting Started" data-md-level="1">
+        <label class="md-nav__title" for="__nav_2">
+          <span class="md-nav__icon md-icon"></span>
+          Getting Started
+        </label>
+        <ul class="md-nav__list" data-md-scrollfix>
+          
+            
+              
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../GettingStarted/build/" class="md-nav__link">
+        Build & Run
+      </a>
+    </li>
+  
+
+            
+          
+            
+              
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../GettingStarted/ghidra/" class="md-nav__link">
+        Ghidra Integration
+      </a>
+    </li>
+  
+
+            
+          
+            
+              
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../GettingStarted/qemu_firmware_runtime/" class="md-nav__link">
+        QEMU Firmware Runtime
+      </a>
+    </li>
+  
+
+            
+          
+            
+              
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../GettingStarted/recompilation_fidelity/" class="md-nav__link">
+        Recompilation Fidelity
+      </a>
+    </li>
+  
+
+            
+          
+            
+              
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../CONTRIBUTING/" class="md-nav__link">
+        How to contribute
+      </a>
+    </li>
+  
+
+            
+          
+        </ul>
+      </nav>
+    </li>
+  
+
+    
+      
+      
+      
+
+  
+  
+    
+  
+  
+    
+      
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+      
+      
+      
+      <input class="md-nav__toggle md-toggle " data-md-toggle="__nav_3" type="checkbox" id="__nav_3" checked>
+      
+      
+        
+          
+        
+          
+        
+          
+        
+          
+        
+      
+      
+        <label class="md-nav__link" for="__nav_3" tabindex="0" aria-expanded="true">
+          Verification
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <nav class="md-nav" aria-label="Verification" data-md-level="1">
+        <label class="md-nav__title" for="__nav_3">
+          <span class="md-nav__icon md-icon"></span>
+          Verification
+        </label>
+        <ul class="md-nav__list" data-md-scrollfix>
+          
+            
+              
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../verifiable_patching/" class="md-nav__link">
+        Verifiable Patching
+      </a>
+    </li>
+  
+
+            
+          
+            
+              
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ir_verification/" class="md-nav__link">
+        IR-Level Verification
+      </a>
+    </li>
+  
+
+            
+          
+            
+              
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../klee-integration/" class="md-nav__link">
+        KLEE Integration
+      </a>
+    </li>
+  
+
+            
+          
+            
+              
+  
+  
+    
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" data-md-toggle="toc" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          Patch Validation
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        Patch Validation
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-the-comparison-establishes" class="md-nav__link">
+    What the comparison establishes
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#validation-approach" class="md-nav__link">
+    Validation approach
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#validation-stages" class="md-nav__link">
+    Validation stages
+  </a>
+  
+    <nav class="md-nav" aria-label="Validation stages">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#stages-1-to-6-integrity-and-static-checks" class="md-nav__link">
+    Stages 1 to 6: integrity and static checks
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#comparison-properties-p1-to-p4" class="md-nav__link">
+    Comparison properties: P1 to P4
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#stage-8-binary-comparison" class="md-nav__link">
+    Stage 8: binary comparison
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#stage-9-evidence" class="md-nav__link">
+    Stage 9: evidence
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recorded-results" class="md-nav__link">
+    Recorded results
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#limitations" class="md-nav__link">
+    Limitations
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-documentation" class="md-nav__link">
+    Related documentation
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+            
+          
+        </ul>
+      </nav>
+    </li>
+  
+
+    
+      
+      
+      
+
+  
+  
+  
+    
+      
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+      
+      
+      
+        
+      
+      <input class="md-nav__toggle md-toggle md-toggle--indeterminate" data-md-toggle="__nav_4" type="checkbox" id="__nav_4" >
+      
+      
+        
+          
+        
+      
+      
+        <label class="md-nav__link" for="__nav_4" tabindex="0" aria-expanded="false">
+          About
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <nav class="md-nav" aria-label="About" data-md-level="1">
+        <label class="md-nav__title" for="__nav_4">
+          <span class="md-nav__icon md-icon"></span>
+          About
+        </label>
+        <ul class="md-nav__list" data-md-scrollfix>
+          
+            
+              
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../statement/" class="md-nav__link">
+        License
+      </a>
+    </li>
+  
+
+            
+          
+        </ul>
+      </nav>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-the-comparison-establishes" class="md-nav__link">
+    What the comparison establishes
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#validation-approach" class="md-nav__link">
+    Validation approach
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#validation-stages" class="md-nav__link">
+    Validation stages
+  </a>
+  
+    <nav class="md-nav" aria-label="Validation stages">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#stages-1-to-6-integrity-and-static-checks" class="md-nav__link">
+    Stages 1 to 6: integrity and static checks
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#comparison-properties-p1-to-p4" class="md-nav__link">
+    Comparison properties: P1 to P4
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#stage-8-binary-comparison" class="md-nav__link">
+    Stage 8: binary comparison
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#stage-9-evidence" class="md-nav__link">
+    Stage 9: evidence
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recorded-results" class="md-nav__link">
+    Recorded results
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#limitations" class="md-nav__link">
+    Limitations
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-documentation" class="md-nav__link">
+    Related documentation
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  
+  
+
+
+
+<h1 id="patch-validation">Patch Validation</h1>
+<p>After reinsertion, Patchestry checks the binary rewrite and compares the
+original and rewritten functions using PatchSymDiff. PatchSymDiff executes
+their machine code symbolically with angr and uses cozy to compare the
+resulting states.</p>
+<p>This page describes the validation stages, results, and limitations.
+<a href="../ir_verification/">IR-level verification</a> covers contract checking before
+compilation, while <a href="../verifiable_patching/">Verifiable patching</a> explains how
+the workflows connect.</p>
+<h2 id="what-the-comparison-establishes">What the comparison establishes</h2>
+<p>The comparison checks whether a patch rejects additional inputs while
+preserving the compared behavior for inputs that both versions accept. It
+also checks that the patched function accepts no input rejected by the
+original. Results apply to individual functions under the specified input
+bounds and environment assumptions.</p>
+<p>Contracts describe the properties required of the patch. Binary comparison
+complements those checks but does not establish that the contracts fully
+capture the vulnerability. Timing, whole-binary equivalence, and behavior
+inside stubbed callees remain outside its scope.</p>
+<h2 id="validation-approach">Validation approach</h2>
+<p>Validation uses three representations of the function:</p>
+<ol>
+<li>The machine code in the original ELF.</li>
+<li>The intended patched IR, produced by <code>patchir-transform</code>.</li>
+<li>The machine code written into the rewritten ELF by Patcherex2.</li>
+</ol>
+<p>Integrity checks verify that the rewritten ELF contains the intended code at
+the expected addresses. Static analysis checks the inserted function's stack
+and register use. These requirements apply even when the patch rejects an
+input.</p>
+<p>Binary comparison checks the original and rewritten machine code, allowing
+the patch to reject additional inputs. It does not compare the lifted original
+and patched functions at the IR level.</p>
+<p>The evidence file records four verdicts. A group or case receives the weakest
+verdict among its checks, ordered from <code>failed</code> through <code>not-run</code> and <code>tested</code>
+to <code>proven</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Verdict</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>proven</code></td>
+<td>The check established its claim within the specified bounds and assumptions.</td>
+</tr>
+<tr>
+<td><code>tested</code></td>
+<td>The claim held for the inputs exercised by the test.</td>
+</tr>
+<tr>
+<td><code>failed</code></td>
+<td>The check found a problem.</td>
+</tr>
+<tr>
+<td><code>not-run</code></td>
+<td>The check did not run, could not reach a conclusion, or had no declared property to check.</td>
+</tr>
+</tbody>
+</table>
+<p>Missing reports receive <code>not-run</code>. The evidence also records input bounds,
+callee models, rejection rules, and device address ranges. Regression tests
+include deliberately broken patches to verify that the checks detect failures.</p>
+<p>This evidence covers validation after reinsertion. KLEE and SeaHorn contract
+verification produces separate results; those results are not included in
+<code>validation.json</code>.</p>
+<h2 id="validation-stages">Validation stages</h2>
+<p>The drivers run the applicable stages in the following order. A case stops
+at the first integrity failure because subsequent checks require a valid
+rewrite.</p>
+<table>
+<thead>
+<tr>
+<th>Stage</th>
+<th>Check</th>
+<th>Script</th>
+<th>Possible verdicts</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1. Bindings</td>
+<td>Verify that referenced globals and functions exist in the image with the expected addresses, sizes, and kinds.</td>
+<td><a href="../scripts/patch-runtime/check_bindings.py">check_bindings.py</a></td>
+<td><code>proven</code>, <code>failed</code></td>
+</tr>
+<tr>
+<td>2. Dependencies and ABI</td>
+<td>Check that the image supplies the inserted code's dependencies and that the code matches its architecture, floating-point unit, and calling convention.</td>
+<td><a href="../scripts/patch-runtime/patch_dependencies.py">patch_dependencies.py</a>, <a href="../scripts/patch-runtime/check_abi.py">check_abi.py</a></td>
+<td><code>proven</code>, <code>failed</code></td>
+</tr>
+<tr>
+<td>3. Reinsertion</td>
+<td>Check that the rewrite stays within the function or branches to new code without overwriting neighboring code, splitting instructions, or leaving stale entries.</td>
+<td><a href="../scripts/patch-runtime/check_trampoline.py">check_trampoline.py</a></td>
+<td><code>proven</code>, <code>failed</code></td>
+</tr>
+<tr>
+<td>4. Patch record</td>
+<td>Record the bytes, addresses, compiler, and flags used by Patcherex2, and check the record against the rewritten ELF.</td>
+<td><a href="../scripts/patch-runtime/patch_record.py">patch_record.py</a></td>
+<td><code>proven</code>, <code>failed</code></td>
+</tr>
+<tr>
+<td>5. Applied bytes</td>
+<td>Recompile the intended snippets and compare the resulting bytes with the rewritten ELF.</td>
+<td><a href="../scripts/patch-runtime/check_applied_bytes.py">check_applied_bytes.py</a></td>
+<td><code>proven</code>, <code>failed</code></td>
+</tr>
+<tr>
+<td>6. Static analysis</td>
+<td>Check stack and saved-register preservation, along with any declared code-size and stack budgets.</td>
+<td><a href="../scripts/patch-runtime/check_static.py">check_static.py</a></td>
+<td><code>proven</code>, <code>failed</code>, <code>not-run</code></td>
+</tr>
+<tr>
+<td>7. Runtime</td>
+<td>Run the rewritten firmware under QEMU and check its output against the expected transcript.</td>
+<td><a href="../scripts/patch-runtime/qemu_firmware_runtime.py">qemu_firmware_runtime.py</a></td>
+<td><code>tested</code>, <code>failed</code></td>
+</tr>
+<tr>
+<td>8. Binary comparison</td>
+<td>Compare the original and rewritten functions under the declared inputs, rejection rules, and environment assumptions.</td>
+<td><a href="../scripts/patch-runtime/patch_symdiff.py">patch_symdiff.py</a></td>
+<td><code>proven</code>, <code>failed</code>, <code>incomplete</code></td>
+</tr>
+<tr>
+<td>9. Evidence</td>
+<td>Collect the reports, verdicts, and assumptions into one artifact.</td>
+<td><a href="../scripts/patch-runtime/evidence.py">evidence.py</a></td>
+<td>Aggregated from the checks above.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="stages-1-to-6-integrity-and-static-checks">Stages 1 to 6: integrity and static checks</h3>
+<p>These stages inspect the ELF files and patch record without executing the
+firmware. Stage 5 recompiles the intended IR and compares the resulting bytes
+with the rewritten image, relying on the compiler's correctness. Static
+analysis reports <code>not-run</code> for checks it cannot complete or budgets that have
+not been declared.</p>
+<h3 id="comparison-properties-p1-to-p4">Comparison properties: P1 to P4</h3>
+<p>PatchSymDiff checks four properties: existing input rejections, caller-visible
+memory results, return values, and modeled external calls. Each property
+compares the original and patched function using the same input and modeled
+initial state, within the specified input bounds.</p>
+<p>Each case defines rejection through an error return value, a reject handler,
+a write to a declared fault address, or an omitted call listed in
+<code>reject_skips</code>. A completed execution that meets none of these rules is
+accepted. An unfinished or unsupported execution makes the comparison
+incomplete.</p>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Requirement</th>
+<th>Reported difference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P1: Preserve existing rejections</td>
+<td>The patch must not accept an input that the original rejects. It may reject additional inputs.</td>
+<td><code>accepts-rejected-input</code></td>
+</tr>
+<tr>
+<td>P2: Preserve memory results</td>
+<td>When both functions accept, caller-visible memory, including globals and output buffers, must contain the same final bytes. Temporary memory below the final stack pointer is excluded.</td>
+<td><code>memory</code></td>
+</tr>
+<tr>
+<td>P3: Preserve return values</td>
+<td>When both functions accept, their return values must match.</td>
+<td><code>register</code> for r0, and r1 for a 64-bit result</td>
+</tr>
+<tr>
+<td>P4: Preserve external calls</td>
+<td>When both functions accept, modeled external calls must match in order and arguments.</td>
+<td><code>calls</code> for stubbed callees</td>
+</tr>
+</tbody>
+</table>
+<p>For example, a patch may add a guard that rejects oversized messages. For
+messages that pass the guard, changing an output buffer violates P2, changing
+the returned status violates P3, and removing a required external call
+violates P4. Removing an existing rejection violates P1.</p>
+<p>Calls to stubbed functions are recorded and compared directly. Other callees
+are executed, and their effects are compared through memory and registers.
+Writes to declared device ranges are compared in order and reported as
+<code>device-writes</code>. This checks device effects without requiring the same
+sequence of internal helper calls.</p>
+<p>The comparison also checks behavior beyond these four properties. A
+<code>register</code> difference can identify a failure to preserve r4 through r11 or sp.
+An <code>unmatched-path</code> difference identifies a path whose inputs have no matching
+path in the other function.</p>
+<h3 id="stage-8-binary-comparison">Stage 8: binary comparison</h3>
+<p><a href="../scripts/patch-runtime/patch_symdiff.py">patch_symdiff.py</a> symbolically
+executes the original and rewritten machine code with angr, then pairs and
+compares their final states with cozy. Neither side uses the Ghidra or
+<code>patchir-decomp</code> lift, so the comparison can detect behavioral errors
+introduced during lifting. Reinserting a function without changing its IR
+also allows this comparison to test the lifting and recompilation process.</p>
+<p>Both functions start with the same symbolic arguments and argument buffers.
+Globals contain their initial bytes from the ELF image. Registers r4 through
+r11 each start with a symbolic value shared by both executions. Memory read
+before it is written is initialized to zero. <code>--arg-range INDEX:LOW:HIGH</code>
+bounds an integer argument, and <code>--arg-suffix INDEX:HEX</code> specifies the bytes
+after an argument buffer. Those bytes default to zero.</p>
+<p>Rejection rules tell PatchSymDiff when a function has rejected an input:</p>
+<ul>
+<li><code>--reject-skip NAME</code>: omitting a call to this function counts as rejection
+  when the remaining modeled calls match the original. The function is stubbed.</li>
+</ul>
+<p>Separately, <code>--mmio-region LOW:HIGH</code> marks device addresses whose writes are
+compared in order. A conditional write counts only when it executes.</p>
+<p>For a read or write through an input-dependent address, PatchSymDiff explores
+up to 256 possible addresses. If more addresses are possible, the comparison
+is <code>incomplete</code>. Writes through input-dependent addresses are not recorded
+as device writes; if such a write can reach a declared device or rejection
+range, the comparison is <code>incomplete</code>. Unresolved jumps or calls, including
+calls through unconstrained input-derived pointers, also make the comparison
+incomplete.</p>
+<p>Callees execute on both sides unless they are stubbed. A stub records the
+call and returns an unknown value shared by both sides for the same callee
+and call index. Stubs are assumed to leave memory unchanged. The suites use
+different stubbing policies:</p>
+<ul>
+<li>The firmware suite stubs only callees named in <code>reject_skips</code>. Printed
+  output is observed through writes to the UART.</li>
+<li>The recompilation-fidelity suite stubs functions referenced by the lifted
+  code's bindings, except those listed in <code>follow_callees</code>. This limits
+  execution of the surrounding image and handles imports without available
+  code.</li>
+</ul>
+<p>Stub argument and result registers are determined from declarations in the
+compiled IR. These declarations and the function's return type are the only
+information taken from the lift. A 64-bit integer occupies two registers.
+Calls to stubs with unsupported parameters or results make the comparison
+incomplete. These include floating-point values, aggregates, stack arguments,
+and variable arguments to variadic functions.</p>
+<p>For supported read-only string functions (<code>strncmp</code>, <code>strncasecmp</code>, <code>strcmp</code>,
+<code>strcasecmp</code>, <code>memcmp</code>, <code>strlen</code>, and <code>strchr</code>), the stub computes its result
+from memory when the path determines the pointers and required length. If a
+call's result is computed on some paths but remains unknown on others,
+reported differences are marked <code>unconfirmed</code> and the comparison is
+<code>incomplete</code>. An unknown result can otherwise produce an apparent difference
+between equivalent paths.</p>
+<p>Addresses of local variables passed to stubs are excluded from comparison.
+Pointers to read-only data are compared using the bytes they reference,
+allowing the two images to use different layouts.</p>
+<p>PatchSymDiff reports:</p>
+<ul>
+<li><code>proven</code> when every path on both sides returns and no compared input
+  produces a difference.</li>
+<li><code>failed</code> when it finds a confirmed difference, with an input demonstrating
+  that difference.</li>
+<li><code>incomplete</code> when execution reaches a loop or time limit, encounters an
+  error or unresolved target, exceeds the address exploration limit, or
+  requires an unsupported model.</li>
+</ul>
+<p>Because cozy pins an older angr version than Patcherex2, the suites run
+PatchSymDiff in a separate process through
+<code>patch_symdiff.compare_in_own_environment</code>. By default, <code>uv</code> builds this
+environment from
+<a href="../scripts/symdiff/requirements.txt">scripts/symdiff/requirements.txt</a>.
+<code>PATCHESTRY_SYMDIFF_PYTHON</code> can select an interpreter with cozy already
+installed. <a href="../scripts/symdiff/">scripts/symdiff/</a> also provides a Docker image
+for manual runs.</p>
+<p>The recompilation-fidelity suite runs comparison for cases with a <code>compare</code>
+configuration. This specifies buffers, buffer suffixes, argument ranges,
+callees to follow, and a time limit. Results are written to
+<code>patch_symdiff.json</code>. The evidence records them under <code>binary-comparison</code> as
+<code>proven</code>, <code>failed</code>, or <code>not-run</code>. Incomplete comparisons and cases without a
+comparison configuration receive <code>not-run</code>; failed comparisons fail the case.</p>
+<p>The firmware suite compares every case that reaches this stage, using the
+patch's declared rejection rules. Cases designed to change behavior must
+declare the expected difference kind. The comparison must find that kind
+and no others. These cases receive <code>not-run</code> for binary comparison in the
+evidence because detecting an expected difference does not prove it safe.</p>
+<h3 id="stage-9-evidence">Stage 9: evidence</h3>
+<p><a href="../scripts/patch-runtime/evidence.py">evidence.py</a> writes
+<code>&lt;case&gt;/validation.json</code>. It records each check's verdict, source report,
+findings, measurements, and assumptions. It also assigns verdicts to the
+integrity, static, runtime, and comparison groups.
+<a href="../scripts/patch-runtime/collect_reports.py">collect_reports.py</a> converts
+these reports into tables.</p>
+<h2 id="recorded-results">Recorded results</h2>
+<p>Results from the <a href="../scripts/test-qemu-firmware-runtime.sh">firmware runtime suite</a>
+and <a href="../scripts/test-recompilation-fidelity.sh">recompilation-fidelity suite</a>:</p>
+<table>
+<thead>
+<tr>
+<th>Case</th>
+<th>Compare results</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>serial-qemu</code> firmware (Cortex-M3)</td>
+<td>3 patches <code>proven</code>; 9 produced only declared <code>device-writes</code> differences</td>
+<td>The 9 cases are recorded as <code>not-run</code> for comparison; QEMU checks their expected output. The <code>length</code> control without a rejection rule fails as expected.</td>
+</tr>
+<tr>
+<td><code>httpd</code> — <code>FUN_0007ae8c</code></td>
+<td><code>proven</code></td>
+<td>Unchanged reinsertion; 3-byte buffers, offset argument 0–8.</td>
+</tr>
+<tr>
+<td><code>httpd</code> — <code>FUN_00067c0c</code></td>
+<td><code>incomplete</code></td>
+<td>Variable arguments to <code>sprintf</code> and <code>printf</code> are unsupported.</td>
+</tr>
+<tr>
+<td><code>cgibin</code> — <code>FUN_00026534</code></td>
+<td><code>proven</code></td>
+<td>Unchanged reinsertion; 4-byte buffer followed by <code>99;</code>, following <code>FUN_0002609c</code> and <code>FUN_0002619c</code>.</td>
+</tr>
+<tr>
+<td><code>cgibin</code> — modified control</td>
+<td><code>failed</code>, as expected</td>
+<td>Changing <code>;</code> to <code>:</code> passes insertion checks but produces <code>register</code> and <code>calls</code> differences.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="limitations">Limitations</h2>
+<p>Results depend on the input bounds and models used for each case:</p>
+<ul>
+<li>Declaring a behavioral difference does not prove it safe. For the nine
+  firmware patches that declare <code>device-writes</code>, comparison checks the
+  difference kind, while QEMU separately checks the expected transcript.</li>
+<li>Completed comparisons so far cover small functions and bounded inputs.
+  One of the three prebuilt-binary cases remains incomplete, and another is
+  proven only for 3-byte buffers. Paths are not merged, so larger input
+  spaces can increase the number of paths and execution time.</li>
+<li>Stubbed callees are assumed to leave memory unchanged. Their internal
+  behavior is not checked, and unsupported arguments or results, including
+  stack and floating-point arguments, make the comparison incomplete.</li>
+<li>Memory read before it is written is initialized to zero. Results therefore
+  depend on that initial-state assumption.</li>
+<li>Writes to device registers outside declared device ranges are compared as
+  ordinary memory, without checking their order as device effects.</li>
+<li>Integrity and static checks rely on the intended IR and do not independently
+  validate the lifter's interpretation of the original code. Stage 8 compares
+  machine code independently, while still using IR declarations for stub
+  signatures and the function's return type.</li>
+</ul>
+<h2 id="related-documentation">Related documentation</h2>
+<ul>
+<li><a href="../GettingStarted/recompilation_fidelity/">Recompilation fidelity</a>: testing
+  lifted and recompiled functions from prebuilt binaries.</li>
+<li><a href="../GettingStarted/qemu_firmware_runtime/">QEMU firmware runtime</a>: running
+  patched firmware and inspecting validation reports.</li>
+<li><a href="../klee-integration/">KLEE integration</a>: the KLEE image and CI gate.</li>
+</ul>
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        <div class="md-social">
+  
+    
+    
+      
+      
+    
+    <a href="https://slack.empirehacking.nyc/" target="_blank" rel="noopener" title="slack.empirehacking.nyc" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.1 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc.--><path d="M94.12 315.1c0 25.9-21.16 47.06-47.06 47.06S0 341 0 315.1c0-25.9 21.16-47.06 47.06-47.06h47.06v47.06zm23.72 0c0-25.9 21.16-47.06 47.06-47.06s47.06 21.16 47.06 47.06v117.84c0 25.9-21.16 47.06-47.06 47.06s-47.06-21.16-47.06-47.06V315.1zm47.06-188.98c-25.9 0-47.06-21.16-47.06-47.06S139 32 164.9 32s47.06 21.16 47.06 47.06v47.06H164.9zm0 23.72c25.9 0 47.06 21.16 47.06 47.06s-21.16 47.06-47.06 47.06H47.06C21.16 243.96 0 222.8 0 196.9s21.16-47.06 47.06-47.06H164.9zm188.98 47.06c0-25.9 21.16-47.06 47.06-47.06 25.9 0 47.06 21.16 47.06 47.06s-21.16 47.06-47.06 47.06h-47.06V196.9zm-23.72 0c0 25.9-21.16 47.06-47.06 47.06-25.9 0-47.06-21.16-47.06-47.06V79.06c0-25.9 21.16-47.06 47.06-47.06 25.9 0 47.06 21.16 47.06 47.06V196.9zM283.1 385.88c25.9 0 47.06 21.16 47.06 47.06 0 25.9-21.16 47.06-47.06 47.06-25.9 0-47.06-21.16-47.06-47.06v-47.06h47.06zm0-23.72c-25.9 0-47.06-21.16-47.06-47.06 0-25.9 21.16-47.06 47.06-47.06h117.84c25.9 0 47.06 21.16 47.06 47.06 0 25.9-21.16 47.06-47.06 47.06H283.1z"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+      <div class="md-consent" data-md-component="consent" id="__consent" hidden>
+        <div class="md-consent__overlay"></div>
+        <aside class="md-consent__inner">
+          <form class="md-consent__form md-grid md-typeset" name="consent">
+            
+
+
+  
+    
+  
+
+
+
+  
+
+
+<h4>Cookie consent</h4>
+<p>We use cookies to recognize your repeated visits and preferences, as well as to measure the effectiveness of our documentation and whether users find what they're searching for. With your consent, you're helping us to make our documentation better.</p>
+<input class="md-toggle" type="checkbox" id="__settings" >
+<div class="md-consent__settings">
+  <ul class="task-list">
+    
+      
+      
+        
+        
+      
+      <li class="task-list-item">
+        <label class="task-list-control">
+          <input type="checkbox" name="github" checked>
+          <span class="task-list-indicator"></span>
+          GitHub
+        <label>
+      </li>
+    
+  </ul>
+</div>
+<div class="md-consent__controls">
+  
+    
+      <button class="md-button md-button--primary">Accept</button>
+    
+    
+    
+  
+    
+    
+    
+      <label class="md-button" for="__settings">Manage settings</label>
+    
+  
+</div>
+          </form>
+        </aside>
+      </div>
+      <script>var consent=__md_get("__consent");if(consent)for(var input of document.forms.consent.elements)input.name&&(input.checked=consent[input.name]||!1);else"file:"!==location.protocol&&setTimeout(function(){document.querySelector("[data-md-component=consent]").hidden=!1},250);var action,form=document.forms.consent;for(action of["submit","reset"])form.addEventListener(action,function(e){if(e.preventDefault(),"reset"===e.type)for(var n of document.forms.consent.elements)n.name&&(n.checked=!1);__md_set("__consent",Object.fromEntries(Array.from(new FormData(form).keys()).map(function(e){return[e,!0]}))),location.hash="",location.reload()})</script>
+    
+    <script id="__config" type="application/json">{"base": "..", "features": ["navigation.instant", "navigation.instant.prefetch", "navigation.tracking", "navigation.sections", "navigation.expand", "navigation.path", "navigation.indexes", "search.suggest", "search.highlight", "search.share"], "search": "../assets/javascripts/workers/search.e5c33ebb.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.51d95adb.min.js"></script>
+      
+    
+  </body>
+</html>

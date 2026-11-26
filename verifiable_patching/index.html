@@ -1,0 +1,1132 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+      
+        <link rel="prev" href="../CONTRIBUTING/">
+      
+      
+        <link rel="next" href="../ir_verification/">
+      
+      <link rel="icon" href="../assets/img/favicon.ico">
+      <meta name="generator" content="mkdocs-1.4.2, mkdocs-material-9.0.6">
+    
+    
+      
+        <title>Verifiable Patching - Patchestry</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.558e4712.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.2505c338.min.css">
+      
+      
+
+    
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce((e,_)=>(e<<5)-e+_.charCodeAt(0),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="pink">
+  
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&"object"==typeof palette.color)for(var key of Object.keys(palette.color))document.body.setAttribute("data-md-color-"+key,palette.color[key])</script>
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#verifiable-patching" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="Patchestry" class="md-header__button md-logo" aria-label="Patchestry" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54Z"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3V6m0 5h18v2H3v-2m0 5h18v2H3v-2Z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Patchestry
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Verifiable Patching
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      <form class="md-header__option" data-md-component="palette">
+        
+          
+          <input class="md-option" data-md-color-media="(prefers-color-scheme)" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="pink"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+          
+            <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_3" hidden>
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m14.3 16-.7-2h-3.2l-.7 2H7.8L11 7h2l3.2 9h-1.9M20 8.69V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12 20 8.69m-9.15 3.96h2.3L12 9l-1.15 3.65Z"/></svg>
+            </label>
+          
+        
+          
+          <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="pink"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_2">
+          
+            <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12 20 8.69Z"/></svg>
+            </label>
+          
+        
+          
+          <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="black" data-md-color-accent="pink"  aria-label="Switch to system preference"  type="radio" name="__palette" id="__palette_3">
+          
+            <label class="md-header__button md-icon" title="Switch to system preference" for="__palette_2" hidden>
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12c0-2.42-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12 20 8.69Z"/></svg>
+            </label>
+          
+        
+      </form>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.516 6.516 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5Z"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.516 6.516 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5Z"/></svg>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11h12Z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7 0-.24-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91 1.61 0 2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08Z"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41Z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/lifting-bits/patchestry" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.1 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81z"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="Patchestry" class="md-nav__button md-logo" aria-label="Patchestry" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54Z"/></svg>
+
+    </a>
+    Patchestry
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/lifting-bits/patchestry" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.1 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81z"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+      
+
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        Introduction
+      </a>
+    </li>
+  
+
+    
+      
+      
+      
+
+  
+  
+  
+    
+      
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+      
+      
+      
+        
+      
+      <input class="md-nav__toggle md-toggle md-toggle--indeterminate" data-md-toggle="__nav_2" type="checkbox" id="__nav_2" >
+      
+      
+        
+          
+        
+          
+        
+          
+        
+          
+        
+          
+        
+      
+      
+        <label class="md-nav__link" for="__nav_2" tabindex="0" aria-expanded="false">
+          Getting Started
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <nav class="md-nav" aria-label="Getting Started" data-md-level="1">
+        <label class="md-nav__title" for="__nav_2">
+          <span class="md-nav__icon md-icon"></span>
+          Getting Started
+        </label>
+        <ul class="md-nav__list" data-md-scrollfix>
+          
+            
+              
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../GettingStarted/build/" class="md-nav__link">
+        Build & Run
+      </a>
+    </li>
+  
+
+            
+          
+            
+              
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../GettingStarted/ghidra/" class="md-nav__link">
+        Ghidra Integration
+      </a>
+    </li>
+  
+
+            
+          
+            
+              
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../GettingStarted/qemu_firmware_runtime/" class="md-nav__link">
+        QEMU Firmware Runtime
+      </a>
+    </li>
+  
+
+            
+          
+            
+              
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../GettingStarted/recompilation_fidelity/" class="md-nav__link">
+        Recompilation Fidelity
+      </a>
+    </li>
+  
+
+            
+          
+            
+              
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../CONTRIBUTING/" class="md-nav__link">
+        How to contribute
+      </a>
+    </li>
+  
+
+            
+          
+        </ul>
+      </nav>
+    </li>
+  
+
+    
+      
+      
+      
+
+  
+  
+    
+  
+  
+    
+      
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+      
+      
+      
+      <input class="md-nav__toggle md-toggle " data-md-toggle="__nav_3" type="checkbox" id="__nav_3" checked>
+      
+      
+        
+          
+        
+          
+        
+          
+        
+          
+        
+      
+      
+        <label class="md-nav__link" for="__nav_3" tabindex="0" aria-expanded="true">
+          Verification
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <nav class="md-nav" aria-label="Verification" data-md-level="1">
+        <label class="md-nav__title" for="__nav_3">
+          <span class="md-nav__icon md-icon"></span>
+          Verification
+        </label>
+        <ul class="md-nav__list" data-md-scrollfix>
+          
+            
+              
+  
+  
+    
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" data-md-toggle="toc" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          Verifiable Patching
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        Verifiable Patching
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#checks-in-the-pipeline" class="md-nav__link">
+    Checks in the pipeline
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-each-check-establishes" class="md-nav__link">
+    What each check establishes
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#properties-p1-to-p4" class="md-nav__link">
+    Properties P1 to P4
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#verification-at-ir-level" class="md-nav__link">
+    Verification at IR level
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#validation-after-reinsertion" class="md-nav__link">
+    Validation after reinsertion
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#verdicts" class="md-nav__link">
+    Verdicts
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#limitations" class="md-nav__link">
+    Limitations
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-documentation" class="md-nav__link">
+    Related documentation
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+            
+          
+            
+              
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ir_verification/" class="md-nav__link">
+        IR-Level Verification
+      </a>
+    </li>
+  
+
+            
+          
+            
+              
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../klee-integration/" class="md-nav__link">
+        KLEE Integration
+      </a>
+    </li>
+  
+
+            
+          
+            
+              
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../patch_validation/" class="md-nav__link">
+        Patch Validation
+      </a>
+    </li>
+  
+
+            
+          
+        </ul>
+      </nav>
+    </li>
+  
+
+    
+      
+      
+      
+
+  
+  
+  
+    
+      
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+      
+      
+      
+        
+      
+      <input class="md-nav__toggle md-toggle md-toggle--indeterminate" data-md-toggle="__nav_4" type="checkbox" id="__nav_4" >
+      
+      
+        
+          
+        
+      
+      
+        <label class="md-nav__link" for="__nav_4" tabindex="0" aria-expanded="false">
+          About
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <nav class="md-nav" aria-label="About" data-md-level="1">
+        <label class="md-nav__title" for="__nav_4">
+          <span class="md-nav__icon md-icon"></span>
+          About
+        </label>
+        <ul class="md-nav__list" data-md-scrollfix>
+          
+            
+              
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../statement/" class="md-nav__link">
+        License
+      </a>
+    </li>
+  
+
+            
+          
+        </ul>
+      </nav>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#checks-in-the-pipeline" class="md-nav__link">
+    Checks in the pipeline
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-each-check-establishes" class="md-nav__link">
+    What each check establishes
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#properties-p1-to-p4" class="md-nav__link">
+    Properties P1 to P4
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#verification-at-ir-level" class="md-nav__link">
+    Verification at IR level
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#validation-after-reinsertion" class="md-nav__link">
+    Validation after reinsertion
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#verdicts" class="md-nav__link">
+    Verdicts
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#limitations" class="md-nav__link">
+    Limitations
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-documentation" class="md-nav__link">
+    Related documentation
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  
+  
+
+
+
+<h1 id="verifiable-patching">Verifiable Patching</h1>
+<p>Patchestry checks contracts on patched LLVM IR before compilation, then
+validates the binary rewrite after reinsertion. These workflows address two
+questions:</p>
+<ol>
+<li>Does the patched IR satisfy the specified postconditions under the assumed
+   preconditions and harness model?</li>
+<li>Does the rewritten binary contain the intended code and preserve the
+   compared behavior for inputs that both versions accept, without accepting
+   inputs rejected by the original?</li>
+</ol>
+<p><a href="../ir_verification/">IR-level verification</a> describes contract checking with
+KLEE and instrumentation for SeaHorn.
+<a href="../patch_validation/">Patch validation</a> describes integrity and static checks,
+QEMU execution, and binary comparison with PatchSymDiff. PatchSymDiff executes
+the original and rewritten machine code symbolically with angr and uses cozy
+to compare the resulting states.</p>
+<p>Results apply to individual functions under the specified input bounds and
+environment assumptions. Contracts describe the properties required of the
+patch; binary comparison complements those checks but does not establish that
+the contracts fully capture the vulnerability.</p>
+<h2 id="checks-in-the-pipeline">Checks in the pipeline</h2>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>Ghidra JSON
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    | patchir-decomp
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    v
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>CIR  + YAML patches and contracts
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    | patchir-transform
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    v
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>patched CIR (contracts attached as attributes)
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    | patchir-cir2llvm
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    v
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>patched LLVM IR (contracts carried as !static_contract metadata)
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    |
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>    |---- IR-level verification -------------------------------------------
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    |       patchir-klee-verifier  -&gt; harness -&gt; KLEE
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>    |       patchir-seahorn-verifier -&gt; instrumented IR for SeaHorn
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>    |
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>    | compile, Patcherex2 rewrite of the original ELF
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>    v
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>rewritten ELF
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>    |
+</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>    \---- validation after reinsertion ---------------------------------------
+</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a>            integrity and static checks   (intended IR against the rewritten ELF)
+</span><span id="__span-0-22"><a id="__codelineno-0-22" name="__codelineno-0-22" href="#__codelineno-0-22"></a>            runtime under QEMU            (rewritten firmware)
+</span><span id="__span-0-23"><a id="__codelineno-0-23" name="__codelineno-0-23" href="#__codelineno-0-23"></a>            binary comparison             (original ELF against the rewritten ELF)
+</span><span id="__span-0-24"><a id="__codelineno-0-24" name="__codelineno-0-24" href="#__codelineno-0-24"></a>            evidence                      (one artifact per validation case)
+</span></code></pre></div>
+<h2 id="what-each-check-establishes">What each check establishes</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Contract verification</th>
+<th>Validation after reinsertion</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Property</td>
+<td>Postconditions at a call site, under assumed preconditions</td>
+<td>Rewrite integrity, calling convention, expected runtime output, and <a href="#properties-p1-to-p4">P1 to P4</a></td>
+</tr>
+<tr>
+<td>Checked on</td>
+<td>Patched LLVM IR</td>
+<td>Intended patched IR and the original and rewritten ELF files</td>
+</tr>
+<tr>
+<td>Method</td>
+<td>Symbolic execution of a generated harness with KLEE; instrumentation for SeaHorn (not run in CI)</td>
+<td>static checks of the rewritten bytes, a QEMU run, and symbolic comparison of machine code (PatchSymDiff)</td>
+</tr>
+<tr>
+<td>Configuration</td>
+<td>contracts written by the patch author in YAML</td>
+<td>input bounds, rejection rules, callee models, and device ranges declared for the case</td>
+</tr>
+<tr>
+<td>Detail</td>
+<td><a href="../ir_verification/">IR-level verification</a></td>
+<td><a href="../patch_validation/">Patch validation</a></td>
+</tr>
+</tbody>
+</table>
+<p>A contract check can pass even if the compiled patch corrupts a saved register.
+Conversely, preserving the original behavior does not establish that a bug was
+fixed. The contract must describe the intended fix, and the binary checks must
+cover the behavior the patch needs to preserve.</p>
+<h2 id="properties-p1-to-p4">Properties P1 to P4</h2>
+<p>A property is a rule that the comparison checks. P1 through P4 describe how
+the patched function may differ from the original when both receive the same
+input and start from the same modeled state.</p>
+<p>An input is <strong>rejected</strong> when execution meets a rejection rule declared for
+the case: an error return value, a reject handler, a write to a declared fault
+address, or an omitted call listed in <code>reject_skips</code>.
+Otherwise, a completed execution is treated as <strong>accepted</strong>. The tool does
+not decide whether an input is valid on its own. An execution it cannot
+finish or analyze makes the comparison incomplete.</p>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th>Rule</th>
+<th>Example of a violation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>P1: Preserve existing rejections</strong></td>
+<td>If the patch accepts an input, the original must also accept it. The patch may reject additional inputs.</td>
+<td>The original rejects a malformed request, but the patch processes it.</td>
+</tr>
+<tr>
+<td><strong>P2: Preserve memory results</strong></td>
+<td>For an input both versions accept, caller-visible memory must contain the same bytes when the function finishes. This includes globals and output buffers, but excludes temporary memory below the final stack pointer.</td>
+<td>A valid request leaves different bytes in an output buffer.</td>
+</tr>
+<tr>
+<td><strong>P3: Preserve return values</strong></td>
+<td>For an input both versions accept, they must return the same value.</td>
+<td>A valid request returns a different length or status code.</td>
+</tr>
+<tr>
+<td><strong>P4: Preserve external calls</strong></td>
+<td>For an input both versions accept, the external calls covered by the model must match in order and arguments.</td>
+<td>The patch omits a required call, calls a function twice, or passes a different argument.</td>
+</tr>
+</tbody>
+</table>
+<p>For example, a patch may add a length check that rejects oversized messages.
+For messages both versions accept, the memory results, return value, and
+modeled external calls must remain unchanged. These properties allow that
+restriction without requiring the patched function to reproduce the
+original's unsafe behavior on rejected inputs.</p>
+<p>The checks apply within the declared input bounds and callee models. In
+PatchSymDiff, P4's call records cover stubbed callees. Callees that are executed
+are checked through their effects on memory and registers; writes to declared
+device ranges are also compared in order. Register checks also cover
+preservation of r4 through r11 and sp. Paths with no corresponding inputs in
+the other function are reported as <code>unmatched-path</code>. See
+<a href="../patch_validation/#comparison-properties-p1-to-p4">Patch validation</a> for the report
+fields and implementation limits.</p>
+<h2 id="verification-at-ir-level">Verification at IR level</h2>
+<p>The patch author writes each static contract in the YAML spec (see
+<a href="../GettingStarted/patch_specifications/">Patch specifications</a>).
+<code>patchir-transform</code> attaches it to the matched operation, and
+<code>patchir-cir2llvm</code> carries it into LLVM IR as <code>!static_contract</code> metadata.
+Static contracts add no executable code until a verifier instruments them.</p>
+<p>Two tools read that metadata:</p>
+<ul>
+<li><code>patchir-klee-verifier</code> builds a harness around one function: symbolic
+  arguments and globals, stubs for external functions, each precondition as an
+  assumption, and each postcondition as a check that aborts on failure. KLEE
+  explores the harness and reports paths that reach an abort.</li>
+<li><code>patchir-seahorn-verifier</code> rewrites the same metadata into
+  <code>__VERIFIER_assume</code> and <code>__VERIFIER_assert</code> calls for SeaHorn.</li>
+</ul>
+<p>These tools check the lifted function after the patch has been applied. They
+assume the lift is accurate; they do not inspect the machine code produced
+later.</p>
+<h2 id="validation-after-reinsertion">Validation after reinsertion</h2>
+<p>Once Patcherex2 has written the patch into the ELF, three versions of the
+function exist: the original bytes, the intended patched IR, and the rewritten
+bytes. Each check examines a different part of that transformation, which
+helps narrow down a failure.</p>
+<ul>
+<li>Integrity checks validate symbol addresses, dependencies, ABI compatibility,
+  and patch placement. A separate compilation of the intended IR supplies the
+  expected bytes. Static analysis checks stack balance and preservation of
+  callee-saved registers in the inserted code, along with declared code-size
+  and stack budgets.</li>
+<li>The firmware runtime check boots the rewritten firmware under QEMU and
+  compares its output with the expected transcript.</li>
+<li><a href="../scripts/patch-runtime/patch_symdiff.py">PatchSymDiff</a> checks P1 to P4
+  using the original and rewritten machine code. This allows it to detect
+  errors introduced by the Ghidra-to-IR lift. It still uses IR declarations
+  for stub signatures and the function's return type.</li>
+<li><a href="../scripts/patch-runtime/evidence.py">Evidence collection</a> writes
+  <code>&lt;case&gt;/validation.json</code>, recording each check's verdict and assumptions and
+  aggregating results into integrity, static, runtime, and comparison groups.</li>
+</ul>
+<p>The drivers run the applicable stages and stop at the first integrity failure.
+The <a href="../patch_validation/#validation-stages">validation stages</a> describe their
+order and link to each script. Contract verification produces separate
+results; the binary-validation evidence does not combine KLEE or SeaHorn
+results with these checks.</p>
+<h2 id="verdicts">Verdicts</h2>
+<p>The binary-validation evidence file records four verdicts. A group or case
+receives the weakest verdict among its checks, ordered from <code>failed</code> through
+<code>not-run</code> and <code>tested</code> to <code>proven</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Verdict</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>proven</code></td>
+<td>The check established its claim within the specified bounds and assumptions.</td>
+</tr>
+<tr>
+<td><code>tested</code></td>
+<td>The claim held for the inputs exercised by the test.</td>
+</tr>
+<tr>
+<td><code>failed</code></td>
+<td>The check found a problem.</td>
+</tr>
+<tr>
+<td><code>not-run</code></td>
+<td>The check did not run, could not reach a conclusion, or had no declared property to check.</td>
+</tr>
+</tbody>
+</table>
+<p>PatchSymDiff also reports <code>incomplete</code> when it cannot finish execution or
+requires unsupported models. This can include unconfirmed differences, so it
+does not establish that the functions agree. The evidence records incomplete
+comparisons and missing reports as <code>not-run</code>.</p>
+<p>Some firmware cases declare an expected behavioral difference, such as added
+UART writes. The comparison must find the declared difference kind and no
+others, while QEMU checks the expected output. These comparisons receive
+<code>not-run</code> in the evidence because detecting an expected difference does not
+prove it safe. See <a href="../patch_validation/#recorded-results">Recorded results</a>
+for the firmware and recompilation cases.</p>
+<p>The <a href="../ir_verification/#the-gate-in-ci">KLEE gate</a> reports its own verdicts.
+An incomplete run can satisfy a test's <code>no-errors</code> expectation without
+establishing a proof.</p>
+<p>Regression tests include deliberate failures. For example, the KLEE gate must
+detect an abort in its control test, and both binary-validation suites include
+cases that must be rejected.</p>
+<h2 id="limitations">Limitations</h2>
+<ul>
+<li>The lifted original is not compared with the patched IR at IR level.
+  PatchSymDiff checks for behavioral differences after recompilation.</li>
+<li>The contract checks trust the lift and the harness: stubbed external
+  functions return unconstrained values, and pointer arguments point at
+  buffers of a fixed size.</li>
+<li>Binary comparison covers one function at a time within the specified input
+  bounds. Whole-binary equivalence, timing, and behavior inside stubbed callees
+  are outside its scope. Stubs are assumed to leave memory unchanged, and
+  memory read before it is written is initialized to zero. Device-write order
+  is checked only for declared device ranges. See the
+  <a href="../patch_validation/#limitations">comparison limitations</a> for details.</li>
+<li>KLEE runs the harness retargeted to x86_64, so properties that depend on
+  the 32-bit memory layout are outside what it can show (see
+  <a href="../klee-integration/">KLEE integration</a>).</li>
+<li>SeaHorn is not run in CI. The repository builds the instrumentation tool and
+  a SeaHorn image, and has no test suite that runs one against the other.</li>
+</ul>
+<h2 id="related-documentation">Related documentation</h2>
+<table>
+<thead>
+<tr>
+<th>Topic</th>
+<th>Page</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Writing contracts and patches</td>
+<td><a href="../GettingStarted/patch_specifications/">Patch specifications</a></td>
+</tr>
+<tr>
+<td>Contract verification on LLVM IR</td>
+<td><a href="../ir_verification/">IR-level verification</a></td>
+</tr>
+<tr>
+<td>KLEE image, retargeting, limits and the CI gate</td>
+<td><a href="../klee-integration/">KLEE integration</a></td>
+</tr>
+<tr>
+<td>Stages, properties, and results after reinsertion</td>
+<td><a href="../patch_validation/">Patch validation</a></td>
+</tr>
+<tr>
+<td>Running the firmware suite</td>
+<td><a href="../GettingStarted/qemu_firmware_runtime/">QEMU firmware runtime</a></td>
+</tr>
+<tr>
+<td>Running the recompilation-fidelity suite</td>
+<td><a href="../GettingStarted/recompilation_fidelity/">Recompilation fidelity</a></td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        <div class="md-social">
+  
+    
+    
+      
+      
+    
+    <a href="https://slack.empirehacking.nyc/" target="_blank" rel="noopener" title="slack.empirehacking.nyc" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.1 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc.--><path d="M94.12 315.1c0 25.9-21.16 47.06-47.06 47.06S0 341 0 315.1c0-25.9 21.16-47.06 47.06-47.06h47.06v47.06zm23.72 0c0-25.9 21.16-47.06 47.06-47.06s47.06 21.16 47.06 47.06v117.84c0 25.9-21.16 47.06-47.06 47.06s-47.06-21.16-47.06-47.06V315.1zm47.06-188.98c-25.9 0-47.06-21.16-47.06-47.06S139 32 164.9 32s47.06 21.16 47.06 47.06v47.06H164.9zm0 23.72c25.9 0 47.06 21.16 47.06 47.06s-21.16 47.06-47.06 47.06H47.06C21.16 243.96 0 222.8 0 196.9s21.16-47.06 47.06-47.06H164.9zm188.98 47.06c0-25.9 21.16-47.06 47.06-47.06 25.9 0 47.06 21.16 47.06 47.06s-21.16 47.06-47.06 47.06h-47.06V196.9zm-23.72 0c0 25.9-21.16 47.06-47.06 47.06-25.9 0-47.06-21.16-47.06-47.06V79.06c0-25.9 21.16-47.06 47.06-47.06 25.9 0 47.06 21.16 47.06 47.06V196.9zM283.1 385.88c25.9 0 47.06 21.16 47.06 47.06 0 25.9-21.16 47.06-47.06 47.06-25.9 0-47.06-21.16-47.06-47.06v-47.06h47.06zm0-23.72c-25.9 0-47.06-21.16-47.06-47.06 0-25.9 21.16-47.06 47.06-47.06h117.84c25.9 0 47.06 21.16 47.06 47.06 0 25.9-21.16 47.06-47.06 47.06H283.1z"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+      <div class="md-consent" data-md-component="consent" id="__consent" hidden>
+        <div class="md-consent__overlay"></div>
+        <aside class="md-consent__inner">
+          <form class="md-consent__form md-grid md-typeset" name="consent">
+            
+
+
+  
+    
+  
+
+
+
+  
+
+
+<h4>Cookie consent</h4>
+<p>We use cookies to recognize your repeated visits and preferences, as well as to measure the effectiveness of our documentation and whether users find what they're searching for. With your consent, you're helping us to make our documentation better.</p>
+<input class="md-toggle" type="checkbox" id="__settings" >
+<div class="md-consent__settings">
+  <ul class="task-list">
+    
+      
+      
+        
+        
+      
+      <li class="task-list-item">
+        <label class="task-list-control">
+          <input type="checkbox" name="github" checked>
+          <span class="task-list-indicator"></span>
+          GitHub
+        <label>
+      </li>
+    
+  </ul>
+</div>
+<div class="md-consent__controls">
+  
+    
+      <button class="md-button md-button--primary">Accept</button>
+    
+    
+    
+  
+    
+    
+    
+      <label class="md-button" for="__settings">Manage settings</label>
+    
+  
+</div>
+          </form>
+        </aside>
+      </div>
+      <script>var consent=__md_get("__consent");if(consent)for(var input of document.forms.consent.elements)input.name&&(input.checked=consent[input.name]||!1);else"file:"!==location.protocol&&setTimeout(function(){document.querySelector("[data-md-component=consent]").hidden=!1},250);var action,form=document.forms.consent;for(action of["submit","reset"])form.addEventListener(action,function(e){if(e.preventDefault(),"reset"===e.type)for(var n of document.forms.consent.elements)n.name&&(n.checked=!1);__md_set("__consent",Object.fromEntries(Array.from(new FormData(form).keys()).map(function(e){return[e,!0]}))),location.hash="",location.reload()})</script>
+    
+    <script id="__config" type="application/json">{"base": "..", "features": ["navigation.instant", "navigation.instant.prefetch", "navigation.tracking", "navigation.sections", "navigation.expand", "navigation.path", "navigation.indexes", "search.suggest", "search.highlight", "search.share"], "search": "../assets/javascripts/workers/search.e5c33ebb.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.51d95adb.min.js"></script>
+      
+    
+  </body>
+</html>
