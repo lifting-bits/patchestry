@@ -1,18 +1,35 @@
+# The base image is pinned by digest and apt is pointed at one Ubuntu archive
+# snapshot. amd64 packages normally come from archive.ubuntu.com and armhf
+# packages from ports.ubuntu.com; when an update reaches one mirror before the
+# other, the armhf copy of a Multi-Arch library is not installable and the
+# build fails. A snapshot serves every architecture from the same instant.
+# To update, move the digest and UBUNTU_SNAPSHOT together; the snapshot must
+# not be older than the base image.
+ARG UBUNTU_BASE=ubuntu:22.04@sha256:b000e69a50ff940390233025e7a337fb8469b509e2334fa4d018ac30f3e18cdb
+
+# The snapshot service is HTTPS only and the base image has no CA
+# certificates. This stage installs them from the regular mirrors; only the
+# certificate bundle is copied out, so no package from a live mirror reaches
+# the final image.
+FROM ${UBUNTU_BASE} AS certs
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates
+
 # Disable fortified libc wrappers (__sprintf_chk, etc.) in Ubuntu 22.04
-FROM ubuntu:22.04
+FROM ${UBUNTU_BASE}
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-# Enable armhf cross-compilation; configure apt sources per host architecture
+ARG UBUNTU_SNAPSHOT=20261120T000000Z
+
+COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+
+# Enable armhf cross-compilation and take every architecture from the snapshot
 RUN dpkg --add-architecture armhf && \
-    NATIVE_ARCH=$(dpkg --print-architecture) && \
-    if [ "$NATIVE_ARCH" = "amd64" ]; then \
-        sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list && \
-        echo "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports jammy main universe multiverse restricted" >> /etc/apt/sources.list && \
-        echo "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports jammy-updates main universe multiverse restricted" >> /etc/apt/sources.list && \
-        echo "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports jammy-security main universe multiverse restricted" >> /etc/apt/sources.list && \
-        echo "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports jammy-backports main universe multiverse restricted" >> /etc/apt/sources.list ; \
-    fi
+    : > /etc/apt/sources.list && \
+    for suite in jammy jammy-updates jammy-security jammy-backports; do \
+        echo "deb https://snapshot.ubuntu.com/ubuntu/${UBUNTU_SNAPSHOT} ${suite} main universe multiverse restricted" >> /etc/apt/sources.list ; \
+    done
 
 # Install dependencies
 RUN apt-get update && \

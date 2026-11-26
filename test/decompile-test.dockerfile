@@ -6,12 +6,11 @@
 # This should be kept in step with decompile-headless.dockerfile. It doesn't inherit from it only
 # because the native Ghidra build takes a long time and we don't need that for test purposes.
 
-# Pin to Ubuntu 24.04 (noble). The unpinned `eclipse-temurin:21` tag now
-# resolves to Ubuntu 26.04, which ships Python 3.14 — outside Ghidra
-# 11.3.2's supported range (3.9–3.13). The createGhidraStubsWheel task
-# refuses to run on unsupported Python and the docker build fails. Noble
-# ships python3 = 3.12, which is in the allowlist.
-FROM eclipse-temurin:21-noble AS base
+# Pin to Ubuntu 24.04 (noble) so the Python version does not move with the
+# unpinned tag. Ghidra 12.2 supports Python 3.9 to 3.15 and its
+# createGhidraStubsWheel task refuses to run on anything else. Noble ships
+# python3 = 3.12. Ghidra 12.2 needs Java 25.
+FROM eclipse-temurin:25-noble AS base
 
 # This Dockerfile runs tests for the decompilation / high pcode production part of Patchestry. 
 # On Linux, you can build *from the root of the repo* with:
@@ -84,8 +83,8 @@ RUN apt-get -y autoremove --purge && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
-# Ghidra source requires Gradle 8.5+ currently
-ARG GRADLE_VERSION=8.5
+# Ghidra 12.2 source requires Gradle 9.1+
+ARG GRADLE_VERSION=9.1.0
 RUN wget -q https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip -P /tmp \
     && unzip -d /home/user/gradle /tmp/gradle-${GRADLE_VERSION}-bin.zip \
     && rm /tmp/gradle-${GRADLE_VERSION}-bin.zip \
@@ -93,7 +92,7 @@ RUN wget -q https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-b
 ENV PATH="/home/user/gradle/latest/bin:${PATH}"
 
 # the production release of Ghidra doesn't have test deps, so we'll build what we need here.
-ARG GHIDRA_RELEASE_TAG_NAME="Ghidra_11.3.2_build"
+ARG GHIDRA_RELEASE_TAG_NAME="Ghidra_12.2_build"
 ARG GHIDRA_REPOSITORY=https://github.com/NationalSecurityAgency/ghidra
 WORKDIR /home/user
 RUN git clone --depth 1 --single-branch --branch $GHIDRA_RELEASE_TAG_NAME https://github.com/NationalSecurityAgency/ghidra.git ghidra_source

@@ -30,7 +30,7 @@ paths:
 bash ./scripts/ghidra/build-headless-docker.sh
 ```
 
-This builds `trailofbits/patchestry-decompilation:latest` with Ghidra 11.3.2 and the patchestry scripts.
+This builds `trailofbits/patchestry-decompilation:latest` with Ghidra 12.2 and the patchestry scripts.
 
 ## Recover a Function from Binary → JSON
 

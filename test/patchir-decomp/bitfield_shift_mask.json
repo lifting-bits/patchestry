@@ -1,0 +1,3274 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-llvm -output %t > %t.log 2>&1
+// RUN: %file-check -vv -check-prefix=LOG --allow-empty %s --input-file %t.log
+// RUN: %file-check -vv -check-prefix=REG %s --input-file %t.ll
+// RUN: %file-check -vv -check-prefix=BIG %s --input-file %t.ll
+// RUN: %file-check -vv -check-prefix=PACKED %s --input-file %t.ll
+// RUN: %file-check -vv -check-prefix=SET %s --input-file %t.ll
+// RUN: %file-check -vv -check-prefix=JSON %s --input-file %t.json
+//
+// Ghidra 12.2 export of test/ghidra/bitfield.c, built for AArch64 at -O1, as
+// the export scripts produce it: the decompiler option "Simplify bitfield
+// access" is off, so bit-field accesses are the shifts and masks of the binary
+// and there is no ZPULL, SPULL or INSERT.  Ghidra 12.0.4 reports the same
+// operations for this object.
+// JSON-NOT: "ZPULL"
+// JSON-NOT: "SPULL"
+// JSON-NOT: "INSERT"
+//
+// LOG-NOT: unsupported mnemonic
+// LOG-NOT: op-dropped
+// LOG-NOT: return-synthesized
+//
+// reg_update reads a volatile register once, updates two fields in a copy
+// and writes the register once.  The lift has one load from the register and
+// one store to it: the only load and the only store through a loaded pointer.
+// With the option on, Ghidra reports two read-modify-write sequences here.
+// REG-LABEL: define dso_local void @reg_update(
+// REG: [[R:%[0-9]+]] = load ptr, ptr
+// REG-NEXT: load i32, ptr [[R]], align 4
+// REG-NOT: load ptr
+// REG: [[W:%[0-9]+]] = load ptr, ptr
+// REG-NEXT: store i32 %{{[0-9]+}}, ptr [[W]], align 4
+// REG-NOT: load ptr
+// REG: ret void
+//
+// The bit-field unit is four bytes of a 48-byte struct.
+// BIG-LABEL: define dso_local void @big_set(
+// BIG: shl i32 %{{[0-9]+}}, 8
+// BIG: [[P:%[0-9]+]] = load ptr, ptr
+// BIG-NEXT: store i32 %{{[0-9]+}}, ptr [[P]], align 4
+//
+// The bit-field unit is four bytes at byte 1 of a packed struct, so its load
+// and store are aligned to one byte, not four.
+// PACKED-LABEL: define dso_local void @packed_set(
+// PACKED: [[A:%[0-9]+]] = getelementptr i8, ptr %{{[0-9]+}}, i64 1
+// PACKED-NEXT: load i32, ptr [[A]], align 1
+// PACKED: shl i32 %{{[0-9]+}}, 6
+// PACKED: [[B:%[0-9]+]] = getelementptr i8, ptr %{{[0-9]+}}, i64 1
+// PACKED-NEXT: store i32 %{{[0-9]+}}, ptr [[B]], align 1
+//
+// Two fields written by one load and one store, as in the binary.
+// SET-LABEL: define dso_local void @bitfield_set(
+// SET: [[S:%[0-9]+]] = load ptr, ptr
+// SET-NEXT: load i32, ptr [[S]], align 4
+// SET-NOT: load ptr
+// SET: [[D:%[0-9]+]] = load ptr, ptr
+// SET-NEXT: store i32 %{{[0-9]+}}, ptr [[D]], align 4
+// SET-NOT: load ptr
+// SET: ret void
+{
+  "architecture": "AARCH64",
+  "id": "AARCH64:LE:64:v8A",
+  "format": "Executable and Linking Format (ELF)",
+  "compiler_spec": "default",
+  "functions": {
+    "ram:00100000": {
+      "name": "bitfield_get_unsigned",
+      "display_name": "bitfield_get_unsigned",
+      "is_intrinsic": false,
+      "entry_point": "ram:00100000",
+      "frame": {
+        "size": 0,
+        "local_size": 0,
+        "parameter_size": 0,
+        "parameter_offset": 0,
+        "grows_negative": true
+      },
+      "address_ranges": [
+        {
+          "start": "ram:00100000",
+          "end": "ram:0010000b"
+        }
+      ],
+      "type": {
+        "return_type": "t0",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__cdecl",
+        "parameter_types": [
+          "t1"
+        ],
+        "return_storage": [
+          {
+            "kind": "register",
+            "register": "w0",
+            "offset": 16384,
+            "size": 4
+          }
+        ],
+        "parameter_storage": [
+          [
+            {
+              "kind": "register",
+              "register": "x0",
+              "offset": 16384,
+              "size": 8
+            }
+          ]
+        ]
+      },
+      "basic_blocks": {
+        "ram:00100000:0:basic": {
+          "operations": {
+            "ram:00100000:1:0": {
+              "mnemonic": "LOAD",
+              "type": "t2",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t1",
+                  "size": 8,
+                  "kind": "parameter",
+                  "operation": "unique:00410d00:0:0"
+                }
+              ]
+            },
+            "ram:00100004:18:1": {
+              "mnemonic": "CAST",
+              "type": "t0",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t2",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:00100000:1:0"
+                }
+              ]
+            },
+            "ram:00100004:4:2": {
+              "mnemonic": "INT_RIGHT",
+              "type": "t0",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:00100004:18:1"
+                },
+                {
+                  "type": "t3",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 8
+                }
+              ]
+            },
+            "ram:00100004:9:3": {
+              "mnemonic": "INT_AND",
+              "type": "t0",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:00100004:4:2"
+                },
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 4095
+                }
+              ]
+            },
+            "ram:00100008:13:4": {
+              "mnemonic": "COPY",
+              "type": "t0",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:00100004:9:3"
+                }
+              ]
+            },
+            "ram:00100008:12:5": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:00100008:13:4"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "ram:00100000:1:0",
+            "ram:00100004:18:1",
+            "ram:00100004:4:2",
+            "ram:00100004:9:3",
+            "ram:00100008:13:4",
+            "ram:00100008:12:5"
+          ]
+        },
+        "ram:00100000:entry": {
+          "operations": {
+            "unique:00410d00:0:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "f",
+              "type": "t1",
+              "kind": "parameter",
+              "index": 0
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:00100000:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "unique:00410d00:0:0",
+            "entry.exit"
+          ]
+        }
+      },
+      "entry_block": "ram:00100000:entry",
+      "region": {
+        "kind": "graph",
+        "index": 0,
+        "children": [
+          {
+            "kind": "plain",
+            "index": 0,
+            "block": "ram:00100000:0:basic"
+          }
+        ]
+      }
+    },
+    "ram:0010000c": {
+      "name": "bitfield_get_signed",
+      "display_name": "bitfield_get_signed",
+      "is_intrinsic": false,
+      "entry_point": "ram:0010000c",
+      "frame": {
+        "size": 0,
+        "local_size": 0,
+        "parameter_size": 0,
+        "parameter_offset": 0,
+        "grows_negative": true
+      },
+      "address_ranges": [
+        {
+          "start": "ram:0010000c",
+          "end": "ram:00100017"
+        }
+      ],
+      "type": {
+        "return_type": "t3",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__cdecl",
+        "parameter_types": [
+          "t1"
+        ],
+        "return_storage": [
+          {
+            "kind": "register",
+            "register": "w0",
+            "offset": 16384,
+            "size": 4
+          }
+        ],
+        "parameter_storage": [
+          [
+            {
+              "kind": "register",
+              "register": "x0",
+              "offset": 16384,
+              "size": 8
+            }
+          ]
+        ]
+      },
+      "basic_blocks": {
+        "ram:0010000c:0:basic": {
+          "operations": {
+            "ram:0010000c:1:0": {
+              "mnemonic": "LOAD",
+              "type": "t2",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t1",
+                  "size": 8,
+                  "kind": "parameter",
+                  "operation": "unique:00410d01:1:0"
+                }
+              ]
+            },
+            "ram:00100010:19:1": {
+              "mnemonic": "CAST",
+              "type": "t3",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t2",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:0010000c:1:0"
+                }
+              ]
+            },
+            "ram:00100010:6:2": {
+              "mnemonic": "INT_LEFT",
+              "type": "t3",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t3",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:00100010:19:1"
+                },
+                {
+                  "type": "t3",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 24
+                }
+              ]
+            },
+            "ram:00100010:8:3": {
+              "mnemonic": "INT_SRIGHT",
+              "type": "t3",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t3",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:00100010:6:2"
+                },
+                {
+                  "type": "t3",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 27
+                }
+              ]
+            },
+            "ram:00100014:12:4": {
+              "mnemonic": "COPY",
+              "type": "t3",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t3",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:00100010:8:3"
+                }
+              ]
+            },
+            "ram:00100014:11:5": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "t3",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:00100014:12:4"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "ram:0010000c:1:0",
+            "ram:00100010:19:1",
+            "ram:00100010:6:2",
+            "ram:00100010:8:3",
+            "ram:00100014:12:4",
+            "ram:00100014:11:5"
+          ]
+        },
+        "ram:0010000c:entry": {
+          "operations": {
+            "unique:00410d01:1:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "f",
+              "type": "t1",
+              "kind": "parameter",
+              "index": 0
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:0010000c:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "unique:00410d01:1:0",
+            "entry.exit"
+          ]
+        }
+      },
+      "entry_block": "ram:0010000c:entry",
+      "region": {
+        "kind": "graph",
+        "index": 0,
+        "children": [
+          {
+            "kind": "plain",
+            "index": 0,
+            "block": "ram:0010000c:0:basic"
+          }
+        ]
+      }
+    },
+    "ram:00100018": {
+      "name": "bitfield_get_signed_top",
+      "display_name": "bitfield_get_signed_top",
+      "is_intrinsic": false,
+      "entry_point": "ram:00100018",
+      "frame": {
+        "size": 0,
+        "local_size": 0,
+        "parameter_size": 0,
+        "parameter_offset": 0,
+        "grows_negative": true
+      },
+      "address_ranges": [
+        {
+          "start": "ram:00100018",
+          "end": "ram:00100023"
+        }
+      ],
+      "type": {
+        "return_type": "t3",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__cdecl",
+        "parameter_types": [
+          "t1"
+        ],
+        "return_storage": [
+          {
+            "kind": "register",
+            "register": "w0",
+            "offset": 16384,
+            "size": 4
+          }
+        ],
+        "parameter_storage": [
+          [
+            {
+              "kind": "register",
+              "register": "x0",
+              "offset": 16384,
+              "size": 8
+            }
+          ]
+        ]
+      },
+      "basic_blocks": {
+        "ram:00100018:0:basic": {
+          "operations": {
+            "ram:00100018:1:0": {
+              "mnemonic": "LOAD",
+              "type": "t2",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t1",
+                  "size": 8,
+                  "kind": "parameter",
+                  "operation": "unique:00410d02:2:0"
+                }
+              ]
+            },
+            "ram:0010001c:11:1": {
+              "mnemonic": "CAST",
+              "type": "t3",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t2",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:00100018:1:0"
+                }
+              ]
+            },
+            "ram:0010001c:3:2": {
+              "mnemonic": "INT_SRIGHT",
+              "type": "t3",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t3",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:0010001c:11:1"
+                },
+                {
+                  "type": "t3",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 20
+                }
+              ]
+            },
+            "ram:00100020:7:3": {
+              "mnemonic": "COPY",
+              "type": "t3",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t3",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:0010001c:3:2"
+                }
+              ]
+            },
+            "ram:00100020:6:4": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "t3",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:00100020:7:3"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "ram:00100018:1:0",
+            "ram:0010001c:11:1",
+            "ram:0010001c:3:2",
+            "ram:00100020:7:3",
+            "ram:00100020:6:4"
+          ]
+        },
+        "ram:00100018:entry": {
+          "operations": {
+            "unique:00410d02:2:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "f",
+              "type": "t1",
+              "kind": "parameter",
+              "index": 0
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:00100018:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "unique:00410d02:2:0",
+            "entry.exit"
+          ]
+        }
+      },
+      "entry_block": "ram:00100018:entry",
+      "region": {
+        "kind": "graph",
+        "index": 0,
+        "children": [
+          {
+            "kind": "plain",
+            "index": 0,
+            "block": "ram:00100018:0:basic"
+          }
+        ]
+      }
+    },
+    "ram:00100024": {
+      "name": "bitfield_set",
+      "display_name": "bitfield_set",
+      "is_intrinsic": false,
+      "entry_point": "ram:00100024",
+      "frame": {
+        "size": 0,
+        "local_size": 0,
+        "parameter_size": 0,
+        "parameter_offset": 0,
+        "grows_negative": true
+      },
+      "address_ranges": [
+        {
+          "start": "ram:00100024",
+          "end": "ram:0010003f"
+        }
+      ],
+      "type": {
+        "return_type": "t4",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__cdecl",
+        "parameter_types": [
+          "t1",
+          "t0",
+          "t3"
+        ],
+        "return_storage": [],
+        "parameter_storage": [
+          [
+            {
+              "kind": "register",
+              "register": "x0",
+              "offset": 16384,
+              "size": 8
+            }
+          ],
+          [
+            {
+              "kind": "register",
+              "register": "w1",
+              "offset": 16392,
+              "size": 4
+            }
+          ],
+          [
+            {
+              "kind": "register",
+              "register": "w2",
+              "offset": 16400,
+              "size": 4
+            }
+          ]
+        ]
+      },
+      "basic_blocks": {
+        "ram:00100024:0:basic": {
+          "operations": {
+            "ram:00100024:61:0": {
+              "mnemonic": "INT_AND",
+              "type": "t0",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "unique:00410d04:4:0"
+                },
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 4095
+                }
+              ]
+            },
+            "ram:00100024:5:1": {
+              "mnemonic": "INT_LEFT",
+              "type": "t0",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:00100024:61:0"
+                },
+                {
+                  "type": "t3",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 8
+                }
+              ]
+            },
+            "ram:00100028:9:2": {
+              "mnemonic": "LOAD",
+              "type": "t2",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t1",
+                  "size": 8,
+                  "kind": "parameter",
+                  "operation": "unique:00410d03:3:0"
+                }
+              ]
+            },
+            "ram:0010002c:63:3": {
+              "mnemonic": "INT_AND",
+              "type": "t0",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t3",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "unique:00410d05:5:0"
+                },
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 31
+                }
+              ]
+            },
+            "ram:0010002c:54:4": {
+              "mnemonic": "INT_LEFT",
+              "type": "t0",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:0010002c:63:3"
+                },
+                {
+                  "type": "t3",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 3
+                }
+              ]
+            },
+            "ram:0010002c:26:5": {
+              "mnemonic": "INT_OR",
+              "type": "t0",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:00100024:5:1"
+                },
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:0010002c:54:4"
+                }
+              ]
+            },
+            "ram:00100030:64:6": {
+              "mnemonic": "CAST",
+              "type": "t0",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t2",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:00100028:9:2"
+                }
+              ]
+            },
+            "ram:00100030:28:7": {
+              "mnemonic": "INT_AND",
+              "type": "t0",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:00100030:64:6"
+                },
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 4293918727
+                }
+              ]
+            },
+            "ram:00100034:30:8": {
+              "mnemonic": "INT_OR",
+              "type": "t0",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:0010002c:26:5"
+                },
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:00100030:28:7"
+                }
+              ]
+            },
+            "ram:00100038:65:9": {
+              "mnemonic": "CAST",
+              "type": "t2",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:00100034:30:8"
+                }
+              ]
+            },
+            "ram:00100038:33:10": {
+              "mnemonic": "STORE",
+              "inputs": [
+                {
+                  "type": "t1",
+                  "size": 8,
+                  "kind": "parameter",
+                  "operation": "unique:00410d03:3:0"
+                },
+                {
+                  "type": "t2",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:00100038:65:9"
+                }
+              ]
+            },
+            "ram:0010003c:35:11": {
+              "mnemonic": "RETURN",
+              "inputs": []
+            }
+          },
+          "ordered_operations": [
+            "ram:00100024:61:0",
+            "ram:00100024:5:1",
+            "ram:00100028:9:2",
+            "ram:0010002c:63:3",
+            "ram:0010002c:54:4",
+            "ram:0010002c:26:5",
+            "ram:00100030:64:6",
+            "ram:00100030:28:7",
+            "ram:00100034:30:8",
+            "ram:00100038:65:9",
+            "ram:00100038:33:10",
+            "ram:0010003c:35:11"
+          ]
+        },
+        "ram:00100024:entry": {
+          "operations": {
+            "unique:00410d03:3:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "f",
+              "type": "t1",
+              "kind": "parameter",
+              "index": 0
+            },
+            "unique:00410d04:4:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "count",
+              "type": "t0",
+              "kind": "parameter",
+              "index": 1
+            },
+            "unique:00410d05:5:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "delta",
+              "type": "t3",
+              "kind": "parameter",
+              "index": 2
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:00100024:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "unique:00410d03:3:0",
+            "unique:00410d04:4:0",
+            "unique:00410d05:5:0",
+            "entry.exit"
+          ]
+        }
+      },
+      "entry_block": "ram:00100024:entry",
+      "region": {
+        "kind": "graph",
+        "index": 0,
+        "children": [
+          {
+            "kind": "plain",
+            "index": 0,
+            "block": "ram:00100024:0:basic"
+          }
+        ]
+      }
+    },
+    "ram:00100040": {
+      "name": "bitfield_wide_get",
+      "display_name": "bitfield_wide_get",
+      "is_intrinsic": false,
+      "entry_point": "ram:00100040",
+      "frame": {
+        "size": 0,
+        "local_size": 0,
+        "parameter_size": 0,
+        "parameter_offset": 0,
+        "grows_negative": true
+      },
+      "address_ranges": [
+        {
+          "start": "ram:00100040",
+          "end": "ram:0010004b"
+        }
+      ],
+      "type": {
+        "return_type": "t5",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__cdecl",
+        "parameter_types": [
+          "t6"
+        ],
+        "return_storage": [
+          {
+            "kind": "register",
+            "register": "x0",
+            "offset": 16384,
+            "size": 8
+          }
+        ],
+        "parameter_storage": [
+          [
+            {
+              "kind": "register",
+              "register": "x0",
+              "offset": 16384,
+              "size": 8
+            }
+          ]
+        ]
+      },
+      "basic_blocks": {
+        "ram:00100040:0:basic": {
+          "operations": {
+            "ram:00100040:1:0": {
+              "mnemonic": "LOAD",
+              "type": "t7",
+              "size": 8,
+              "inputs": [
+                {
+                  "type": "t6",
+                  "size": 8,
+                  "kind": "parameter",
+                  "operation": "unique:00410d06:6:0"
+                }
+              ]
+            },
+            "ram:00100044:14:1": {
+              "mnemonic": "CAST",
+              "type": "t5",
+              "size": 8,
+              "inputs": [
+                {
+                  "type": "t7",
+                  "size": 8,
+                  "kind": "temporary",
+                  "operation": "ram:00100040:1:0"
+                }
+              ]
+            },
+            "ram:00100044:5:2": {
+              "mnemonic": "INT_LEFT",
+              "type": "t5",
+              "size": 8,
+              "inputs": [
+                {
+                  "type": "t5",
+                  "size": 8,
+                  "kind": "temporary",
+                  "operation": "ram:00100044:14:1"
+                },
+                {
+                  "type": "t5",
+                  "size": 8,
+                  "kind": "constant",
+                  "value": 17
+                }
+              ]
+            },
+            "ram:00100044:7:3": {
+              "mnemonic": "INT_SRIGHT",
+              "type": "t5",
+              "size": 8,
+              "inputs": [
+                {
+                  "type": "t5",
+                  "size": 8,
+                  "kind": "temporary",
+                  "operation": "ram:00100044:5:2"
+                },
+                {
+                  "type": "t5",
+                  "size": 8,
+                  "kind": "constant",
+                  "value": 24
+                }
+              ]
+            },
+            "ram:00100044:8:4": {
+              "mnemonic": "COPY",
+              "type": "t5",
+              "size": 8,
+              "inputs": [
+                {
+                  "type": "t5",
+                  "size": 8,
+                  "kind": "temporary",
+                  "operation": "ram:00100044:7:3"
+                }
+              ]
+            },
+            "ram:00100048:10:5": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "t5",
+                  "size": 8,
+                  "kind": "temporary",
+                  "operation": "ram:00100044:8:4"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "ram:00100040:1:0",
+            "ram:00100044:14:1",
+            "ram:00100044:5:2",
+            "ram:00100044:7:3",
+            "ram:00100044:8:4",
+            "ram:00100048:10:5"
+          ]
+        },
+        "ram:00100040:entry": {
+          "operations": {
+            "unique:00410d06:6:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "w",
+              "type": "t6",
+              "kind": "parameter",
+              "index": 0
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:00100040:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "unique:00410d06:6:0",
+            "entry.exit"
+          ]
+        }
+      },
+      "entry_block": "ram:00100040:entry",
+      "region": {
+        "kind": "graph",
+        "index": 0,
+        "children": [
+          {
+            "kind": "plain",
+            "index": 0,
+            "block": "ram:00100040:0:basic"
+          }
+        ]
+      }
+    },
+    "ram:0010004c": {
+      "name": "bitfield_wide_set",
+      "display_name": "bitfield_wide_set",
+      "is_intrinsic": false,
+      "entry_point": "ram:0010004c",
+      "frame": {
+        "size": 0,
+        "local_size": 0,
+        "parameter_size": 0,
+        "parameter_offset": 0,
+        "grows_negative": true
+      },
+      "address_ranges": [
+        {
+          "start": "ram:0010004c",
+          "end": "ram:0010005b"
+        }
+      ],
+      "type": {
+        "return_type": "t4",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__cdecl",
+        "parameter_types": [
+          "t6",
+          "t5"
+        ],
+        "return_storage": [],
+        "parameter_storage": [
+          [
+            {
+              "kind": "register",
+              "register": "x0",
+              "offset": 16384,
+              "size": 8
+            }
+          ],
+          [
+            {
+              "kind": "register",
+              "register": "x1",
+              "offset": 16392,
+              "size": 8
+            }
+          ]
+        ]
+      },
+      "basic_blocks": {
+        "ram:0010004c:0:basic": {
+          "operations": {
+            "ram:0010004c:1:0": {
+              "mnemonic": "LOAD",
+              "type": "t7",
+              "size": 8,
+              "output": {
+                "kind": "temporary",
+                "operation": "unique:00410d09:9:0"
+              },
+              "inputs": [
+                {
+                  "type": "t6",
+                  "size": 8,
+                  "kind": "parameter",
+                  "operation": "unique:00410d07:7:0"
+                }
+              ]
+            },
+            "ram:00100050:28:1": {
+              "mnemonic": "INT_AND",
+              "type": "t8",
+              "size": 8,
+              "inputs": [
+                {
+                  "type": "t5",
+                  "size": 8,
+                  "kind": "parameter",
+                  "operation": "unique:00410d08:8:0"
+                },
+                {
+                  "type": "t8",
+                  "size": 8,
+                  "kind": "constant",
+                  "value": 1099511627775
+                }
+              ]
+            },
+            "ram:00100050:24:2": {
+              "mnemonic": "INT_LEFT",
+              "type": "t8",
+              "size": 8,
+              "inputs": [
+                {
+                  "type": "t8",
+                  "size": 8,
+                  "kind": "temporary",
+                  "operation": "ram:00100050:28:1"
+                },
+                {
+                  "type": "t5",
+                  "size": 8,
+                  "kind": "constant",
+                  "value": 7
+                }
+              ]
+            },
+            "ram:00100050:29:3": {
+              "mnemonic": "CAST",
+              "type": "t8",
+              "size": 8,
+              "inputs": [
+                {
+                  "type": "t7",
+                  "size": 8,
+                  "kind": "temporary",
+                  "operation": "unique:00410d09:9:0"
+                }
+              ]
+            },
+            "ram:00100050:15:4": {
+              "mnemonic": "INT_AND",
+              "type": "t8",
+              "size": 8,
+              "inputs": [
+                {
+                  "type": "t8",
+                  "size": 8,
+                  "kind": "temporary",
+                  "operation": "ram:00100050:29:3"
+                },
+                {
+                  "type": "t8",
+                  "size": 8,
+                  "kind": "constant",
+                  "value": -140737488355328
+                }
+              ]
+            },
+            "ram:00100050:30:5": {
+              "mnemonic": "CAST",
+              "type": "t8",
+              "size": 8,
+              "inputs": [
+                {
+                  "type": "t7",
+                  "size": 8,
+                  "kind": "temporary",
+                  "operation": "unique:00410d09:9:0"
+                }
+              ]
+            },
+            "ram:00100050:25:6": {
+              "mnemonic": "INT_AND",
+              "type": "t8",
+              "size": 8,
+              "inputs": [
+                {
+                  "type": "t8",
+                  "size": 8,
+                  "kind": "temporary",
+                  "operation": "ram:00100050:30:5"
+                },
+                {
+                  "type": "t8",
+                  "size": 8,
+                  "kind": "constant",
+                  "value": 127
+                }
+              ]
+            },
+            "ram:00100050:16:7": {
+              "mnemonic": "INT_OR",
+              "type": "t8",
+              "size": 8,
+              "inputs": [
+                {
+                  "type": "t8",
+                  "size": 8,
+                  "kind": "temporary",
+                  "operation": "ram:00100050:25:6"
+                },
+                {
+                  "type": "t8",
+                  "size": 8,
+                  "kind": "temporary",
+                  "operation": "ram:00100050:24:2"
+                }
+              ]
+            },
+            "ram:00100050:17:8": {
+              "mnemonic": "INT_OR",
+              "type": "t8",
+              "size": 8,
+              "inputs": [
+                {
+                  "type": "t8",
+                  "size": 8,
+                  "kind": "temporary",
+                  "operation": "ram:00100050:15:4"
+                },
+                {
+                  "type": "t8",
+                  "size": 8,
+                  "kind": "temporary",
+                  "operation": "ram:00100050:16:7"
+                }
+              ]
+            },
+            "ram:00100054:31:9": {
+              "mnemonic": "CAST",
+              "type": "t7",
+              "size": 8,
+              "inputs": [
+                {
+                  "type": "t8",
+                  "size": 8,
+                  "kind": "temporary",
+                  "operation": "ram:00100050:17:8"
+                }
+              ]
+            },
+            "ram:00100054:19:10": {
+              "mnemonic": "STORE",
+              "inputs": [
+                {
+                  "type": "t6",
+                  "size": 8,
+                  "kind": "parameter",
+                  "operation": "unique:00410d07:7:0"
+                },
+                {
+                  "type": "t7",
+                  "size": 8,
+                  "kind": "temporary",
+                  "operation": "ram:00100054:31:9"
+                }
+              ]
+            },
+            "ram:00100058:21:11": {
+              "mnemonic": "RETURN",
+              "inputs": []
+            }
+          },
+          "ordered_operations": [
+            "ram:0010004c:1:0",
+            "ram:00100050:28:1",
+            "ram:00100050:24:2",
+            "ram:00100050:29:3",
+            "ram:00100050:15:4",
+            "ram:00100050:30:5",
+            "ram:00100050:25:6",
+            "ram:00100050:16:7",
+            "ram:00100050:17:8",
+            "ram:00100054:31:9",
+            "ram:00100054:19:10",
+            "ram:00100058:21:11"
+          ]
+        },
+        "ram:0010004c:entry": {
+          "operations": {
+            "unique:00410d07:7:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "w",
+              "type": "t6",
+              "kind": "parameter",
+              "index": 0
+            },
+            "unique:00410d08:8:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "offset",
+              "type": "t5",
+              "kind": "parameter",
+              "index": 1
+            },
+            "unique:00410d09:9:0": {
+              "mnemonic": "DECLARE_TEMPORARY",
+              "name": "x8",
+              "kind": "temporary",
+              "type": "t7",
+              "address": "ram:0010004c:1:0"
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:0010004c:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "unique:00410d07:7:0",
+            "unique:00410d08:8:0",
+            "unique:00410d09:9:0",
+            "entry.exit"
+          ]
+        }
+      },
+      "entry_block": "ram:0010004c:entry",
+      "region": {
+        "kind": "graph",
+        "index": 0,
+        "children": [
+          {
+            "kind": "plain",
+            "index": 0,
+            "block": "ram:0010004c:0:basic"
+          }
+        ]
+      }
+    },
+    "ram:0010005c": {
+      "name": "bitfield_small_get",
+      "display_name": "bitfield_small_get",
+      "is_intrinsic": false,
+      "entry_point": "ram:0010005c",
+      "frame": {
+        "size": 0,
+        "local_size": 0,
+        "parameter_size": 0,
+        "parameter_offset": 0,
+        "grows_negative": true
+      },
+      "address_ranges": [
+        {
+          "start": "ram:0010005c",
+          "end": "ram:0010006b"
+        }
+      ],
+      "type": {
+        "return_type": "t3",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__cdecl",
+        "parameter_types": [
+          "t9"
+        ],
+        "return_storage": [
+          {
+            "kind": "register",
+            "register": "w0",
+            "offset": 16384,
+            "size": 4
+          }
+        ],
+        "parameter_storage": [
+          [
+            {
+              "kind": "register",
+              "register": "x0",
+              "offset": 16384,
+              "size": 8
+            }
+          ]
+        ]
+      },
+      "basic_blocks": {
+        "ram:0010005c:0:basic": {
+          "operations": {
+            "ram:0010005c:1:0": {
+              "mnemonic": "LOAD",
+              "type": "ta",
+              "size": 1,
+              "inputs": [
+                {
+                  "type": "t9",
+                  "size": 8,
+                  "kind": "parameter",
+                  "operation": "unique:00410d0a:10:0"
+                }
+              ]
+            },
+            "ram:00100060:22:1": {
+              "mnemonic": "CAST",
+              "type": "tb",
+              "size": 1,
+              "inputs": [
+                {
+                  "type": "ta",
+                  "size": 1,
+                  "kind": "temporary",
+                  "operation": "ram:0010005c:1:0"
+                }
+              ]
+            },
+            "ram:00100060:15:2": {
+              "mnemonic": "INT_ZEXT",
+              "type": "t0",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "tb",
+                  "size": 1,
+                  "kind": "temporary",
+                  "operation": "ram:00100060:22:1"
+                }
+              ]
+            },
+            "ram:00100064:8:3": {
+              "mnemonic": "INT_LEFT",
+              "type": "t0",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:00100060:15:2"
+                },
+                {
+                  "type": "t3",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 27
+                }
+              ]
+            },
+            "ram:00100064:23:4": {
+              "mnemonic": "CAST",
+              "type": "t3",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:00100064:8:3"
+                }
+              ]
+            },
+            "ram:00100064:10:5": {
+              "mnemonic": "INT_SRIGHT",
+              "type": "t3",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t3",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:00100064:23:4"
+                },
+                {
+                  "type": "t3",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 29
+                }
+              ]
+            },
+            "ram:00100068:14:6": {
+              "mnemonic": "COPY",
+              "type": "t3",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t3",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:00100064:10:5"
+                }
+              ]
+            },
+            "ram:00100068:13:7": {
+              "mnemonic": "RETURN",
+              "inputs": [
+                {
+                  "type": "t3",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:00100068:14:6"
+                }
+              ]
+            }
+          },
+          "ordered_operations": [
+            "ram:0010005c:1:0",
+            "ram:00100060:22:1",
+            "ram:00100060:15:2",
+            "ram:00100064:8:3",
+            "ram:00100064:23:4",
+            "ram:00100064:10:5",
+            "ram:00100068:14:6",
+            "ram:00100068:13:7"
+          ]
+        },
+        "ram:0010005c:entry": {
+          "operations": {
+            "unique:00410d0a:10:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "s",
+              "type": "t9",
+              "kind": "parameter",
+              "index": 0
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:0010005c:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "unique:00410d0a:10:0",
+            "entry.exit"
+          ]
+        }
+      },
+      "entry_block": "ram:0010005c:entry",
+      "region": {
+        "kind": "graph",
+        "index": 0,
+        "children": [
+          {
+            "kind": "plain",
+            "index": 0,
+            "block": "ram:0010005c:0:basic"
+          }
+        ]
+      }
+    },
+    "ram:0010006c": {
+      "name": "bitfield_small_set",
+      "display_name": "bitfield_small_set",
+      "is_intrinsic": false,
+      "entry_point": "ram:0010006c",
+      "frame": {
+        "size": 0,
+        "local_size": 0,
+        "parameter_size": 0,
+        "parameter_offset": 0,
+        "grows_negative": true
+      },
+      "address_ranges": [
+        {
+          "start": "ram:0010006c",
+          "end": "ram:00100083"
+        }
+      ],
+      "type": {
+        "return_type": "t4",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__cdecl",
+        "parameter_types": [
+          "t9",
+          "t3",
+          "t0"
+        ],
+        "return_storage": [],
+        "parameter_storage": [
+          [
+            {
+              "kind": "register",
+              "register": "x0",
+              "offset": 16384,
+              "size": 8
+            }
+          ],
+          [
+            {
+              "kind": "register",
+              "register": "w1",
+              "offset": 16392,
+              "size": 4
+            }
+          ],
+          [
+            {
+              "kind": "register",
+              "register": "w2",
+              "offset": 16400,
+              "size": 4
+            }
+          ]
+        ]
+      },
+      "basic_blocks": {
+        "ram:0010006c:0:basic": {
+          "operations": {
+            "ram:0010006c:1:0": {
+              "mnemonic": "LOAD",
+              "type": "ta",
+              "size": 1,
+              "inputs": [
+                {
+                  "type": "t9",
+                  "size": 8,
+                  "kind": "parameter",
+                  "operation": "unique:00410d0b:11:0"
+                }
+              ]
+            },
+            "ram:00100070:57:1": {
+              "mnemonic": "CAST",
+              "type": "tb",
+              "size": 1,
+              "inputs": [
+                {
+                  "type": "ta",
+                  "size": 1,
+                  "kind": "temporary",
+                  "operation": "ram:0010006c:1:0"
+                }
+              ]
+            },
+            "ram:00100070:3:2": {
+              "mnemonic": "INT_AND",
+              "type": "tb",
+              "size": 1,
+              "inputs": [
+                {
+                  "type": "tb",
+                  "size": 1,
+                  "kind": "temporary",
+                  "operation": "ram:00100070:57:1"
+                },
+                {
+                  "type": "tb",
+                  "size": 1,
+                  "kind": "constant",
+                  "value": 3
+                }
+              ]
+            },
+            "ram:00100074:50:3": {
+              "mnemonic": "INT_AND",
+              "type": "t0",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t3",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "unique:00410d0c:12:0"
+                },
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 7
+                }
+              ]
+            },
+            "ram:00100074:46:4": {
+              "mnemonic": "INT_LEFT",
+              "type": "t0",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:00100074:50:3"
+                },
+                {
+                  "type": "t3",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 2
+                }
+              ]
+            },
+            "ram:0010007c:54:5": {
+              "mnemonic": "SUBPIECE",
+              "type": "tb",
+              "size": 1,
+              "inputs": [
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:00100074:46:4"
+                },
+                {
+                  "type": "tc",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 0
+                }
+              ]
+            },
+            "ram:00100074:16:6": {
+              "mnemonic": "INT_OR",
+              "type": "tb",
+              "size": 1,
+              "inputs": [
+                {
+                  "type": "tb",
+                  "size": 1,
+                  "kind": "temporary",
+                  "operation": "ram:00100070:3:2"
+                },
+                {
+                  "type": "tb",
+                  "size": 1,
+                  "kind": "temporary",
+                  "operation": "ram:0010007c:54:5"
+                }
+              ]
+            },
+            "ram:00100078:22:7": {
+              "mnemonic": "INT_LEFT",
+              "type": "t0",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "unique:00410d0d:13:0"
+                },
+                {
+                  "type": "t3",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 5
+                }
+              ]
+            },
+            "ram:0010007c:52:8": {
+              "mnemonic": "SUBPIECE",
+              "type": "tb",
+              "size": 1,
+              "inputs": [
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:00100078:22:7"
+                },
+                {
+                  "type": "tc",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 0
+                }
+              ]
+            },
+            "ram:00100078:23:9": {
+              "mnemonic": "INT_OR",
+              "type": "tb",
+              "size": 1,
+              "inputs": [
+                {
+                  "type": "tb",
+                  "size": 1,
+                  "kind": "temporary",
+                  "operation": "ram:00100074:16:6"
+                },
+                {
+                  "type": "tb",
+                  "size": 1,
+                  "kind": "temporary",
+                  "operation": "ram:0010007c:52:8"
+                }
+              ]
+            },
+            "ram:0010007c:58:10": {
+              "mnemonic": "CAST",
+              "type": "ta",
+              "size": 1,
+              "inputs": [
+                {
+                  "type": "tb",
+                  "size": 1,
+                  "kind": "temporary",
+                  "operation": "ram:00100078:23:9"
+                }
+              ]
+            },
+            "ram:0010007c:27:11": {
+              "mnemonic": "STORE",
+              "inputs": [
+                {
+                  "type": "t9",
+                  "size": 8,
+                  "kind": "parameter",
+                  "operation": "unique:00410d0b:11:0"
+                },
+                {
+                  "type": "ta",
+                  "size": 1,
+                  "kind": "temporary",
+                  "operation": "ram:0010007c:58:10"
+                }
+              ]
+            },
+            "ram:00100080:29:12": {
+              "mnemonic": "RETURN",
+              "inputs": []
+            }
+          },
+          "ordered_operations": [
+            "ram:0010006c:1:0",
+            "ram:00100070:57:1",
+            "ram:00100070:3:2",
+            "ram:00100074:50:3",
+            "ram:00100074:46:4",
+            "ram:0010007c:54:5",
+            "ram:00100074:16:6",
+            "ram:00100078:22:7",
+            "ram:0010007c:52:8",
+            "ram:00100078:23:9",
+            "ram:0010007c:58:10",
+            "ram:0010007c:27:11",
+            "ram:00100080:29:12"
+          ]
+        },
+        "ram:0010006c:entry": {
+          "operations": {
+            "unique:00410d0b:11:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "s",
+              "type": "t9",
+              "kind": "parameter",
+              "index": 0
+            },
+            "unique:00410d0c:12:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "mid",
+              "type": "t3",
+              "kind": "parameter",
+              "index": 1
+            },
+            "unique:00410d0d:13:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "high",
+              "type": "t0",
+              "kind": "parameter",
+              "index": 2
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:0010006c:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "unique:00410d0b:11:0",
+            "unique:00410d0c:12:0",
+            "unique:00410d0d:13:0",
+            "entry.exit"
+          ]
+        }
+      },
+      "entry_block": "ram:0010006c:entry",
+      "region": {
+        "kind": "graph",
+        "index": 0,
+        "children": [
+          {
+            "kind": "plain",
+            "index": 0,
+            "block": "ram:0010006c:0:basic"
+          }
+        ]
+      }
+    },
+    "ram:00100084": {
+      "name": "big_set",
+      "display_name": "big_set",
+      "is_intrinsic": false,
+      "entry_point": "ram:00100084",
+      "frame": {
+        "size": 0,
+        "local_size": 0,
+        "parameter_size": 0,
+        "parameter_offset": 0,
+        "grows_negative": true
+      },
+      "address_ranges": [
+        {
+          "start": "ram:00100084",
+          "end": "ram:00100093"
+        }
+      ],
+      "type": {
+        "return_type": "t4",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__cdecl",
+        "parameter_types": [
+          "td",
+          "t0"
+        ],
+        "return_storage": [],
+        "parameter_storage": [
+          [
+            {
+              "kind": "register",
+              "register": "x0",
+              "offset": 16384,
+              "size": 8
+            }
+          ],
+          [
+            {
+              "kind": "register",
+              "register": "w1",
+              "offset": 16392,
+              "size": 4
+            }
+          ]
+        ]
+      },
+      "basic_blocks": {
+        "ram:00100084:0:basic": {
+          "operations": {
+            "ram:00100084:39:0": {
+              "mnemonic": "CAST",
+              "type": "te",
+              "size": 8,
+              "inputs": [
+                {
+                  "type": "td",
+                  "size": 8,
+                  "kind": "parameter",
+                  "operation": "unique:00410d0e:14:0"
+                }
+              ]
+            },
+            "ram:00100084:1:1": {
+              "mnemonic": "LOAD",
+              "type": "t0",
+              "size": 4,
+              "output": {
+                "kind": "temporary",
+                "operation": "unique:00410d10:16:0"
+              },
+              "inputs": [
+                {
+                  "type": "te",
+                  "size": 8,
+                  "kind": "temporary",
+                  "operation": "ram:00100084:39:0"
+                }
+              ]
+            },
+            "ram:00100088:38:2": {
+              "mnemonic": "INT_AND",
+              "type": "t0",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "unique:00410d0f:15:0"
+                },
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 4095
+                }
+              ]
+            },
+            "ram:00100088:33:3": {
+              "mnemonic": "INT_LEFT",
+              "type": "t0",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:00100088:38:2"
+                },
+                {
+                  "type": "t3",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 8
+                }
+              ]
+            },
+            "ram:00100088:16:4": {
+              "mnemonic": "INT_AND",
+              "type": "t0",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "unique:00410d10:16:0"
+                },
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 4293918720
+                }
+              ]
+            },
+            "ram:00100088:34:5": {
+              "mnemonic": "INT_AND",
+              "type": "t0",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "unique:00410d10:16:0"
+                },
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 255
+                }
+              ]
+            },
+            "ram:00100088:17:6": {
+              "mnemonic": "INT_OR",
+              "type": "t0",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:00100088:34:5"
+                },
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:00100088:33:3"
+                }
+              ]
+            },
+            "ram:00100088:18:7": {
+              "mnemonic": "INT_OR",
+              "type": "t0",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:00100088:16:4"
+                },
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:00100088:17:6"
+                }
+              ]
+            },
+            "ram:0010008c:40:8": {
+              "mnemonic": "CAST",
+              "type": "te",
+              "size": 8,
+              "inputs": [
+                {
+                  "type": "td",
+                  "size": 8,
+                  "kind": "parameter",
+                  "operation": "unique:00410d0e:14:0"
+                }
+              ]
+            },
+            "ram:0010008c:21:9": {
+              "mnemonic": "STORE",
+              "inputs": [
+                {
+                  "type": "te",
+                  "size": 8,
+                  "kind": "temporary",
+                  "operation": "ram:0010008c:40:8"
+                },
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:00100088:18:7"
+                }
+              ]
+            },
+            "ram:00100090:23:10": {
+              "mnemonic": "RETURN",
+              "inputs": []
+            }
+          },
+          "ordered_operations": [
+            "ram:00100084:39:0",
+            "ram:00100084:1:1",
+            "ram:00100088:38:2",
+            "ram:00100088:33:3",
+            "ram:00100088:16:4",
+            "ram:00100088:34:5",
+            "ram:00100088:17:6",
+            "ram:00100088:18:7",
+            "ram:0010008c:40:8",
+            "ram:0010008c:21:9",
+            "ram:00100090:23:10"
+          ]
+        },
+        "ram:00100084:entry": {
+          "operations": {
+            "unique:00410d0e:14:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "b",
+              "type": "td",
+              "kind": "parameter",
+              "index": 0
+            },
+            "unique:00410d0f:15:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "count",
+              "type": "t0",
+              "kind": "parameter",
+              "index": 1
+            },
+            "unique:00410d10:16:0": {
+              "mnemonic": "DECLARE_TEMPORARY",
+              "name": "temp_0",
+              "kind": "temporary",
+              "type": "t0",
+              "address": "ram:00100084:1:1"
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:00100084:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "unique:00410d0e:14:0",
+            "unique:00410d0f:15:0",
+            "unique:00410d10:16:0",
+            "entry.exit"
+          ]
+        }
+      },
+      "entry_block": "ram:00100084:entry",
+      "region": {
+        "kind": "graph",
+        "index": 0,
+        "children": [
+          {
+            "kind": "plain",
+            "index": 0,
+            "block": "ram:00100084:0:basic"
+          }
+        ]
+      }
+    },
+    "ram:00100094": {
+      "name": "packed_set",
+      "display_name": "packed_set",
+      "is_intrinsic": false,
+      "entry_point": "ram:00100094",
+      "frame": {
+        "size": 0,
+        "local_size": 0,
+        "parameter_size": 0,
+        "parameter_offset": 0,
+        "grows_negative": true
+      },
+      "address_ranges": [
+        {
+          "start": "ram:00100094",
+          "end": "ram:001000a3"
+        }
+      ],
+      "type": {
+        "return_type": "t4",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__cdecl",
+        "parameter_types": [
+          "tf",
+          "t0"
+        ],
+        "return_storage": [],
+        "parameter_storage": [
+          [
+            {
+              "kind": "register",
+              "register": "x0",
+              "offset": 16384,
+              "size": 8
+            }
+          ],
+          [
+            {
+              "kind": "register",
+              "register": "w1",
+              "offset": 16392,
+              "size": 4
+            }
+          ]
+        ]
+      },
+      "basic_blocks": {
+        "ram:00100094:0:basic": {
+          "operations": {
+            "ram:00100094:40:0": {
+              "mnemonic": "PTRSUB",
+              "type": "t10",
+              "size": 8,
+              "inputs": [
+                {
+                  "type": "tf",
+                  "size": 8,
+                  "kind": "parameter",
+                  "operation": "unique:00410d11:17:0"
+                },
+                {
+                  "type": "t5",
+                  "size": 8,
+                  "kind": "constant",
+                  "value": 1
+                }
+              ]
+            },
+            "ram:00100094:42:1": {
+              "mnemonic": "CAST",
+              "type": "te",
+              "size": 8,
+              "inputs": [
+                {
+                  "type": "t10",
+                  "size": 8,
+                  "kind": "temporary",
+                  "operation": "ram:00100094:40:0"
+                }
+              ]
+            },
+            "ram:00100094:1:2": {
+              "mnemonic": "LOAD",
+              "type": "t0",
+              "size": 4,
+              "output": {
+                "kind": "temporary",
+                "operation": "unique:00410d13:19:0"
+              },
+              "inputs": [
+                {
+                  "type": "te",
+                  "size": 8,
+                  "kind": "temporary",
+                  "operation": "ram:00100094:42:1"
+                }
+              ]
+            },
+            "ram:00100098:39:3": {
+              "mnemonic": "INT_AND",
+              "type": "t0",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "unique:00410d12:18:0"
+                },
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 1048575
+                }
+              ]
+            },
+            "ram:00100098:34:4": {
+              "mnemonic": "INT_LEFT",
+              "type": "t0",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:00100098:39:3"
+                },
+                {
+                  "type": "t3",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 6
+                }
+              ]
+            },
+            "ram:00100098:16:5": {
+              "mnemonic": "INT_AND",
+              "type": "t0",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "unique:00410d13:19:0"
+                },
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 4227858432
+                }
+              ]
+            },
+            "ram:00100098:35:6": {
+              "mnemonic": "INT_AND",
+              "type": "t0",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "unique:00410d13:19:0"
+                },
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 63
+                }
+              ]
+            },
+            "ram:00100098:17:7": {
+              "mnemonic": "INT_OR",
+              "type": "t0",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:00100098:35:6"
+                },
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:00100098:34:4"
+                }
+              ]
+            },
+            "ram:00100098:18:8": {
+              "mnemonic": "INT_OR",
+              "type": "t0",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:00100098:16:5"
+                },
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:00100098:17:7"
+                }
+              ]
+            },
+            "ram:0010009c:41:9": {
+              "mnemonic": "PTRSUB",
+              "type": "t10",
+              "size": 8,
+              "inputs": [
+                {
+                  "type": "tf",
+                  "size": 8,
+                  "kind": "parameter",
+                  "operation": "unique:00410d11:17:0"
+                },
+                {
+                  "type": "t5",
+                  "size": 8,
+                  "kind": "constant",
+                  "value": 1
+                }
+              ]
+            },
+            "ram:0010009c:43:10": {
+              "mnemonic": "CAST",
+              "type": "te",
+              "size": 8,
+              "inputs": [
+                {
+                  "type": "t10",
+                  "size": 8,
+                  "kind": "temporary",
+                  "operation": "ram:0010009c:41:9"
+                }
+              ]
+            },
+            "ram:0010009c:22:11": {
+              "mnemonic": "STORE",
+              "inputs": [
+                {
+                  "type": "te",
+                  "size": 8,
+                  "kind": "temporary",
+                  "operation": "ram:0010009c:43:10"
+                },
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:00100098:18:8"
+                }
+              ]
+            },
+            "ram:001000a0:24:12": {
+              "mnemonic": "RETURN",
+              "inputs": []
+            }
+          },
+          "ordered_operations": [
+            "ram:00100094:40:0",
+            "ram:00100094:42:1",
+            "ram:00100094:1:2",
+            "ram:00100098:39:3",
+            "ram:00100098:34:4",
+            "ram:00100098:16:5",
+            "ram:00100098:35:6",
+            "ram:00100098:17:7",
+            "ram:00100098:18:8",
+            "ram:0010009c:41:9",
+            "ram:0010009c:43:10",
+            "ram:0010009c:22:11",
+            "ram:001000a0:24:12"
+          ]
+        },
+        "ram:00100094:entry": {
+          "operations": {
+            "unique:00410d11:17:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "p",
+              "type": "tf",
+              "kind": "parameter",
+              "index": 0
+            },
+            "unique:00410d12:18:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "mid",
+              "type": "t0",
+              "kind": "parameter",
+              "index": 1
+            },
+            "unique:00410d13:19:0": {
+              "mnemonic": "DECLARE_TEMPORARY",
+              "name": "temp_0",
+              "kind": "temporary",
+              "type": "t0",
+              "address": "ram:00100094:1:2"
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:00100094:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "unique:00410d11:17:0",
+            "unique:00410d12:18:0",
+            "unique:00410d13:19:0",
+            "entry.exit"
+          ]
+        }
+      },
+      "entry_block": "ram:00100094:entry",
+      "region": {
+        "kind": "graph",
+        "index": 0,
+        "children": [
+          {
+            "kind": "plain",
+            "index": 0,
+            "block": "ram:00100094:0:basic"
+          }
+        ]
+      }
+    },
+    "ram:001000a4": {
+      "name": "reg_update",
+      "display_name": "reg_update",
+      "is_intrinsic": false,
+      "entry_point": "ram:001000a4",
+      "frame": {
+        "size": 4,
+        "local_size": 4,
+        "parameter_size": 0,
+        "parameter_offset": 0,
+        "grows_negative": true
+      },
+      "address_ranges": [
+        {
+          "start": "ram:001000a4",
+          "end": "ram:001000d3"
+        }
+      ],
+      "type": {
+        "return_type": "t4",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__cdecl",
+        "parameter_types": [
+          "t11",
+          "t0",
+          "t0"
+        ],
+        "return_storage": [],
+        "parameter_storage": [
+          [
+            {
+              "kind": "register",
+              "register": "x0",
+              "offset": 16384,
+              "size": 8
+            }
+          ],
+          [
+            {
+              "kind": "register",
+              "register": "w1",
+              "offset": 16392,
+              "size": 4
+            }
+          ],
+          [
+            {
+              "kind": "register",
+              "register": "w2",
+              "offset": 16400,
+              "size": 4
+            }
+          ]
+        ]
+      },
+      "basic_blocks": {
+        "ram:001000a4:0:basic": {
+          "operations": {
+            "ram:001000a8:78:0": {
+              "mnemonic": "INT_AND",
+              "type": "t0",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "unique:00410d15:21:0"
+                },
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 7
+                }
+              ]
+            },
+            "ram:001000a8:6:1": {
+              "mnemonic": "INT_LEFT",
+              "type": "t0",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:001000a8:78:0"
+                },
+                {
+                  "type": "t3",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 1
+                }
+              ]
+            },
+            "ram:001000ac:10:2": {
+              "mnemonic": "LOAD",
+              "type": "t12",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t11",
+                  "size": 8,
+                  "kind": "parameter",
+                  "operation": "unique:00410d14:20:0"
+                }
+              ]
+            },
+            "ram:001000b0:80:3": {
+              "mnemonic": "INT_AND",
+              "type": "t0",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "unique:00410d16:22:0"
+                },
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 4095
+                }
+              ]
+            },
+            "ram:001000b0:72:4": {
+              "mnemonic": "INT_LEFT",
+              "type": "t0",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:001000b0:80:3"
+                },
+                {
+                  "type": "t3",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 4
+                }
+              ]
+            },
+            "ram:001000b0:23:5": {
+              "mnemonic": "INT_OR",
+              "type": "t0",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:001000a8:6:1"
+                },
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:001000b0:72:4"
+                }
+              ]
+            },
+            "ram:001000b4:81:6": {
+              "mnemonic": "CAST",
+              "type": "t0",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t12",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:001000ac:10:2"
+                }
+              ]
+            },
+            "ram:001000b4:29:7": {
+              "mnemonic": "INT_AND",
+              "type": "t0",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:001000b4:81:6"
+                },
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 4294901761
+                }
+              ]
+            },
+            "ram:001000bc:33:8": {
+              "mnemonic": "INT_OR",
+              "type": "t0",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:001000b0:23:5"
+                },
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:001000b4:29:7"
+                }
+              ]
+            },
+            "ram:001000c8:82:9": {
+              "mnemonic": "CAST",
+              "type": "t12",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:001000bc:33:8"
+                }
+              ]
+            },
+            "ram:001000c8:41:10": {
+              "mnemonic": "STORE",
+              "inputs": [
+                {
+                  "type": "t11",
+                  "size": 8,
+                  "kind": "parameter",
+                  "operation": "unique:00410d14:20:0"
+                },
+                {
+                  "type": "t12",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:001000c8:82:9"
+                }
+              ]
+            },
+            "ram:001000d0:50:11": {
+              "mnemonic": "RETURN",
+              "inputs": []
+            }
+          },
+          "ordered_operations": [
+            "ram:001000a8:78:0",
+            "ram:001000a8:6:1",
+            "ram:001000ac:10:2",
+            "ram:001000b0:80:3",
+            "ram:001000b0:72:4",
+            "ram:001000b0:23:5",
+            "ram:001000b4:81:6",
+            "ram:001000b4:29:7",
+            "ram:001000bc:33:8",
+            "ram:001000c8:82:9",
+            "ram:001000c8:41:10",
+            "ram:001000d0:50:11"
+          ]
+        },
+        "ram:001000a4:entry": {
+          "operations": {
+            "unique:00410d14:20:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "r",
+              "type": "t11",
+              "kind": "parameter",
+              "index": 0
+            },
+            "unique:00410d15:21:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "mode",
+              "type": "t0",
+              "kind": "parameter",
+              "index": 1
+            },
+            "unique:00410d16:22:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "divider",
+              "type": "t0",
+              "kind": "parameter",
+              "index": 2
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:001000a4:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "unique:00410d14:20:0",
+            "unique:00410d15:21:0",
+            "unique:00410d16:22:0",
+            "entry.exit"
+          ]
+        }
+      },
+      "entry_block": "ram:001000a4:entry",
+      "region": {
+        "kind": "graph",
+        "index": 0,
+        "children": [
+          {
+            "kind": "plain",
+            "index": 0,
+            "block": "ram:001000a4:0:basic"
+          }
+        ]
+      }
+    }
+  },
+  "globals": {},
+  "types": {
+    "t0": {
+      "is_signed": false,
+      "name": "unsigned int",
+      "size": 4,
+      "kind": "integer"
+    },
+    "t1": {
+      "kind": "pointer",
+      "size": 8,
+      "element_type": "t2"
+    },
+    "t2": {
+      "name": "flags",
+      "kind": "struct",
+      "size": 4,
+      "fields": [
+        {
+          "type": "t13",
+          "offset": 0,
+          "size": 1,
+          "name": "mode"
+        },
+        {
+          "type": "t14",
+          "offset": 0,
+          "size": 1,
+          "name": "delta"
+        },
+        {
+          "type": "t15",
+          "offset": 1,
+          "size": 2,
+          "name": "count"
+        },
+        {
+          "type": "t16",
+          "offset": 2,
+          "size": 2,
+          "name": "bias"
+        }
+      ]
+    },
+    "t3": {
+      "is_signed": true,
+      "name": "int",
+      "size": 4,
+      "kind": "integer"
+    },
+    "t4": {
+      "name": "void",
+      "size": 0,
+      "kind": "void"
+    },
+    "t5": {
+      "is_signed": true,
+      "name": "long",
+      "size": 8,
+      "kind": "integer"
+    },
+    "t6": {
+      "kind": "pointer",
+      "size": 8,
+      "element_type": "t7"
+    },
+    "t7": {
+      "name": "wide",
+      "kind": "struct",
+      "size": 8,
+      "fields": [
+        {
+          "type": "t17",
+          "offset": 0,
+          "size": 1,
+          "name": "tag"
+        },
+        {
+          "type": "t18",
+          "offset": 0,
+          "size": 6,
+          "name": "offset"
+        },
+        {
+          "type": "t19",
+          "offset": 5,
+          "size": 3,
+          "name": "rest"
+        }
+      ]
+    },
+    "t8": {
+      "is_signed": false,
+      "name": "unsigned long",
+      "size": 8,
+      "kind": "integer"
+    },
+    "t9": {
+      "kind": "pointer",
+      "size": 8,
+      "element_type": "ta"
+    },
+    "ta": {
+      "name": "small",
+      "kind": "struct",
+      "size": 1,
+      "fields": [
+        {
+          "type": "t1a",
+          "offset": 0,
+          "size": 1,
+          "name": "low"
+        },
+        {
+          "type": "t1b",
+          "offset": 0,
+          "size": 1,
+          "name": "mid"
+        },
+        {
+          "type": "t1c",
+          "offset": 0,
+          "size": 1,
+          "name": "high"
+        }
+      ]
+    },
+    "tb": {
+      "is_signed": false,
+      "name": "unsigned char",
+      "size": 1,
+      "kind": "integer"
+    },
+    "tc": {
+      "name": "undefined4",
+      "size": 4,
+      "kind": "undefined"
+    },
+    "td": {
+      "kind": "pointer",
+      "size": 8,
+      "element_type": "t1d"
+    },
+    "te": {
+      "kind": "pointer",
+      "size": 8,
+      "element_type": "t0"
+    },
+    "tf": {
+      "kind": "pointer",
+      "size": 8,
+      "element_type": "t1e"
+    },
+    "t10": {
+      "kind": "pointer",
+      "size": 8,
+      "element_type": "t1f"
+    },
+    "t11": {
+      "kind": "pointer",
+      "size": 8,
+      "element_type": "t12"
+    },
+    "t12": {
+      "name": "reg",
+      "kind": "struct",
+      "size": 4,
+      "fields": [
+        {
+          "type": "t20",
+          "offset": 0,
+          "size": 1,
+          "name": "enable"
+        },
+        {
+          "type": "t13",
+          "offset": 0,
+          "size": 1,
+          "name": "mode"
+        },
+        {
+          "type": "t15",
+          "offset": 0,
+          "size": 2,
+          "name": "divider"
+        },
+        {
+          "type": "t21",
+          "offset": 2,
+          "size": 2,
+          "name": "reserved"
+        }
+      ]
+    },
+    "t13": {
+      "kind": "bitfield",
+      "size": 1,
+      "bit_offset": 0,
+      "bit_size": 3,
+      "base_type": "t0"
+    },
+    "t14": {
+      "kind": "bitfield",
+      "size": 1,
+      "bit_offset": 3,
+      "bit_size": 5,
+      "base_type": "t3"
+    },
+    "t15": {
+      "kind": "bitfield",
+      "size": 2,
+      "bit_offset": 0,
+      "bit_size": 12,
+      "base_type": "t0"
+    },
+    "t16": {
+      "kind": "bitfield",
+      "size": 2,
+      "bit_offset": 4,
+      "bit_size": 12,
+      "base_type": "t3"
+    },
+    "t17": {
+      "kind": "bitfield",
+      "size": 1,
+      "bit_offset": 0,
+      "bit_size": 7,
+      "base_type": "t22"
+    },
+    "t18": {
+      "kind": "bitfield",
+      "size": 6,
+      "bit_offset": 7,
+      "bit_size": 40,
+      "base_type": "t5"
+    },
+    "t19": {
+      "kind": "bitfield",
+      "size": 3,
+      "bit_offset": 7,
+      "bit_size": 17,
+      "base_type": "t22"
+    },
+    "t1a": {
+      "kind": "bitfield",
+      "size": 1,
+      "bit_offset": 0,
+      "bit_size": 2,
+      "base_type": "t23"
+    },
+    "t1b": {
+      "kind": "bitfield",
+      "size": 1,
+      "bit_offset": 2,
+      "bit_size": 3,
+      "base_type": "t24"
+    },
+    "t1c": {
+      "kind": "bitfield",
+      "size": 1,
+      "bit_offset": 5,
+      "bit_size": 3,
+      "base_type": "t23"
+    },
+    "t1d": {
+      "name": "big",
+      "kind": "struct",
+      "size": 48,
+      "fields": [
+        {
+          "type": "t13",
+          "offset": 0,
+          "size": 1,
+          "name": "mode"
+        },
+        {
+          "type": "t14",
+          "offset": 0,
+          "size": 1,
+          "name": "delta"
+        },
+        {
+          "type": "t15",
+          "offset": 1,
+          "size": 2,
+          "name": "count"
+        },
+        {
+          "type": "t16",
+          "offset": 2,
+          "size": 2,
+          "name": "bias"
+        },
+        {
+          "type": "t25",
+          "offset": 8,
+          "size": 32,
+          "name": "tail"
+        },
+        {
+          "type": "t3",
+          "offset": 40,
+          "size": 4,
+          "name": "last"
+        }
+      ]
+    },
+    "t1e": {
+      "name": "packed",
+      "kind": "struct",
+      "size": 6,
+      "fields": [
+        {
+          "type": "t23",
+          "offset": 0,
+          "size": 1,
+          "name": "tag"
+        },
+        {
+          "type": "t26",
+          "offset": 1,
+          "size": 1,
+          "name": "lo"
+        },
+        {
+          "type": "t27",
+          "offset": 1,
+          "size": 4,
+          "name": "mid"
+        },
+        {
+          "type": "t26",
+          "offset": 4,
+          "size": 1,
+          "name": "hi"
+        },
+        {
+          "type": "t23",
+          "offset": 5,
+          "size": 1,
+          "name": "end"
+        }
+      ]
+    },
+    "t1f": {
+      "name": "undefined1",
+      "size": 1,
+      "kind": "undefined"
+    },
+    "t20": {
+      "kind": "bitfield",
+      "size": 1,
+      "bit_offset": 0,
+      "bit_size": 1,
+      "base_type": "t0"
+    },
+    "t21": {
+      "kind": "bitfield",
+      "size": 2,
+      "bit_offset": 0,
+      "bit_size": 16,
+      "base_type": "t0"
+    },
+    "t22": {
+      "name": "unsigned long",
+      "kind": "typedef",
+      "size": 8,
+      "base_type": "t8"
+    },
+    "t23": {
+      "is_signed": false,
+      "name": "unsigned char",
+      "size": 1,
+      "kind": "integer"
+    },
+    "t24": {
+      "is_signed": true,
+      "name": "char",
+      "size": 1,
+      "kind": "integer"
+    },
+    "t25": {
+      "kind": "array",
+      "size": 32,
+      "num_elements": 4,
+      "element_type": "t5"
+    },
+    "t26": {
+      "kind": "bitfield",
+      "size": 1,
+      "bit_offset": 0,
+      "bit_size": 6,
+      "base_type": "t0"
+    },
+    "t27": {
+      "kind": "bitfield",
+      "size": 4,
+      "bit_offset": 6,
+      "bit_size": 20,
+      "base_type": "t0"
+    }
+  },
+  "boundary_repairs": []
+}

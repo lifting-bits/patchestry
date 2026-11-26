@@ -6,9 +6,11 @@
  */
 
 #include <algorithm>
+#include <cctype>
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Attr.h>
@@ -29,6 +31,7 @@
 #include <clang/Sema/Sema.h>
 #include <llvm/ADT/APInt.h>
 #include <llvm/ADT/ArrayRef.h>
+#include <llvm/ADT/bit.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/Support/Casting.h>
 
@@ -59,6 +62,78 @@ namespace patchestry::ast {
                 }
             }
             return nullptr;
+        }
+
+        // Upper bound on the alignment of the address `expr` that follows
+        // from constant byte offsets in it, or nullopt when there is none.
+        // The base a constant is added to is taken to be aligned for the
+        // access, as it was before this analysis existed: its real alignment
+        // is not known, and the alignment of a lifted record is not evidence
+        // (records are packed to force the recovered layout).  So
+        // `(char *) p + 1` is aligned to one byte and `(char *) p + 44` is
+        // not bounded.  Pointer casts and variable offsets say nothing.
+        std::optional< clang::CharUnits >
+        offset_alignment_bound(clang::ASTContext &ctx, const clang::Expr *expr) {
+            expr = expr->IgnoreParens();
+            while (const auto *cast = clang::dyn_cast< clang::CastExpr >(expr)) {
+                const auto *sub = cast->getSubExpr();
+                if (!sub->getType()->isPointerType()) {
+                    return std::nullopt;
+                }
+                expr = sub->IgnoreParens();
+            }
+            const auto *bin = clang::dyn_cast< clang::BinaryOperator >(expr);
+            if (bin == nullptr || !expr->getType()->isPointerType()
+                || (bin->getOpcode() != clang::BO_Add && bin->getOpcode() != clang::BO_Sub))
+            {
+                return std::nullopt;
+            }
+            const auto *base   = bin->getLHS();
+            const auto *offset = bin->getRHS();
+            if (!base->getType()->isPointerType() && bin->getOpcode() == clang::BO_Add) {
+                std::swap(base, offset);
+            }
+            if (!base->getType()->isPointerType() || offset->getType()->isPointerType()) {
+                return std::nullopt;
+            }
+            auto pointee = expr->getType()->getPointeeType();
+            clang::Expr::EvalResult value;
+            if (pointee->isIncompleteType() || pointee->isFunctionType()
+                || !offset->EvaluateAsInt(value, ctx))
+            {
+                return std::nullopt;
+            }
+
+            auto bound   = offset_alignment_bound(ctx, base);
+            auto element = static_cast< uint64_t >(ctx.getTypeSizeInChars(pointee).getQuantity());
+            auto bytes   = value.Val.getInt().abs().getZExtValue() * element;
+            if (bytes == 0) {
+                return bound;
+            }
+            auto low_bit = clang::CharUnits::fromQuantity(
+                static_cast< clang::CharUnits::QuantityType >(bytes & (~bytes + 1U))
+            );
+            return bound ? std::min(*bound, low_bit) : low_bit;
+        }
+
+        // Add `decl` to the translation unit ahead of the first function.
+        // The unit is printed in declaration order, and a type created while
+        // a function body is built would otherwise be declared after the
+        // body that uses it.
+        void add_before_functions(clang::TranslationUnitDecl *tu, clang::Decl *decl) {
+            std::vector< clang::Decl * > tail;
+            for (auto *existing : tu->decls()) {
+                if (!tail.empty() || clang::isa< clang::FunctionDecl >(existing)) {
+                    tail.push_back(existing);
+                }
+            }
+            for (auto *moved : tail) {
+                tu->removeDecl(moved);
+            }
+            tu->addDecl(decl);
+            for (auto *moved : tail) {
+                tu->addDecl(moved);
+            }
         }
 
         clang::VarDecl *create_variable_decl( // NOLINT
@@ -915,7 +990,7 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!output_expr) {
             return { nullptr, false };
         }
@@ -961,20 +1036,44 @@ namespace patchestry::ast {
                 return { result_expr, true };
             }
             auto *output_expr =
-                AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+                AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
             if (!output_expr) {
                 return { nullptr, false };
             }
             return { create_assign_operation(ctx, result_expr, output_expr, op_loc), false };
         }
 
+        // Alignment of the pointee before a width-changing cast below.
+        std::optional< clang::CharUnits > prior_alignment;
         if (op.type) {
             auto op_type_opt = lookup_op_type(op);
             if (!op_type_opt) {
                 return {};
             }
             auto pointer_type = ctx.getPointerType(*op_type_opt);
-            auto *cast_expr   = make_cast(ctx, input_expr, pointer_type, op_loc);
+            // A cast that changes how many bytes are read is written out.
+            // make_cast builds an implicit cast for a pointer rvalue, which
+            // the printed C omits: a 4-byte load through a pointer to one
+            // byte would print as a 1-byte read.
+            clang::Expr *cast_expr = nullptr;
+            auto from_type         = input_expr->getType();
+            if (from_type->isPointerType() && !from_type->isVoidPointerType()) {
+                auto from_pointee = from_type->getPointeeType();
+                if (!from_pointee->isIncompleteType() && !from_pointee->isFunctionType()
+                    && !(*op_type_opt)->isIncompleteType()
+                    && ctx.getTypeSize(from_pointee) != ctx.getTypeSize(*op_type_opt))
+                {
+                    cast_expr = make_explicit_cast(
+                        ctx, input_expr, pointer_type, op_loc
+                    );
+                    if (cast_expr != nullptr) {
+                        prior_alignment = ctx.getTypeAlignInChars(from_pointee);
+                    }
+                }
+            }
+            if (!cast_expr) {
+                cast_expr = make_cast(ctx, input_expr, pointer_type, op_loc);
+            }
             if (!cast_expr) {
                 LOG(ERROR) << "Failed to make cast expression for LOAD. key: " << op.key;
                 return {};
@@ -996,6 +1095,7 @@ namespace patchestry::ast {
         // Cancel *(&expr) from PTRADD's &base[index] to produce base[index].
         clang::Expr *result_expr = simplify_deref_addrof(input_expr);
         if (!result_expr) {
+            input_expr = lower_access_alignment(ctx, input_expr, op_loc, prior_alignment);
             auto derefed_expr = sema().CreateBuiltinUnaryOp(
                 SourceLocation(ctx.getSourceManager(), op.key), clang::UO_Deref,
                 clang::dyn_cast< clang::Expr >(input_expr)
@@ -1008,7 +1108,7 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!output_expr) {
             return { nullptr, false };
         }
@@ -1046,6 +1146,158 @@ namespace patchestry::ast {
         return casted;
     }
 
+    // The access `*addr` takes the alignment of addr's pointee type.  When
+    // the address is known to be less aligned than that (a 4-byte unit at
+    // byte 1 of a packed struct), dereferencing it claims an alignment the
+    // address does not have: undefined behaviour in the printed C and an
+    // `align 4` on the load or store in the IR.  Return the address cast to
+    // a pointer to a typedef of the pointee that carries the known alignment.
+    // The alignment is known from a constant offset in the address and from
+    // `prior_alignment`: the alignment of the type the address pointed at
+    // before the lifter changed the width of the access.
+    clang::Expr *OpBuilder::lower_access_alignment(
+        clang::ASTContext &ctx, clang::Expr *addr, clang::SourceLocation op_loc,
+        std::optional< clang::CharUnits > prior_alignment
+    ) {
+        if (addr == nullptr || !addr->getType()->isPointerType()) {
+            return addr;
+        }
+        auto pointee = addr->getType()->getPointeeType();
+        if (pointee->isIncompleteType() || pointee->isFunctionType()) {
+            return addr;
+        }
+        auto known = offset_alignment_bound(ctx, addr);
+        if (prior_alignment && (!known || *prior_alignment < *known)) {
+            known = prior_alignment;
+        }
+        if (!known || *known >= ctx.getTypeAlignInChars(pointee)) {
+            return addr;
+        }
+
+        // One typedef per (alignment, type), found again by name.  A name is
+        // only reused for a typedef that is one of these: the same underlying
+        // type and the same alignment attribute.  Any other declaration with
+        // the name (a typedef, variable or function of the program) is a
+        // collision, and the next numbered name is tried: reusing a program
+        // typedef of another type would change the width of the access.
+        auto unqualified = pointee.getUnqualifiedType();
+        std::string base = "unaligned" + std::to_string(known->getQuantity()) + "_";
+        for (char c : unqualified.getAsString(ctx.getPrintingPolicy())) {
+            base += std::isalnum(static_cast< unsigned char >(c)) != 0 ? c : '_';
+        }
+        auto known_bits = static_cast< unsigned >(ctx.toBits(*known));
+        auto *tu        = ctx.getTranslationUnitDecl();
+
+        clang::TypedefDecl *typedef_decl = nullptr;
+        clang::IdentifierInfo *free_name = nullptr;
+        for (unsigned attempt = 0; typedef_decl == nullptr && free_name == nullptr; ++attempt) {
+            auto &ident = ctx.Idents.get(
+                attempt == 0 ? base : base + "_" + std::to_string(attempt)
+            );
+            auto found = tu->lookup(clang::DeclarationName(&ident));
+            if (found.empty()) {
+                free_name = &ident;
+                break;
+            }
+            for (auto *decl : found) {
+                auto *candidate = clang::dyn_cast< clang::TypedefDecl >(decl);
+                if (candidate == nullptr) {
+                    continue;
+                }
+                const auto *aligned = candidate->getAttr< clang::AlignedAttr >();
+                if (aligned != nullptr && !aligned->isAlignmentDependent()
+                    && aligned->getAlignment(ctx) == known_bits
+                    && ctx.hasSameType(candidate->getUnderlyingType(), unqualified))
+                {
+                    typedef_decl = candidate;
+                    break;
+                }
+            }
+        }
+        if (typedef_decl == nullptr) {
+            typedef_decl = clang::TypedefDecl::Create(
+                ctx, tu, op_loc, op_loc, free_name, ctx.getTrivialTypeSourceInfo(unqualified)
+            );
+            auto *bytes = clang::IntegerLiteral::Create(
+                ctx,
+                llvm::APInt(
+                    ctx.getIntWidth(ctx.IntTy), static_cast< uint64_t >(known->getQuantity())
+                ),
+                ctx.IntTy, op_loc
+            );
+            auto *aligned = clang::AlignedAttr::Create(ctx, /*IsAlignmentExpr=*/true, bytes);
+            aligned->setCachedAlignmentValue(known_bits);
+            typedef_decl->addAttr(aligned);
+            add_before_functions(tu, typedef_decl);
+        }
+
+        auto aligned_type =
+            ctx.getTypedefType(clang::ElaboratedTypeKeyword::None, std::nullopt, typedef_decl);
+        aligned_type = ctx.getQualifiedType(aligned_type, pointee.getQualifiers());
+
+        // Replace a cast that only chose the access type; keep anything else.
+        clang::Expr *operand = addr;
+        if (auto *cast = clang::dyn_cast< clang::CStyleCastExpr >(addr->IgnoreParens())) {
+            if (cast->getSubExpr()->getType()->isPointerType()) {
+                operand = cast->getSubExpr();
+            }
+        }
+        auto *lowered = make_explicit_cast(
+            ctx, operand,
+            ctx.getPointerType(aligned_type), op_loc
+        );
+        return lowered != nullptr ? lowered : addr;
+    }
+
+    // A STORE writes exactly the bytes of its value.  The address operand can
+    // point at something else: the struct that holds a bit-field unit, or one
+    // byte of a packed layout.  Assigning through that pointer would copy the
+    // whole struct out of a narrower value, or truncate the value to the
+    // pointee.  When an integer value and the pointee disagree, store through
+    // a pointer to an integer of the value's width instead.
+    clang::Expr *OpBuilder::retarget_store_address(
+        clang::ASTContext &ctx, clang::Expr *addr, clang::Expr *value,
+        const Varnode &value_varnode, clang::SourceLocation op_loc,
+        std::optional< clang::CharUnits > &prior_alignment
+    ) {
+        auto addr_type = addr->getType();
+        if (value_varnode.size == 0 || !addr_type->isPointerType()
+            || addr_type->isVoidPointerType()
+            || !value->getType()->isIntegralOrEnumerationType())
+        {
+            return addr;
+        }
+        auto pointee = addr_type->getPointeeType();
+        if (pointee->isIncompleteType() || pointee->isFunctionType()) {
+            return addr;
+        }
+
+        auto value_bits   = static_cast< uint64_t >(value_varnode.size) * 8U;
+        auto is_aggregate = pointee->isRecordType() || pointee->isArrayType();
+        if (!is_aggregate && ctx.getTypeSize(pointee) == value_bits) {
+            return addr;
+        }
+
+        auto store_type = value->getType().getUnqualifiedType();
+        if (ctx.getTypeSize(store_type) != value_bits) {
+            store_type = ctx.getIntTypeForBitwidth(
+                static_cast< unsigned >(value_bits), /*Signed=*/false
+            );
+        }
+        if (store_type.isNull()) {
+            return addr;
+        }
+        auto *retargeted = make_explicit_cast(
+            ctx, addr, ctx.getPointerType(store_type),
+            op_loc
+        );
+        if (retargeted == nullptr) {
+            return addr;
+        }
+        prior_alignment = ctx.getTypeAlignInChars(pointee);
+        return retargeted;
+    }
+
     std::pair< clang::Stmt *, bool > OpBuilder::create_store(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
@@ -1063,6 +1315,10 @@ namespace patchestry::ast {
             if (!lhs_expr || !rhs_expr) {
                 return {};
             }
+            std::optional< clang::CharUnits > prior_alignment;
+            lhs_expr = retarget_store_address(
+                ctx, lhs_expr, rhs_expr, op.inputs[1], op_loc, prior_alignment
+            );
 
             // Cancel *(&expr) from PTRADD's &base[index].
             clang::Expr *deref_expr = simplify_deref_addrof(lhs_expr);
@@ -1071,6 +1327,7 @@ namespace patchestry::ast {
                 if (!lhs_expr) {
                     return {};
                 }
+                lhs_expr = lower_access_alignment(ctx, lhs_expr, op_loc, prior_alignment);
                 // Parenthesize pointer arithmetic so the deref binds the whole
                 // expression: *(ptr + offset) instead of *ptr + offset.
                 if (clang::isa< clang::BinaryOperator >(lhs_expr)) {
@@ -1101,6 +1358,10 @@ namespace patchestry::ast {
             if (!lhs_expr || !rhs_expr) {
                 return {};
             }
+            std::optional< clang::CharUnits > prior_alignment;
+            lhs_expr = retarget_store_address(
+                ctx, lhs_expr, rhs_expr, op.inputs[2], op_loc, prior_alignment
+            );
 
             // Cancel *(&expr) from PTRADD's &base[index].
             clang::Expr *deref_expr = simplify_deref_addrof(lhs_expr);
@@ -1109,6 +1370,7 @@ namespace patchestry::ast {
                 if (!lhs_expr) {
                     return {};
                 }
+                lhs_expr = lower_access_alignment(ctx, lhs_expr, op_loc, prior_alignment);
                 if (clang::isa< clang::BinaryOperator >(lhs_expr)) {
                     lhs_expr = new (ctx) clang::ParenExpr(op_loc, op_loc, lhs_expr);
                 }
@@ -1856,7 +2118,7 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!output_expr) {
             return {};
         }
@@ -2289,7 +2551,7 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!output_expr) {
             return {};
         }
@@ -2405,7 +2667,7 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!output_expr) {
             return {};
         }
@@ -2790,7 +3052,7 @@ namespace patchestry::ast {
             if (merge_to_next) {
                 return std::make_pair(static_cast< clang::Stmt * >(result_expr), merge_to_next);
             }
-            auto *output_stmt = create_varnode(ctx, function, *op.output);
+            auto *output_stmt = create_output_varnode(ctx, function, op);
             if (!output_stmt) {
                 LOG(ERROR) << "PIECE: record-type output varnode produced null Stmt. key: "
                            << op.key;
@@ -2918,7 +3180,7 @@ namespace patchestry::ast {
             return std::make_pair(or_expr, merge_to_next);
         }
 
-        auto *output_stmt = create_varnode(ctx, function, *op.output);
+        auto *output_stmt = create_output_varnode(ctx, function, op);
         if (!output_stmt) {
             LOG(ERROR) << "PIECE: output varnode produced null Stmt. key: " << op.key;
             return {};
@@ -2995,7 +3257,7 @@ namespace patchestry::ast {
             if (merge_to_next) {
                 return std::make_pair(static_cast< clang::Stmt * >(result_expr), merge_to_next);
             }
-            auto *out_stmt_in = create_varnode(ctx, function, *op.output);
+            auto *out_stmt_in = create_output_varnode(ctx, function, op);
             if (!out_stmt_in) {
                 LOG(ERROR) << "SUBPIECE: record-type output varnode produced null Stmt. key: "
                            << op.key;
@@ -3187,7 +3449,7 @@ namespace patchestry::ast {
             return std::make_pair(result_expr, merge_to_next);
         }
 
-        auto *out_stmt_in = create_varnode(ctx, function, *op.output);
+        auto *out_stmt_in = create_output_varnode(ctx, function, op);
         if (!out_stmt_in) {
             LOG(ERROR) << "SUBPIECE: output varnode produced null Stmt. key: " << op.key;
             return std::make_pair(nullptr, false);
@@ -3265,7 +3527,7 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!output_expr) {
             return {};
         }
@@ -3330,7 +3592,7 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!output_expr) {
             return {};
         }
@@ -3370,7 +3632,7 @@ namespace patchestry::ast {
         }
 
         auto *output =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!output) {
             return {};
         }
@@ -3475,7 +3737,7 @@ namespace patchestry::ast {
         }
 
         auto *output =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!output) {
             return {};
         }
@@ -3545,7 +3807,7 @@ namespace patchestry::ast {
         }
 
         auto *output =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!output) {
             return {};
         }
@@ -3612,7 +3874,7 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!output_expr) {
             return {};
         }
@@ -3715,7 +3977,7 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!output_expr) {
             return {};
         }
@@ -3844,6 +4106,383 @@ namespace patchestry::ast {
         return create_builtin_call_expr(ctx, function, op, clang::Builtin::BI__builtin_clz);
     }
 
+    namespace {
+        // Bit position and bit count of a ZPULL, SPULL or INSERT.  Both are
+        // constants in Ghidra; anything else is refused.
+        struct BitRange
+        {
+            unsigned position;
+            unsigned size;
+        };
+
+        std::optional< BitRange > read_bit_range(
+            const Varnode &position, const Varnode &size, unsigned container_bits
+        ) {
+            if (position.kind != Varnode::VARNODE_CONSTANT || !position.value
+                || size.kind != Varnode::VARNODE_CONSTANT || !size.value)
+            {
+                return std::nullopt;
+            }
+            auto pos   = *position.value;
+            auto count = *size.value;
+            if (count == 0 || count > container_bits || pos > container_bits - count) {
+                return std::nullopt;
+            }
+            return BitRange{ static_cast< unsigned >(pos), static_cast< unsigned >(count) };
+        }
+
+        // An unsigned constant of `type`.  A literal of a type wider than 64
+        // bits prints as a bare decimal number: the compiler reads a small one
+        // as an int and rejects one that needs more than 64 bits.  Such a
+        // constant is built from 64-bit literals under explicit casts,
+        // `((unsigned __int128)high << 64U) | low`, which prints as valid C.
+        clang::Expr *make_unsigned_literal(
+            clang::ASTContext &ctx, clang::Sema &sema, const llvm::APInt &value,
+            clang::QualType type, clang::SourceLocation loc
+        ) {
+            if (value.getBitWidth() <= 64U) {
+                return clang::IntegerLiteral::Create(ctx, value, type, loc);
+            }
+
+            auto half_type = ctx.getIntTypeForBitwidth(64U, /*Signed=*/false);
+            auto widen     = [&](const llvm::APInt &half) -> clang::Expr * {
+                auto cast = sema.BuildCStyleCastExpr(
+                    loc, ctx.getTrivialTypeSourceInfo(type), loc,
+                    clang::IntegerLiteral::Create(ctx, half, half_type, loc)
+                );
+                return cast.isInvalid() ? nullptr : cast.getAs< clang::Expr >();
+            };
+
+            auto *low = widen(value.trunc(64U));
+            if (low == nullptr || value.getActiveBits() <= 64U) {
+                return low;
+            }
+            auto *high  = widen(value.lshr(64U).trunc(64U));
+            auto *count = clang::IntegerLiteral::Create(
+                ctx, llvm::APInt(ctx.getIntWidth(ctx.UnsignedIntTy), 64U), ctx.UnsignedIntTy, loc
+            );
+            if (high == nullptr) {
+                return nullptr;
+            }
+            auto shifted = sema.CreateBuiltinBinOp(loc, clang::BO_Shl, high, count);
+            if (shifted.isInvalid()) {
+                return nullptr;
+            }
+            auto joined = sema.CreateBuiltinBinOp(
+                loc, clang::BO_Or, new (ctx) clang::ParenExpr(loc, loc, shifted.get()), low
+            );
+            return joined.isInvalid() ? nullptr
+                                      : new (ctx) clang::ParenExpr(loc, loc, joined.get());
+        }
+
+        // A shift count.  It has the working type, so the printed suffix
+        // matches the other operand, except above 64 bits, where a plain
+        // unsigned count reads better than a constant built from casts.
+        clang::Expr *make_shift_count(
+            clang::ASTContext &ctx, unsigned count, unsigned work_bits,
+            clang::QualType work_type, clang::SourceLocation loc
+        ) {
+            if (work_bits > 64U) {
+                return clang::IntegerLiteral::Create(
+                    ctx, llvm::APInt(ctx.getIntWidth(ctx.UnsignedIntTy), count),
+                    ctx.UnsignedIntTy, loc
+                );
+            }
+            return clang::IntegerLiteral::Create(
+                ctx, llvm::APInt(work_bits, count), work_type, loc
+            );
+        }
+    } // namespace
+
+    clang::Expr *OpBuilder::bit_range_operand(
+        clang::ASTContext &ctx, const Function &function, const Varnode &vnode,
+        clang::SourceLocation loc, const std::string &op_key, unsigned &logical_bits
+    ) {
+        auto *expr = AS_EXPR_OR_NULL(create_varnode(ctx, function, vnode), op_key);
+        if (!expr) {
+            return nullptr;
+        }
+
+        if (expr->getType()->isArrayType()) {
+            expr = narrow_aggregate_to_integer(ctx, expr, loc, vnode.size);
+        } else {
+            expr = coerce_record_to_integer(ctx, expr, loc);
+        }
+        if (!expr) {
+            return nullptr;
+        }
+
+        auto type = expr->getType();
+        if (!type->isIntegralOrEnumerationType() && !type->isPointerType()) {
+            return nullptr;
+        }
+
+        auto type_bits = static_cast< unsigned >(ctx.getTypeSize(type));
+        logical_bits   = vnode.size != 0 ? vnode.size * 8U : type_bits;
+
+        // The view is as wide as the expression that carries the operand and
+        // never narrower than the operand.  A width with no integer type (24,
+        // 40, 48 or 56 bits) takes the next one that has.
+        clang::QualType unsigned_type;
+        for (unsigned width = std::max(llvm::bit_ceil(std::max(logical_bits, type_bits)), 8U);
+             width <= 128U && unsigned_type.isNull(); width *= 2U)
+        {
+            unsigned_type = ctx.getIntTypeForBitwidth(width, /*Signed=*/false);
+        }
+        if (unsigned_type.isNull()) {
+            return nullptr;
+        }
+        if (ctx.hasSameUnqualifiedType(type, unsigned_type)) {
+            return expr;
+        }
+        return make_explicit_cast(ctx, expr, unsigned_type, loc);
+    }
+
+    std::pair< clang::Stmt *, bool > OpBuilder::create_bit_pull(
+        clang::ASTContext &ctx, const Function &function, const Operation &op
+    ) {
+        const bool is_signed = op.mnemonic == Mnemonic::OP_SPULL;
+        const char *name     = is_signed ? "SPULL" : "ZPULL";
+        if (op.inputs.size() != 3U
+            || (op.mnemonic != Mnemonic::OP_ZPULL && op.mnemonic != Mnemonic::OP_SPULL))
+        {
+            LOG(ERROR) << name << " operation is invalid or has invalid input operands. key: "
+                       << op.key << "\n";
+            return {};
+        }
+
+        auto op_loc  = SourceLocation(ctx.getSourceManager(), op.key);
+        unsigned source_bits = 0;
+        auto *source =
+            bit_range_operand(ctx, function, op.inputs[0], op_loc, op.key, source_bits);
+        if (!source) {
+            LOG(ERROR) << name << " source has no integer view. key: " << op.key << "\n";
+            return {};
+        }
+
+        // The range is checked against the operand's own width.  The bits of
+        // a wider carrier above that width are never selected.
+        auto carrier_bits = static_cast< unsigned >(ctx.getTypeSize(source->getType()));
+        auto range        = read_bit_range(op.inputs[1], op.inputs[2], source_bits);
+        if (!range) {
+            LOG(ERROR) << name << " bit range is not constant or exceeds its " << source_bits
+                       << "-bit source. key: " << op.key << "\n";
+            return {};
+        }
+
+        auto target_type_opt = lookup_op_type(op);
+        if (!target_type_opt) {
+            return {};
+        }
+        auto target_type =
+            integer_target_for_int_ext(ctx, *target_type_opt, op.output ? op.output->size : 0U);
+        auto target_bits = static_cast< unsigned >(ctx.getTypeSize(target_type));
+        if (!target_type->isIntegralOrEnumerationType() || range->size > target_bits) {
+            LOG(ERROR) << name << " of " << range->size << " bits does not fit its "
+                       << target_bits << "-bit output. key: " << op.key << "\n";
+            return {};
+        }
+
+        // The arithmetic runs in an unsigned type at least as wide as int, so
+        // integer promotion cannot change it, and wide enough for both the
+        // source and the output.
+        auto work_bits = std::max({ carrier_bits, target_bits, 32U });
+        auto work_type = ctx.getIntTypeForBitwidth(work_bits, /*Signed=*/false);
+        if (work_type.isNull()) {
+            LOG(ERROR) << name << " has no " << work_bits << "-bit integer type. key: "
+                       << op.key << "\n";
+            return {};
+        }
+
+        auto paren = [&](clang::Expr *expr) -> clang::Expr * {
+            return new (ctx) clang::ParenExpr(op_loc, op_loc, expr);
+        };
+        auto binary = [&](clang::BinaryOperatorKind kind, clang::Expr *lhs,
+                          clang::Expr *rhs) -> clang::Expr * {
+            if (!lhs || !rhs) {
+                return nullptr;
+            }
+            auto result = sema().CreateBuiltinBinOp(op_loc, kind, lhs, rhs);
+            return result.isInvalid() ? nullptr : paren(result.getAs< clang::Expr >());
+        };
+        auto literal = [&](const llvm::APInt &value) {
+            return make_unsigned_literal(ctx, sema(), value, work_type, op_loc);
+        };
+        auto shift_count = [&](unsigned count) {
+            return make_shift_count(ctx, count, work_bits, work_type, op_loc);
+        };
+        // The widening is written out.  An implicit conversion is not
+        // printed, and a shift takes the type of its left operand alone, so
+        // `v << 70` would be a shift of the narrow operand.
+        auto widen = [&](clang::Expr *expr) -> clang::Expr * {
+            if (ctx.hasSameUnqualifiedType(expr->getType(), work_type)) {
+                return expr;
+            }
+            return make_explicit_cast(ctx, expr, work_type, op_loc);
+        };
+
+        // (source >> position) & mask
+        clang::Expr *value = widen(source);
+        if (range->position != 0) {
+            value = binary(clang::BO_Shr, value, shift_count(range->position));
+        }
+        if (range->size < work_bits) {
+            value = binary(
+                clang::BO_And, value,
+                literal(llvm::APInt::getLowBitsSet(work_bits, range->size))
+            );
+            // Sign extension: (value ^ sign) - sign, where sign is the top
+            // bit of the field.  Unsigned arithmetic, so it wraps as needed.
+            if (is_signed) {
+                auto sign = llvm::APInt::getOneBitSet(work_bits, range->size - 1U);
+                value     = binary(clang::BO_Xor, value, literal(sign));
+                value     = binary(clang::BO_Sub, value, literal(sign));
+            }
+        }
+        if (!value) {
+            LOG(ERROR) << name << " expression could not be built. key: " << op.key << "\n";
+            return {};
+        }
+
+        // An explicit cast, so the printed C states the result type.
+        if (!ctx.hasSameUnqualifiedType(value->getType(), target_type)) {
+            value = make_explicit_cast(ctx, value, target_type, op_loc);
+            if (!value) {
+                return {};
+            }
+        }
+
+        if (!op.output.has_value()) {
+            return { value, true };
+        }
+        auto *output_expr =
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
+        if (!output_expr) {
+            return {};
+        }
+        return { create_assign_operation(ctx, value, output_expr, op_loc), false };
+    }
+
+    std::pair< clang::Stmt *, bool > OpBuilder::create_bit_insert(
+        clang::ASTContext &ctx, const Function &function, const Operation &op
+    ) {
+        if (op.inputs.size() != 4U || op.mnemonic != Mnemonic::OP_INSERT) {
+            LOG(ERROR) << "INSERT operation is invalid or has invalid input operands. key: "
+                       << op.key << "\n";
+            return {};
+        }
+
+        auto op_loc     = SourceLocation(ctx.getSourceManager(), op.key);
+        unsigned container_bits = 0;
+        unsigned field_bits     = 0;
+        auto *container =
+            bit_range_operand(ctx, function, op.inputs[0], op_loc, op.key, container_bits);
+        auto *field =
+            bit_range_operand(ctx, function, op.inputs[1], op_loc, op.key, field_bits);
+        if (!container || !field) {
+            LOG(ERROR) << "INSERT operand has no integer view. key: " << op.key << "\n";
+            return {};
+        }
+
+        auto carrier_bits = static_cast< unsigned >(ctx.getTypeSize(container->getType()));
+        auto range        = read_bit_range(op.inputs[2], op.inputs[3], container_bits);
+        if (!range || range->size > field_bits) {
+            LOG(ERROR) << "INSERT bit range is not constant or exceeds its operands. key: "
+                       << op.key << "\n";
+            return {};
+        }
+
+        auto work_bits = std::max(carrier_bits, 32U);
+        auto work_type = ctx.getIntTypeForBitwidth(work_bits, /*Signed=*/false);
+        if (work_type.isNull()) {
+            LOG(ERROR) << "INSERT has no " << work_bits << "-bit integer type. key: " << op.key
+                       << "\n";
+            return {};
+        }
+
+        auto paren = [&](clang::Expr *expr) -> clang::Expr * {
+            return new (ctx) clang::ParenExpr(op_loc, op_loc, expr);
+        };
+        auto binary = [&](clang::BinaryOperatorKind kind, clang::Expr *lhs,
+                          clang::Expr *rhs) -> clang::Expr * {
+            if (!lhs || !rhs) {
+                return nullptr;
+            }
+            auto result = sema().CreateBuiltinBinOp(op_loc, kind, lhs, rhs);
+            return result.isInvalid() ? nullptr : paren(result.getAs< clang::Expr >());
+        };
+        auto literal = [&](const llvm::APInt &value) {
+            return make_unsigned_literal(ctx, sema(), value, work_type, op_loc);
+        };
+        auto shift_count = [&](unsigned count) {
+            return make_shift_count(ctx, count, work_bits, work_type, op_loc);
+        };
+        // The widening is written out.  An implicit conversion is not
+        // printed, and a shift takes the type of its left operand alone, so
+        // `v << 70` would be a shift of the narrow operand.
+        auto widen = [&](clang::Expr *expr) -> clang::Expr * {
+            if (ctx.hasSameUnqualifiedType(expr->getType(), work_type)) {
+                return expr;
+            }
+            return make_explicit_cast(ctx, expr, work_type, op_loc);
+        };
+
+        // (container & ~(mask << position)) | ((field & mask) << position)
+        auto low_mask   = llvm::APInt::getLowBitsSet(work_bits, range->size);
+        auto field_mask = low_mask.shl(range->position);
+
+        // Only the low `size` bits of the field are used, so narrowing a
+        // wider field to the working type loses nothing.
+        clang::Expr *inserted = widen(field);
+        inserted              = binary(clang::BO_And, inserted, literal(low_mask));
+        if (range->position != 0) {
+            inserted = binary(clang::BO_Shl, inserted, shift_count(range->position));
+        }
+
+        // The container keeps every bit outside the field.  That includes the
+        // bits of a wider carrier above the container's width: a 3-byte unit
+        // is loaded and stored as 4 bytes, and the fourth byte has to go back
+        // as it was read.
+        clang::Expr *kept = widen(container);
+        kept              = binary(clang::BO_And, kept, literal(~field_mask));
+
+        auto *value = binary(clang::BO_Or, kept, inserted);
+        if (!value) {
+            LOG(ERROR) << "INSERT expression could not be built. key: " << op.key << "\n";
+            return {};
+        }
+
+        // The result has the container's width.  Use the operation type when
+        // it is an integer of that width, else the unsigned container type.
+        auto target_type = container->getType();
+        if (op.type) {
+            auto it = type_builder().GetSerializedTypes().find(*op.type);
+            if (it != type_builder().GetSerializedTypes().end()
+                && it->second->isIntegralOrEnumerationType()
+                && ctx.getTypeSize(it->second) == carrier_bits)
+            {
+                target_type = it->second;
+            }
+        }
+        // An explicit cast, so the printed C states the result type.
+        if (!ctx.hasSameUnqualifiedType(value->getType(), target_type)) {
+            value = make_explicit_cast(ctx, value, target_type, op_loc);
+            if (!value) {
+                return {};
+            }
+        }
+
+        if (!op.output.has_value()) {
+            return { value, true };
+        }
+        auto *output_expr =
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
+        if (!output_expr) {
+            return {};
+        }
+        return { create_assign_operation(ctx, value, output_expr, op_loc), false };
+    }
+
     std::pair< clang::Stmt *, bool > OpBuilder::create_builtin_call_expr(
         clang::ASTContext &ctx, const Function &function, const Operation &op,
         clang::Builtin::ID id
@@ -3864,7 +4503,7 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!output_expr) {
             return {};
         }
@@ -3907,7 +4546,7 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!output_expr) {
             return {};
         }
@@ -3950,7 +4589,7 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!output_expr) {
             return {};
         }
@@ -3994,7 +4633,7 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!output_expr) {
             return {};
         }
@@ -4039,7 +4678,7 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!output_expr) {
             return { nullptr, false };
         }
@@ -4233,7 +4872,7 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!output_expr) {
             return { nullptr, false };
         }
@@ -4360,7 +4999,7 @@ namespace patchestry::ast {
             return std::make_pair(static_cast< clang::Stmt * >(result_expr), merge_to_next);
         }
 
-        auto *output_stmt = create_varnode(ctx, function, *op.output);
+        auto *output_stmt = create_output_varnode(ctx, function, op);
         if (output_stmt->getStmtClass() == clang::Stmt::DeclStmtClass) {
             auto *decl     = clang::dyn_cast< clang::DeclStmt >(output_stmt)->getSingleDecl();
             auto *ref_expr = clang::DeclRefExpr::Create(
@@ -4422,7 +5061,7 @@ namespace patchestry::ast {
                 );
             }
             auto *out = AS_EXPR_OR_NULL(
-                create_varnode(ctx, function, *op.output), op.key);
+                create_output_varnode(ctx, function, op), op.key);
             if (!out) {
                 return std::make_pair(
                     clang::dyn_cast< clang::Stmt >(typed_err), false
@@ -4484,7 +5123,7 @@ namespace patchestry::ast {
             return { cast, true };
         }
 
-        auto *output_stmt = create_varnode(ctx, function, *op.output);
+        auto *output_stmt = create_output_varnode(ctx, function, op);
         if (!output_stmt) {
             LOG(ERROR) << "CAST: output varnode produced null Stmt. key: " << op.key;
             return {};
@@ -4967,7 +5606,7 @@ namespace patchestry::ast {
 
         // Assign result to output
         auto *out =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!out) {
             return {};
         }
@@ -5024,7 +5663,7 @@ namespace patchestry::ast {
 
         if (op.output) {
             auto *out = AS_EXPR_OR_NULL(
-                create_varnode(ctx, function, *op.output), op.key);
+                create_output_varnode(ctx, function, op), op.key);
             if (!out) {
                 return {};
             }
@@ -5199,7 +5838,7 @@ namespace patchestry::ast {
 
         // Assign result to output
         auto *out = AS_EXPR_OR_NULL(
-            create_varnode(ctx, function, *op.output), op.key);
+            create_output_varnode(ctx, function, op), op.key);
         if (!out) {
             return {};
         }

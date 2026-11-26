@@ -8,10 +8,12 @@
 #pragma once
 
 #include <functional>
+#include <optional>
 #include <string_view>
 #include <unordered_set>
 
 #include <clang/AST/ASTContext.h>
+#include <clang/AST/CharUnits.h>
 #include <clang/AST/OperationKinds.h>
 #include <clang/AST/Type.h>
 #include <clang/Basic/SourceLocation.h>
@@ -54,6 +56,28 @@ namespace patchestry::ast {
         clang::Expr *coerce_store_address(
             clang::ASTContext &ctx, clang::Expr *addr, clang::Expr *value,
             const Operation &op, clang::SourceLocation op_loc
+        );
+
+        // Make a STORE write the bytes of its value: when an integer value and
+        // the address's pointee disagree in width, or the pointee is an
+        // aggregate, cast the address to a pointer to an integer of the
+        // value's width and set prior_alignment to the alignment of the old
+        // pointee.  Returns the address unchanged otherwise.
+        clang::Expr *retarget_store_address(
+            clang::ASTContext &ctx, clang::Expr *addr, clang::Expr *value,
+            const Varnode &value_varnode, clang::SourceLocation op_loc,
+            std::optional< clang::CharUnits > &prior_alignment
+        );
+
+        // Cast a LOAD or STORE address to a pointer to an under-aligned
+        // typedef of its pointee when the address is known to be less aligned
+        // than the pointee type: by a constant offset in it, or because the
+        // type it pointed at before the access width was changed
+        // (prior_alignment) was less aligned.  Returns the address unchanged
+        // otherwise.
+        clang::Expr *lower_access_alignment(
+            clang::ASTContext &ctx, clang::Expr *addr, clang::SourceLocation op_loc,
+            std::optional< clang::CharUnits > prior_alignment = std::nullopt
         );
 
         std::pair< clang::Stmt *, bool >
@@ -178,6 +202,30 @@ namespace patchestry::ast {
 
         std::pair< clang::Stmt *, bool >
         create_lzcount(clang::ASTContext &ctx, const Function &function, const Operation &op);
+
+        // ZPULL and SPULL read `size` bits of input0 starting at bit
+        // `position` and zero or sign extend them to the output.  Ghidra 12.2
+        // emits them for bit-field reads.
+        std::pair< clang::Stmt *, bool >
+        create_bit_pull(clang::ASTContext &ctx, const Function &function, const Operation &op);
+
+        // INSERT yields input0 with `size` bits at bit `position` replaced by
+        // the low bits of input1.  Ghidra 12.2 emits it for bit-field writes.
+        std::pair< clang::Stmt *, bool > create_bit_insert(
+            clang::ASTContext &ctx, const Function &function, const Operation &op
+        );
+
+        // Operand of a bit-range operation as an unsigned integer.  A record
+        // or array operand (the LOAD of the struct that holds the bit-field)
+        // is reinterpreted.  `logical_bits` is the varnode's width.  The
+        // returned expression is at least that wide and can be wider: a
+        // 3-byte operand has no integer type of its own and is carried in a
+        // 4-byte one, whose top byte is not part of the value.  Returns
+        // nullptr when the operand has no integer view.
+        clang::Expr *bit_range_operand(
+            clang::ASTContext &ctx, const Function &function, const Varnode &vnode,
+            clang::SourceLocation loc, const std::string &op_key, unsigned &logical_bits
+        );
 
         std::pair< clang::Stmt *, bool > create_builtin_call_expr(
             clang::ASTContext &ctx, const Function &function, const Operation &op,
@@ -367,6 +415,21 @@ namespace patchestry::ast {
         clang::Stmt *create_parameter(clang::ASTContext &ctx, const Varnode &vnode);
 
         clang::Stmt *create_global(clang::ASTContext &ctx, const Varnode &vnode);
+
+        // `*(T *)&global` for an access of `bytes` bytes to a global of
+        // another width; nullptr when the widths agree or no view can be
+        // built.  Reports an access wider than the global.
+        clang::Expr *sized_global_view(
+            clang::ASTContext &ctx, const Function &function, clang::DeclRefExpr *ref,
+            clang::QualType declared, unsigned bytes, clang::SourceLocation loc,
+            const std::string &key
+        );
+
+        // The output varnode of `op` as an assignable expression.  A global
+        // output is viewed at the operation's width.
+        clang::Stmt *create_output_varnode(
+            clang::ASTContext &ctx, const Function &function, const Operation &op
+        );
 
         clang::Stmt *create_temporary(
             clang::ASTContext &ctx, const Function &function, const Varnode &vnode

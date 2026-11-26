@@ -14,13 +14,13 @@ plugins {
 }
 
 java {
-    sourceCompatibility = JavaVersion.VERSION_21
-    targetCompatibility = JavaVersion.VERSION_21
+    sourceCompatibility = JavaVersion.VERSION_25
+    targetCompatibility = JavaVersion.VERSION_25
 }
 
 ext {
-    containerImage = 'eclipse:temurin:21'
-    javaVersion = '21'
+    containerImage = 'eclipse:temurin:25'
+    javaVersion = '25'
 }
 
 repositories {
@@ -64,7 +64,7 @@ sourceSets {
 }
 
 compileJava {
-    options.release = 21
+    options.release = 25
     options.compilerArgs += ['-parameters']
     options.fork = true
     options.forkOptions.jvmArgs += [

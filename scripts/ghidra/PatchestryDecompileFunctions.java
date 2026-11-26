@@ -315,6 +315,13 @@ public class PatchestryDecompileFunctions extends GhidraScript {
         }
 
         DecompileOptions options = DecompilerUtils.getDecompileOptions(state.getTool(), currentProgram);
+        // Ghidra 12.2 rewrites bit-field accesses as ZPULL, SPULL and INSERT
+        // by default.  The rewrite follows the source, not the machine code:
+        // one load, two field updates and one store become two
+        // read-modify-write sequences, which doubles the writes to a device
+        // register, and the store is typed as the enclosing struct, not as
+        // the bytes written.  Keep the shifts and masks the binary has.
+        options.setBitfieldAccess(false);
         DecompInterface decompiler = new DecompInterface();
 
         decompiler.setOptions(options);

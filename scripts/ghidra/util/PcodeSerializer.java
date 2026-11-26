@@ -809,7 +809,8 @@ public class PcodeSerializer {
 			switch (opcode) {
 				case PcodeOp.PIECE:
 				case PcodeOp.SUBPIECE:
-				case PcodeOp.EXTRACT:        case PcodeOp.INSERT:
+				case PcodeOp.ZPULL:          case PcodeOp.SPULL:
+				case PcodeOp.INSERT:
 				case PcodeOp.INT_ADD:        case PcodeOp.INT_SUB:
 				case PcodeOp.INT_MULT:       case PcodeOp.INT_DIV:
 				case PcodeOp.INT_REM:        case PcodeOp.INT_SDIV:

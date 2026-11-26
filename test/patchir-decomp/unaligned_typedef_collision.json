@@ -1,0 +1,655 @@
+// RUN: bash %strip-json-comments %s > %t.json
+// RUN: %patchir-decomp -input %t.json -emit-llvm -print-tu -output %t > %t.log 2>&1
+// RUN: %file-check -vv -check-prefix=LL %s --input-file %t.ll
+// RUN: %file-check -vv -check-prefix=TU %s --input-file %t.c
+// RUN: %cc-aarch64 -fsyntax-only -w -x c %t.c
+//
+// An access at an address known to be under-aligned goes through a typedef
+// the lifter generates, named after the alignment and the type
+// (unaligned1_unsigned_int).  The program can already use that name.
+//
+// packed_set is the function of bitfield_pull_insert.json: a 4-byte bit-field
+// unit at byte 1 of a packed struct, loaded as undefined4 and stored as
+// unsigned int.  Two program typedefs are added that take the generated names:
+//
+//   typedef unsigned char unaligned1_unsigned_int;   another type
+//   typedef undefined4    unaligned1_undefined4;     the same type, 4-aligned
+//
+// Reusing the first by name turned the 4-byte store into a 1-byte store.
+// Reusing the second would bring back the align 4 the typedef exists to
+// avoid.  A name is reused only for a typedef with the same type and the same
+// alignment attribute; otherwise the next numbered name is taken.
+//
+// LL-LABEL: define dso_local void @packed_set(
+// LL: [[A:%[0-9]+]] = getelementptr i8, ptr %{{[0-9]+}}, i64 1
+// LL-NEXT: load i32, ptr [[A]], align 1
+// LL-NOT: trunc
+// LL: [[B:%[0-9]+]] = getelementptr i8, ptr %{{[0-9]+}}, i64 1
+// LL-NEXT: store i32 %{{[0-9]+}}, ptr [[B]], align 1
+//
+// TU-DAG: typedef unsigned char unaligned1_unsigned_int;
+// TU-DAG: typedef undefined4 unaligned1_undefined4;
+// TU-DAG: typedef unsigned int unaligned1_unsigned_int_1 __attribute__((aligned(1)));
+// TU-DAG: typedef undefined4 unaligned1_undefined4_1 __attribute__((aligned(1)));
+// TU-DAG: *(unaligned1_unsigned_int_1 *)(undefined1 *)((char *)p + 1L) = ((*(unaligned1_undefined4_1 *)(undefined1 *)((char *)p + 1L) & 4227858495U) | ((mid & 1048575U) << 6U));
+{
+  "architecture": "AARCH64",
+  "id": "AARCH64:LE:64:v8A",
+  "format": "Executable and Linking Format (ELF)",
+  "compiler_spec": "default",
+  "functions": {
+    "ram:00100094": {
+      "name": "packed_set",
+      "display_name": "packed_set",
+      "is_intrinsic": false,
+      "entry_point": "ram:00100094",
+      "frame": {
+        "size": 0,
+        "local_size": 0,
+        "parameter_size": 0,
+        "parameter_offset": 0,
+        "grows_negative": true
+      },
+      "address_ranges": [
+        {
+          "start": "ram:00100094",
+          "end": "ram:001000a3"
+        }
+      ],
+      "type": {
+        "return_type": "t5",
+        "is_variadic": false,
+        "is_noreturn": false,
+        "calling_convention": "__cdecl",
+        "parameter_types": [
+          "te",
+          "t0"
+        ],
+        "return_storage": [],
+        "parameter_storage": [
+          [
+            {
+              "kind": "register",
+              "register": "x0",
+              "offset": 16384,
+              "size": 8
+            }
+          ],
+          [
+            {
+              "kind": "register",
+              "register": "w1",
+              "offset": 16392,
+              "size": 4
+            }
+          ]
+        ]
+      },
+      "basic_blocks": {
+        "ram:00100094:0:basic": {
+          "operations": {
+            "ram:00100094:40:0": {
+              "mnemonic": "PTRSUB",
+              "type": "tf",
+              "size": 8,
+              "inputs": [
+                {
+                  "type": "te",
+                  "size": 8,
+                  "kind": "parameter",
+                  "operation": "unique:00410d0f:15:0"
+                },
+                {
+                  "type": "t6",
+                  "size": 8,
+                  "kind": "constant",
+                  "value": 1
+                }
+              ]
+            },
+            "ram:00100094:1:1": {
+              "mnemonic": "LOAD",
+              "type": "t3",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "tf",
+                  "size": 8,
+                  "kind": "temporary",
+                  "operation": "ram:00100094:40:0"
+                }
+              ]
+            },
+            "ram:0010009c:41:2": {
+              "mnemonic": "PTRSUB",
+              "type": "tf",
+              "size": 8,
+              "inputs": [
+                {
+                  "type": "te",
+                  "size": 8,
+                  "kind": "parameter",
+                  "operation": "unique:00410d0f:15:0"
+                },
+                {
+                  "type": "t6",
+                  "size": 8,
+                  "kind": "constant",
+                  "value": 1
+                }
+              ]
+            },
+            "ram:0010009c:43:3": {
+              "mnemonic": "INSERT",
+              "type": "t3",
+              "size": 4,
+              "inputs": [
+                {
+                  "type": "t3",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:00100094:1:1"
+                },
+                {
+                  "type": "t0",
+                  "size": 4,
+                  "kind": "parameter",
+                  "operation": "unique:00410d10:16:0"
+                },
+                {
+                  "type": "t3",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 6
+                },
+                {
+                  "type": "t3",
+                  "size": 4,
+                  "kind": "constant",
+                  "value": 20
+                }
+              ]
+            },
+            "ram:0010009c:22:4": {
+              "mnemonic": "STORE",
+              "inputs": [
+                {
+                  "type": "tf",
+                  "size": 8,
+                  "kind": "temporary",
+                  "operation": "ram:0010009c:41:2"
+                },
+                {
+                  "type": "t3",
+                  "size": 4,
+                  "kind": "temporary",
+                  "operation": "ram:0010009c:43:3"
+                }
+              ]
+            },
+            "ram:001000a0:24:5": {
+              "mnemonic": "RETURN",
+              "inputs": []
+            }
+          },
+          "ordered_operations": [
+            "ram:00100094:40:0",
+            "ram:00100094:1:1",
+            "ram:0010009c:41:2",
+            "ram:0010009c:43:3",
+            "ram:0010009c:22:4",
+            "ram:001000a0:24:5"
+          ]
+        },
+        "ram:00100094:entry": {
+          "operations": {
+            "unique:00410d0f:15:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "p",
+              "type": "te",
+              "kind": "parameter",
+              "index": 0
+            },
+            "unique:00410d10:16:0": {
+              "mnemonic": "DECLARE_PARAMETER",
+              "name": "mid",
+              "type": "t0",
+              "kind": "parameter",
+              "index": 1
+            },
+            "entry.exit": {
+              "mnemonic": "BRANCH",
+              "target_block": "ram:00100094:0:basic"
+            }
+          },
+          "ordered_operations": [
+            "unique:00410d0f:15:0",
+            "unique:00410d10:16:0",
+            "entry.exit"
+          ]
+        }
+      },
+      "entry_block": "ram:00100094:entry",
+      "region": {
+        "kind": "graph",
+        "index": 0,
+        "children": [
+          {
+            "kind": "plain",
+            "index": 0,
+            "block": "ram:00100094:0:basic"
+          }
+        ]
+      }
+    }
+  },
+  "globals": {},
+  "types": {
+    "t0": {
+      "is_signed": false,
+      "name": "unsigned int",
+      "size": 4,
+      "kind": "integer"
+    },
+    "t1": {
+      "kind": "pointer",
+      "size": 8,
+      "element_type": "t2"
+    },
+    "t2": {
+      "name": "flags",
+      "kind": "struct",
+      "size": 4,
+      "fields": [
+        {
+          "type": "t12",
+          "offset": 0,
+          "size": 1,
+          "name": "mode"
+        },
+        {
+          "type": "t13",
+          "offset": 0,
+          "size": 1,
+          "name": "delta"
+        },
+        {
+          "type": "t14",
+          "offset": 1,
+          "size": 2,
+          "name": "count"
+        },
+        {
+          "type": "t15",
+          "offset": 2,
+          "size": 2,
+          "name": "bias"
+        }
+      ]
+    },
+    "t3": {
+      "name": "undefined4",
+      "size": 4,
+      "kind": "undefined"
+    },
+    "t4": {
+      "is_signed": true,
+      "name": "int",
+      "size": 4,
+      "kind": "integer"
+    },
+    "t5": {
+      "name": "void",
+      "size": 0,
+      "kind": "void"
+    },
+    "t6": {
+      "is_signed": true,
+      "name": "long",
+      "size": 8,
+      "kind": "integer"
+    },
+    "t7": {
+      "kind": "pointer",
+      "size": 8,
+      "element_type": "t8"
+    },
+    "t8": {
+      "name": "wide",
+      "kind": "struct",
+      "size": 8,
+      "fields": [
+        {
+          "type": "t16",
+          "offset": 0,
+          "size": 1,
+          "name": "tag"
+        },
+        {
+          "type": "t17",
+          "offset": 0,
+          "size": 6,
+          "name": "offset"
+        },
+        {
+          "type": "t18",
+          "offset": 5,
+          "size": 3,
+          "name": "rest"
+        }
+      ]
+    },
+    "t9": {
+      "name": "undefined8",
+      "size": 8,
+      "kind": "undefined"
+    },
+    "ta": {
+      "kind": "pointer",
+      "size": 8,
+      "element_type": "tb"
+    },
+    "tb": {
+      "name": "small",
+      "kind": "struct",
+      "size": 1,
+      "fields": [
+        {
+          "type": "t19",
+          "offset": 0,
+          "size": 1,
+          "name": "low"
+        },
+        {
+          "type": "t1a",
+          "offset": 0,
+          "size": 1,
+          "name": "mid"
+        },
+        {
+          "type": "t1b",
+          "offset": 0,
+          "size": 1,
+          "name": "high"
+        }
+      ]
+    },
+    "tc": {
+      "name": "undefined1",
+      "size": 1,
+      "kind": "undefined"
+    },
+    "td": {
+      "kind": "pointer",
+      "size": 8,
+      "element_type": "t1c"
+    },
+    "te": {
+      "kind": "pointer",
+      "size": 8,
+      "element_type": "t1d"
+    },
+    "tf": {
+      "kind": "pointer",
+      "size": 8,
+      "element_type": "tc"
+    },
+    "t10": {
+      "kind": "pointer",
+      "size": 8,
+      "element_type": "t11"
+    },
+    "t11": {
+      "name": "reg",
+      "kind": "struct",
+      "size": 4,
+      "fields": [
+        {
+          "type": "t1e",
+          "offset": 0,
+          "size": 1,
+          "name": "enable"
+        },
+        {
+          "type": "t12",
+          "offset": 0,
+          "size": 1,
+          "name": "mode"
+        },
+        {
+          "type": "t14",
+          "offset": 0,
+          "size": 2,
+          "name": "divider"
+        },
+        {
+          "type": "t1f",
+          "offset": 2,
+          "size": 2,
+          "name": "reserved"
+        }
+      ]
+    },
+    "t12": {
+      "kind": "bitfield",
+      "size": 1,
+      "bit_offset": 0,
+      "bit_size": 3,
+      "base_type": "t0"
+    },
+    "t13": {
+      "kind": "bitfield",
+      "size": 1,
+      "bit_offset": 3,
+      "bit_size": 5,
+      "base_type": "t4"
+    },
+    "t14": {
+      "kind": "bitfield",
+      "size": 2,
+      "bit_offset": 0,
+      "bit_size": 12,
+      "base_type": "t0"
+    },
+    "t15": {
+      "kind": "bitfield",
+      "size": 2,
+      "bit_offset": 4,
+      "bit_size": 12,
+      "base_type": "t4"
+    },
+    "t16": {
+      "kind": "bitfield",
+      "size": 1,
+      "bit_offset": 0,
+      "bit_size": 7,
+      "base_type": "t20"
+    },
+    "t17": {
+      "kind": "bitfield",
+      "size": 6,
+      "bit_offset": 7,
+      "bit_size": 40,
+      "base_type": "t6"
+    },
+    "t18": {
+      "kind": "bitfield",
+      "size": 3,
+      "bit_offset": 7,
+      "bit_size": 17,
+      "base_type": "t20"
+    },
+    "t19": {
+      "kind": "bitfield",
+      "size": 1,
+      "bit_offset": 0,
+      "bit_size": 2,
+      "base_type": "t21"
+    },
+    "t1a": {
+      "kind": "bitfield",
+      "size": 1,
+      "bit_offset": 2,
+      "bit_size": 3,
+      "base_type": "t22"
+    },
+    "t1b": {
+      "kind": "bitfield",
+      "size": 1,
+      "bit_offset": 5,
+      "bit_size": 3,
+      "base_type": "t21"
+    },
+    "t1c": {
+      "name": "big",
+      "kind": "struct",
+      "size": 48,
+      "fields": [
+        {
+          "type": "t12",
+          "offset": 0,
+          "size": 1,
+          "name": "mode"
+        },
+        {
+          "type": "t13",
+          "offset": 0,
+          "size": 1,
+          "name": "delta"
+        },
+        {
+          "type": "t14",
+          "offset": 1,
+          "size": 2,
+          "name": "count"
+        },
+        {
+          "type": "t15",
+          "offset": 2,
+          "size": 2,
+          "name": "bias"
+        },
+        {
+          "type": "t23",
+          "offset": 8,
+          "size": 32,
+          "name": "tail"
+        },
+        {
+          "type": "t4",
+          "offset": 40,
+          "size": 4,
+          "name": "last"
+        }
+      ]
+    },
+    "t1d": {
+      "name": "packed",
+      "kind": "struct",
+      "size": 6,
+      "fields": [
+        {
+          "type": "t21",
+          "offset": 0,
+          "size": 1,
+          "name": "tag"
+        },
+        {
+          "type": "t24",
+          "offset": 1,
+          "size": 1,
+          "name": "lo"
+        },
+        {
+          "type": "t25",
+          "offset": 1,
+          "size": 4,
+          "name": "mid"
+        },
+        {
+          "type": "t24",
+          "offset": 4,
+          "size": 1,
+          "name": "hi"
+        },
+        {
+          "type": "t21",
+          "offset": 5,
+          "size": 1,
+          "name": "end"
+        }
+      ]
+    },
+    "t1e": {
+      "kind": "bitfield",
+      "size": 1,
+      "bit_offset": 0,
+      "bit_size": 1,
+      "base_type": "t0"
+    },
+    "t1f": {
+      "kind": "bitfield",
+      "size": 2,
+      "bit_offset": 0,
+      "bit_size": 16,
+      "base_type": "t0"
+    },
+    "t20": {
+      "name": "unsigned long",
+      "kind": "typedef",
+      "size": 8,
+      "base_type": "t26"
+    },
+    "t21": {
+      "is_signed": false,
+      "name": "unsigned char",
+      "size": 1,
+      "kind": "integer"
+    },
+    "t22": {
+      "is_signed": true,
+      "name": "char",
+      "size": 1,
+      "kind": "integer"
+    },
+    "t23": {
+      "kind": "array",
+      "size": 32,
+      "num_elements": 4,
+      "element_type": "t6"
+    },
+    "t24": {
+      "kind": "bitfield",
+      "size": 1,
+      "bit_offset": 0,
+      "bit_size": 6,
+      "base_type": "t0"
+    },
+    "t25": {
+      "kind": "bitfield",
+      "size": 4,
+      "bit_offset": 6,
+      "bit_size": 20,
+      "base_type": "t0"
+    },
+    "t26": {
+      "is_signed": false,
+      "name": "unsigned long",
+      "size": 8,
+      "kind": "integer"
+    },
+    "tcol_narrow": {
+      "name": "unaligned1_unsigned_int",
+      "kind": "typedef",
+      "size": 1,
+      "base_type": "t21"
+    },
+    "tcol_aligned": {
+      "name": "unaligned1_undefined4",
+      "kind": "typedef",
+      "size": 4,
+      "base_type": "t3"
+    }
+  },
+  "boundary_repairs": []
+}
