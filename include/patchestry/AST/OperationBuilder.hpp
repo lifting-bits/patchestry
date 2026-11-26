@@ -215,13 +215,16 @@ namespace patchestry::ast {
             clang::ASTContext &ctx, const Function &function, const Operation &op
         );
 
-        // Operand of a bit-range operation as an unsigned integer of the
-        // varnode's width.  A record or array operand (the LOAD of the struct
-        // that holds the bit-field) is reinterpreted.  Returns nullptr when
-        // the operand has no integer view.
+        // Operand of a bit-range operation as an unsigned integer.  A record
+        // or array operand (the LOAD of the struct that holds the bit-field)
+        // is reinterpreted.  `logical_bits` is the varnode's width.  The
+        // returned expression is at least that wide and can be wider: a
+        // 3-byte operand has no integer type of its own and is carried in a
+        // 4-byte one, whose top byte is not part of the value.  Returns
+        // nullptr when the operand has no integer view.
         clang::Expr *bit_range_operand(
             clang::ASTContext &ctx, const Function &function, const Varnode &vnode,
-            clang::SourceLocation loc, const std::string &op_key
+            clang::SourceLocation loc, const std::string &op_key, unsigned &logical_bits
         );
 
         std::pair< clang::Stmt *, bool > create_builtin_call_expr(

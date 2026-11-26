@@ -31,6 +31,7 @@
 #include <clang/Sema/Sema.h>
 #include <llvm/ADT/APInt.h>
 #include <llvm/ADT/ArrayRef.h>
+#include <llvm/ADT/bit.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/Support/Casting.h>
 
@@ -4140,7 +4141,7 @@ namespace patchestry::ast {
 
     clang::Expr *OpBuilder::bit_range_operand(
         clang::ASTContext &ctx, const Function &function, const Varnode &vnode,
-        clang::SourceLocation loc, const std::string &op_key
+        clang::SourceLocation loc, const std::string &op_key, unsigned &logical_bits
     ) {
         auto *expr = AS_EXPR_OR_NULL(create_varnode(ctx, function, vnode), op_key);
         if (!expr) {
@@ -4161,9 +4162,18 @@ namespace patchestry::ast {
             return nullptr;
         }
 
-        auto bits = vnode.size != 0 ? vnode.size * 8U
-                                    : static_cast< unsigned >(ctx.getTypeSize(type));
-        auto unsigned_type = ctx.getIntTypeForBitwidth(bits, /*Signed=*/false);
+        auto type_bits = static_cast< unsigned >(ctx.getTypeSize(type));
+        logical_bits   = vnode.size != 0 ? vnode.size * 8U : type_bits;
+
+        // The view is as wide as the expression that carries the operand and
+        // never narrower than the operand.  A width with no integer type (24,
+        // 40, 48 or 56 bits) takes the next one that has.
+        clang::QualType unsigned_type;
+        for (unsigned width = std::max(llvm::bit_ceil(std::max(logical_bits, type_bits)), 8U);
+             width <= 128U && unsigned_type.isNull(); width *= 2U)
+        {
+            unsigned_type = ctx.getIntTypeForBitwidth(width, /*Signed=*/false);
+        }
         if (unsigned_type.isNull()) {
             return nullptr;
         }
@@ -4187,14 +4197,18 @@ namespace patchestry::ast {
         }
 
         auto op_loc  = SourceLocation(ctx.getSourceManager(), op.key);
-        auto *source = bit_range_operand(ctx, function, op.inputs[0], op_loc, op.key);
+        unsigned source_bits = 0;
+        auto *source =
+            bit_range_operand(ctx, function, op.inputs[0], op_loc, op.key, source_bits);
         if (!source) {
             LOG(ERROR) << name << " source has no integer view. key: " << op.key << "\n";
             return {};
         }
 
-        auto source_bits = static_cast< unsigned >(ctx.getTypeSize(source->getType()));
-        auto range       = read_bit_range(op.inputs[1], op.inputs[2], source_bits);
+        // The range is checked against the operand's own width.  The bits of
+        // a wider carrier above that width are never selected.
+        auto carrier_bits = static_cast< unsigned >(ctx.getTypeSize(source->getType()));
+        auto range        = read_bit_range(op.inputs[1], op.inputs[2], source_bits);
         if (!range) {
             LOG(ERROR) << name << " bit range is not constant or exceeds its " << source_bits
                        << "-bit source. key: " << op.key << "\n";
@@ -4217,7 +4231,7 @@ namespace patchestry::ast {
         // The arithmetic runs in an unsigned type at least as wide as int, so
         // integer promotion cannot change it, and wide enough for both the
         // source and the output.
-        auto work_bits = std::max({ source_bits, target_bits, 32U });
+        auto work_bits = std::max({ carrier_bits, target_bits, 32U });
         auto work_type = ctx.getIntTypeForBitwidth(work_bits, /*Signed=*/false);
         if (work_type.isNull()) {
             LOG(ERROR) << name << " has no " << work_bits << "-bit integer type. key: "
@@ -4292,23 +4306,26 @@ namespace patchestry::ast {
         }
 
         auto op_loc     = SourceLocation(ctx.getSourceManager(), op.key);
-        auto *container = bit_range_operand(ctx, function, op.inputs[0], op_loc, op.key);
-        auto *field     = bit_range_operand(ctx, function, op.inputs[1], op_loc, op.key);
+        unsigned container_bits = 0;
+        unsigned field_bits     = 0;
+        auto *container =
+            bit_range_operand(ctx, function, op.inputs[0], op_loc, op.key, container_bits);
+        auto *field =
+            bit_range_operand(ctx, function, op.inputs[1], op_loc, op.key, field_bits);
         if (!container || !field) {
             LOG(ERROR) << "INSERT operand has no integer view. key: " << op.key << "\n";
             return {};
         }
 
-        auto container_bits = static_cast< unsigned >(ctx.getTypeSize(container->getType()));
-        auto field_bits     = static_cast< unsigned >(ctx.getTypeSize(field->getType()));
-        auto range          = read_bit_range(op.inputs[2], op.inputs[3], container_bits);
+        auto carrier_bits = static_cast< unsigned >(ctx.getTypeSize(container->getType()));
+        auto range        = read_bit_range(op.inputs[2], op.inputs[3], container_bits);
         if (!range || range->size > field_bits) {
             LOG(ERROR) << "INSERT bit range is not constant or exceeds its operands. key: "
                        << op.key << "\n";
             return {};
         }
 
-        auto work_bits = std::max(container_bits, 32U);
+        auto work_bits = std::max(carrier_bits, 32U);
         auto work_type = ctx.getIntTypeForBitwidth(work_bits, /*Signed=*/false);
         if (work_type.isNull()) {
             LOG(ERROR) << "INSERT has no " << work_bits << "-bit integer type. key: " << op.key
@@ -4360,7 +4377,7 @@ namespace patchestry::ast {
             auto it = type_builder().GetSerializedTypes().find(*op.type);
             if (it != type_builder().GetSerializedTypes().end()
                 && it->second->isIntegralOrEnumerationType()
-                && ctx.getTypeSize(it->second) == container_bits)
+                && ctx.getTypeSize(it->second) == carrier_bits)
             {
                 target_type = it->second;
             }
