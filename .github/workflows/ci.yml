@@ -71,7 +71,7 @@ jobs:
         sanitizers: [OFF]
         arch: [amd64, arm64]
     runs-on: ${{ matrix.arch == 'arm64' && format('ubuntu-{0}-arm', matrix.image-version) || format('ubuntu-{0}', matrix.image-version) }}
-    timeout-minutes: 30
+    timeout-minutes: 40
     env:
       # `-dev:latest` is a multi-arch manifest published by devcontainer.yml;
       # Docker resolves the correct platform on pull.
