@@ -1031,7 +1031,8 @@ public class PcodeSerializerTest extends AbstractGhidraHeadlessIntegrationTest {
         JsonObject dwordField = fields.next().getAsJsonObject();
 
         String dwordFieldName = dwordField.get("name").getAsString();
-        assertEquals(dwordFieldName, "de woord");
+        // Ghidra replaces whitespace in a field name with an underscore.
+        assertEquals(dwordFieldName, "de_woord");
 
         int dwordOffset = dwordField.get("offset").getAsInt();
         assertEquals(dwordComponent.getOffset(), dwordOffset);
