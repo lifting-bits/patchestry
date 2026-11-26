@@ -123,6 +123,32 @@ namespace patchestry::ast {
             }
         }
 
+        // A read of a scalar global at a width other than the global's own
+        // reads that many bytes at its address.  Converting the global's
+        // value instead would read the wrong number of bytes.
+        if (narrow_to_size_hint && vnode.kind == Varnode::VARNODE_GLOBAL && vnode.size > 0) {
+            auto *ref = clang::dyn_cast< clang::DeclRefExpr >(result);
+            if (ref != nullptr && clang::isa< clang::VarDecl >(ref->getDecl())) {
+                auto storage_type = ref->getType();
+                auto declared     = vnode.type_key.empty()
+                                        ? clang::QualType()
+                                        : type_builder().GetSerializedType(vnode.type_key);
+                // A pointer-typed operand on non-pointer storage is the
+                // global's address, handled above and below.
+                bool is_address = !declared.isNull() && declared->isPointerType()
+                    && !storage_type->isPointerType();
+                if (storage_type->isScalarType() && !is_address) {
+                    if (auto *view = sized_global_view(
+                            ctx, function, ref, declared, vnode.size, loc,
+                            vnode.global ? *vnode.global : std::string()
+                        ))
+                    {
+                        return view;
+                    }
+                }
+            }
+        }
+
         // Per-varnode-truthful narrowing (#225): aggregate storage + a
         // width hint always narrows here, so every consumer sees a
         // correctly-typed Expr.  Output varnodes (vnode.size == 0)
@@ -203,6 +229,99 @@ namespace patchestry::ast {
             ctx, clang::NestedNameSpecifierLoc(), clang::SourceLocation(), param_decl, false,
             VirtualLoc(ctx), param_decl->getType(), clang::VK_LValue
         );
+    }
+
+    // The lvalue `*(T *)&global` for an access of `bytes` bytes, or nullptr
+    // when the global is already accessed that way.  T is `declared` when it is a
+    // scalar of that width, else an unsigned integer of that width.  The
+    // access keeps the global's alignment.  An access wider than the global
+    // runs past it into whatever follows in the binary; the lifted module
+    // does not keep that neighbour adjacent, so it is reported.
+    clang::Expr *OpBuilder::sized_global_view(
+        clang::ASTContext &ctx, const Function &function, clang::DeclRefExpr *ref,
+        clang::QualType declared, unsigned bytes, clang::SourceLocation loc,
+        const std::string &key
+    ) {
+        auto storage_type = ref->getType();
+        if (bytes == 0 || storage_type->isIncompleteType() || storage_type->isArrayType()) {
+            return nullptr;
+        }
+        auto access_bits  = static_cast< uint64_t >(bytes) * 8U;
+        auto storage_bits = ctx.getTypeSize(storage_type);
+        // A scalar access to a record of the same width is viewed too:
+        // assigning an integer to the record would need a reinterpreting
+        // copy from a temporary.
+        bool scalar_on_record = storage_type->isRecordType() && !declared.isNull()
+            && declared->isScalarType();
+        if (storage_bits == access_bits && !scalar_on_record) {
+            return nullptr;
+        }
+
+        auto access_type = declared;
+        if (access_type.isNull() || !access_type->isScalarType()
+            || ctx.getTypeSize(access_type) != access_bits)
+        {
+            access_type =
+                ctx.getIntTypeForBitwidth(static_cast< unsigned >(access_bits), /*Signed=*/false);
+        }
+        if (access_type.isNull()) {
+            return nullptr;
+        }
+
+        auto address = sema().CreateBuiltinUnaryOp(loc, clang::UO_AddrOf, ref);
+        if (address.isInvalid()) {
+            return nullptr;
+        }
+        auto *pointer = make_explicit_cast(
+            ctx, address.getAs< clang::Expr >(), ctx.getPointerType(access_type), loc
+        );
+        pointer = lower_access_alignment(
+            ctx, pointer, loc, ctx.getTypeAlignInChars(storage_type)
+        );
+        if (pointer == nullptr) {
+            return nullptr;
+        }
+        auto view = sema().CreateBuiltinUnaryOp(loc, clang::UO_Deref, pointer);
+        if (view.isInvalid()) {
+            return nullptr;
+        }
+
+        if (access_bits > storage_bits) {
+            function_builder().loss_reporter.get().report(
+                loc, "global-access-width",
+                std::to_string(bytes) + "-byte access to global '"
+                    + ref->getDecl()->getNameAsString() + "', which is "
+                    + std::to_string(storage_bits / 8U) + " bytes, in function '"
+                    + function.name + "'. key: " + key
+            );
+        }
+        return view.getAs< clang::Expr >();
+    }
+
+    // The output of `op` as an assignable expression.  An output that names a
+    // global is written at the operation's width: assigning to the global
+    // itself would write the global's own width, clearing bytes next to a
+    // narrow write and dropping the top of a wide one.
+    clang::Stmt *OpBuilder::create_output_varnode(
+        clang::ASTContext &ctx, const Function &function, const Operation &op
+    ) {
+        auto *result = create_varnode(ctx, function, *op.output);
+        if (result == nullptr || op.output->kind != Varnode::VARNODE_GLOBAL || !op.type) {
+            return result;
+        }
+        auto *ref = clang::dyn_cast< clang::DeclRefExpr >(result);
+        if (ref == nullptr || !clang::isa< clang::VarDecl >(ref->getDecl())) {
+            return result;
+        }
+        auto op_type = type_builder().GetSerializedType(*op.type);
+        if (op_type.isNull() || op_type->isIncompleteType()) {
+            return result;
+        }
+        auto bytes = static_cast< unsigned >(ctx.getTypeSizeInChars(op_type).getQuantity());
+        auto *view = sized_global_view(
+            ctx, function, ref, op_type, bytes, VirtualLoc(ctx), op.key
+        );
+        return view != nullptr ? view : result;
     }
 
     clang::Stmt *OpBuilder::create_global(clang::ASTContext &ctx, const Varnode &vnode) {

@@ -989,7 +989,7 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!output_expr) {
             return { nullptr, false };
         }
@@ -1035,7 +1035,7 @@ namespace patchestry::ast {
                 return { result_expr, true };
             }
             auto *output_expr =
-                AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+                AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
             if (!output_expr) {
                 return { nullptr, false };
             }
@@ -1105,7 +1105,7 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!output_expr) {
             return { nullptr, false };
         }
@@ -2088,7 +2088,7 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!output_expr) {
             return {};
         }
@@ -2521,7 +2521,7 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!output_expr) {
             return {};
         }
@@ -2637,7 +2637,7 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!output_expr) {
             return {};
         }
@@ -3022,7 +3022,7 @@ namespace patchestry::ast {
             if (merge_to_next) {
                 return std::make_pair(static_cast< clang::Stmt * >(result_expr), merge_to_next);
             }
-            auto *output_stmt = create_varnode(ctx, function, *op.output);
+            auto *output_stmt = create_output_varnode(ctx, function, op);
             if (!output_stmt) {
                 LOG(ERROR) << "PIECE: record-type output varnode produced null Stmt. key: "
                            << op.key;
@@ -3150,7 +3150,7 @@ namespace patchestry::ast {
             return std::make_pair(or_expr, merge_to_next);
         }
 
-        auto *output_stmt = create_varnode(ctx, function, *op.output);
+        auto *output_stmt = create_output_varnode(ctx, function, op);
         if (!output_stmt) {
             LOG(ERROR) << "PIECE: output varnode produced null Stmt. key: " << op.key;
             return {};
@@ -3227,7 +3227,7 @@ namespace patchestry::ast {
             if (merge_to_next) {
                 return std::make_pair(static_cast< clang::Stmt * >(result_expr), merge_to_next);
             }
-            auto *out_stmt_in = create_varnode(ctx, function, *op.output);
+            auto *out_stmt_in = create_output_varnode(ctx, function, op);
             if (!out_stmt_in) {
                 LOG(ERROR) << "SUBPIECE: record-type output varnode produced null Stmt. key: "
                            << op.key;
@@ -3419,7 +3419,7 @@ namespace patchestry::ast {
             return std::make_pair(result_expr, merge_to_next);
         }
 
-        auto *out_stmt_in = create_varnode(ctx, function, *op.output);
+        auto *out_stmt_in = create_output_varnode(ctx, function, op);
         if (!out_stmt_in) {
             LOG(ERROR) << "SUBPIECE: output varnode produced null Stmt. key: " << op.key;
             return std::make_pair(nullptr, false);
@@ -3497,7 +3497,7 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!output_expr) {
             return {};
         }
@@ -3562,7 +3562,7 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!output_expr) {
             return {};
         }
@@ -3602,7 +3602,7 @@ namespace patchestry::ast {
         }
 
         auto *output =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!output) {
             return {};
         }
@@ -3707,7 +3707,7 @@ namespace patchestry::ast {
         }
 
         auto *output =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!output) {
             return {};
         }
@@ -3777,7 +3777,7 @@ namespace patchestry::ast {
         }
 
         auto *output =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!output) {
             return {};
         }
@@ -3844,7 +3844,7 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!output_expr) {
             return {};
         }
@@ -3947,7 +3947,7 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!output_expr) {
             return {};
         }
@@ -4246,7 +4246,7 @@ namespace patchestry::ast {
             return { value, true };
         }
         auto *output_expr =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!output_expr) {
             return {};
         }
@@ -4348,7 +4348,7 @@ namespace patchestry::ast {
             return { value, true };
         }
         auto *output_expr =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!output_expr) {
             return {};
         }
@@ -4375,7 +4375,7 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!output_expr) {
             return {};
         }
@@ -4418,7 +4418,7 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!output_expr) {
             return {};
         }
@@ -4461,7 +4461,7 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!output_expr) {
             return {};
         }
@@ -4505,7 +4505,7 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!output_expr) {
             return {};
         }
@@ -4550,7 +4550,7 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!output_expr) {
             return { nullptr, false };
         }
@@ -4744,7 +4744,7 @@ namespace patchestry::ast {
         }
 
         auto *output_expr =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!output_expr) {
             return { nullptr, false };
         }
@@ -4871,7 +4871,7 @@ namespace patchestry::ast {
             return std::make_pair(static_cast< clang::Stmt * >(result_expr), merge_to_next);
         }
 
-        auto *output_stmt = create_varnode(ctx, function, *op.output);
+        auto *output_stmt = create_output_varnode(ctx, function, op);
         if (output_stmt->getStmtClass() == clang::Stmt::DeclStmtClass) {
             auto *decl     = clang::dyn_cast< clang::DeclStmt >(output_stmt)->getSingleDecl();
             auto *ref_expr = clang::DeclRefExpr::Create(
@@ -4933,7 +4933,7 @@ namespace patchestry::ast {
                 );
             }
             auto *out = AS_EXPR_OR_NULL(
-                create_varnode(ctx, function, *op.output), op.key);
+                create_output_varnode(ctx, function, op), op.key);
             if (!out) {
                 return std::make_pair(
                     clang::dyn_cast< clang::Stmt >(typed_err), false
@@ -4995,7 +4995,7 @@ namespace patchestry::ast {
             return { cast, true };
         }
 
-        auto *output_stmt = create_varnode(ctx, function, *op.output);
+        auto *output_stmt = create_output_varnode(ctx, function, op);
         if (!output_stmt) {
             LOG(ERROR) << "CAST: output varnode produced null Stmt. key: " << op.key;
             return {};
@@ -5478,7 +5478,7 @@ namespace patchestry::ast {
 
         // Assign result to output
         auto *out =
-            AS_EXPR_OR_NULL(create_varnode(ctx, function, *op.output), op.key);
+            AS_EXPR_OR_NULL(create_output_varnode(ctx, function, op), op.key);
         if (!out) {
             return {};
         }
@@ -5535,7 +5535,7 @@ namespace patchestry::ast {
 
         if (op.output) {
             auto *out = AS_EXPR_OR_NULL(
-                create_varnode(ctx, function, *op.output), op.key);
+                create_output_varnode(ctx, function, op), op.key);
             if (!out) {
                 return {};
             }
@@ -5710,7 +5710,7 @@ namespace patchestry::ast {
 
         // Assign result to output
         auto *out = AS_EXPR_OR_NULL(
-            create_varnode(ctx, function, *op.output), op.key);
+            create_output_varnode(ctx, function, op), op.key);
         if (!out) {
             return {};
         }

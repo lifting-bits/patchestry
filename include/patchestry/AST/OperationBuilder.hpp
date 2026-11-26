@@ -413,6 +413,21 @@ namespace patchestry::ast {
 
         clang::Stmt *create_global(clang::ASTContext &ctx, const Varnode &vnode);
 
+        // `*(T *)&global` for an access of `bytes` bytes to a global of
+        // another width; nullptr when the widths agree or no view can be
+        // built.  Reports an access wider than the global.
+        clang::Expr *sized_global_view(
+            clang::ASTContext &ctx, const Function &function, clang::DeclRefExpr *ref,
+            clang::QualType declared, unsigned bytes, clang::SourceLocation loc,
+            const std::string &key
+        );
+
+        // The output varnode of `op` as an assignable expression.  A global
+        // output is viewed at the operation's width.
+        clang::Stmt *create_output_varnode(
+            clang::ASTContext &ctx, const Function &function, const Operation &op
+        );
+
         clang::Stmt *create_temporary(
             clang::ASTContext &ctx, const Function &function, const Varnode &vnode
         );
