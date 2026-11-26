@@ -90,6 +90,10 @@ public class PatchestryDecompileCFunction extends GhidraScript {
         }
         DecompileOptions options =
             DecompilerUtils.getDecompileOptions(state.getTool(), currentProgram);
+        // Same as PatchestryDecompileFunctions: keep the shifts and masks of
+        // the binary instead of Ghidra 12.2's per-field bit-field accesses,
+        // which can turn one memory write into several.
+        options.setBitfieldAccess(false);
         DecompInterface decompiler = new DecompInterface();
         decompiler.setOptions(options);
         // Enable C-code emission — this is the whole point of this script
