@@ -63,6 +63,23 @@ namespace patchestry::ast {
             return nullptr;
         }
 
+        // The printer adds no parentheses of its own.  An expression that is
+        // about to become the operand of a cast or of another operator is
+        // wrapped when it is itself an operator expression: `x | y` under a
+        // mask would otherwise print as `x | y & 4095U`, and `(char *) p + 1`
+        // under a cast as `(T *)(char *) p + 1`.
+        clang::Expr *parenthesize_compound(
+            clang::ASTContext &ctx, clang::Expr *expr, clang::SourceLocation loc
+        ) {
+            const auto *inner = expr->IgnoreImplicit();
+            if (clang::isa< clang::BinaryOperator >(inner)
+                || clang::isa< clang::AbstractConditionalOperator >(inner))
+            {
+                return new (ctx) clang::ParenExpr(loc, loc, expr);
+            }
+            return expr;
+        }
+
         // Upper bound on the alignment of the address `expr` that follows
         // from constant byte offsets in it, or nullopt when there is none.
         // The base a constant is added to is taken to be aligned for the
@@ -1062,7 +1079,9 @@ namespace patchestry::ast {
                     && !(*op_type_opt)->isIncompleteType()
                     && ctx.getTypeSize(from_pointee) != ctx.getTypeSize(*op_type_opt))
                 {
-                    cast_expr = make_explicit_cast(ctx, input_expr, pointer_type, op_loc);
+                    cast_expr = make_explicit_cast(
+                        ctx, parenthesize_compound(ctx, input_expr, op_loc), pointer_type, op_loc
+                    );
                     if (cast_expr != nullptr) {
                         prior_alignment = ctx.getTypeAlignInChars(from_pointee);
                     }
@@ -1216,8 +1235,10 @@ namespace patchestry::ast {
                 operand = cast->getSubExpr();
             }
         }
-        auto *lowered =
-            make_explicit_cast(ctx, operand, ctx.getPointerType(aligned_type), op_loc);
+        auto *lowered = make_explicit_cast(
+            ctx, parenthesize_compound(ctx, operand, op_loc),
+            ctx.getPointerType(aligned_type), op_loc
+        );
         return lowered != nullptr ? lowered : addr;
     }
 
@@ -1259,8 +1280,10 @@ namespace patchestry::ast {
         if (store_type.isNull()) {
             return addr;
         }
-        auto *retargeted =
-            make_explicit_cast(ctx, addr, ctx.getPointerType(store_type), op_loc);
+        auto *retargeted = make_explicit_cast(
+            ctx, parenthesize_compound(ctx, addr, op_loc), ctx.getPointerType(store_type),
+            op_loc
+        );
         if (retargeted == nullptr) {
             return addr;
         }
@@ -4117,6 +4140,9 @@ namespace patchestry::ast {
         if (!expr) {
             return nullptr;
         }
+
+        // The operand becomes an operand of a cast, a shift or a mask.
+        expr = parenthesize_compound(ctx, expr, loc);
 
         if (expr->getType()->isArrayType()) {
             expr = narrow_aggregate_to_integer(ctx, expr, loc, vnode.size);
