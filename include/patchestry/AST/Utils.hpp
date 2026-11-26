@@ -53,6 +53,14 @@ namespace patchestry::ast {
         bool is_signed, clang::SourceLocation loc
     );
 
+    /// Adds the parentheses the printed C needs.  The lifter builds expression
+    /// trees directly and the printer writes a tree without parentheses of its
+    /// own, so `(x | y) * 3` built as a tree prints as `x | y * 3`.  Every
+    /// function body and variable initializer in the unit is walked, and an
+    /// operand is wrapped in a ParenExpr where C would otherwise bind it
+    /// differently.  The trees are unchanged otherwise.
+    void ParenthesizeForPrinting(clang::ASTContext &ctx);
+
     clang::SourceLocation SourceLocation(clang::SourceManager &sm, std::string key);
 
     /// True when the Ghidra prototype-model name `name` selects the same

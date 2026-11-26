@@ -14,6 +14,7 @@
 #include <clang/Frontend/CompilerInstance.h>
 
 #include <patchestry/AST/ASTConsumer.hpp>
+#include <patchestry/AST/Utils.hpp>
 #include <patchestry/Frontend/ClangFrontend.hpp>
 #include <patchestry/Ghidra/Target.hpp>
 
@@ -34,6 +35,8 @@ namespace patchestry::ast {
         if (!ci) { return nullptr; }
 
         ci->getASTConsumer().HandleTranslationUnit(ci->getASTContext());
+        // The unit is complete: no later step builds or rewrites expressions.
+        ParenthesizeForPrinting(ci->getASTContext());
         // The consumer is the one created above, so the cast is exact.
         auto bindings = static_cast< PcodeASTConsumer & >(ci->getASTConsumer())
                             .collect_bindings(ci->getASTContext());

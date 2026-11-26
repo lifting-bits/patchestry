@@ -9,12 +9,15 @@
 #include <cctype>
 
 #include <clang/AST/ASTContext.h>
+#include <clang/AST/Decl.h>
 #include <clang/AST/Expr.h>
 #include <clang/AST/OperationKinds.h>
+#include <clang/AST/Stmt.h>
 #include <clang/AST/Type.h>
 #include <clang/Basic/SourceLocation.h>
 #include <clang/Basic/SourceManager.h>
 #include <clang/Basic/TargetInfo.h>
+#include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/MemoryBuffer.h>
 
@@ -538,6 +541,186 @@ namespace patchestry::ast {
         const auto variant = parts[3];
         return variant == "v4" || variant == "v4t" || variant == "v5" || variant == "v5t"
             || variant == "v6";
+    }
+
+    namespace {
+
+        // Binding strength of an expression as the printer writes it, on the
+        // scale of the C grammar: 16 for a primary or postfix expression down
+        // to 1 for the comma operator.
+        enum : unsigned {
+            kPrecComma       = 1,
+            kPrecAssign      = 2,
+            kPrecConditional = 3,
+            kPrecUnary       = 14,
+            kPrecPostfix     = 16,
+        };
+
+        unsigned BinaryPrecedence(clang::BinaryOperatorKind kind) {
+            switch (kind) {
+                case clang::BO_PtrMemD:
+                case clang::BO_PtrMemI:
+                    return 14;
+                case clang::BO_Mul:
+                case clang::BO_Div:
+                case clang::BO_Rem:
+                    return 13;
+                case clang::BO_Add:
+                case clang::BO_Sub:
+                    return 12;
+                case clang::BO_Shl:
+                case clang::BO_Shr:
+                    return 11;
+                case clang::BO_Cmp:
+                case clang::BO_LT:
+                case clang::BO_GT:
+                case clang::BO_LE:
+                case clang::BO_GE:
+                    return 10;
+                case clang::BO_EQ:
+                case clang::BO_NE:
+                    return 9;
+                case clang::BO_And:
+                    return 8;
+                case clang::BO_Xor:
+                    return 7;
+                case clang::BO_Or:
+                    return 6;
+                case clang::BO_LAnd:
+                    return 5;
+                case clang::BO_LOr:
+                    return 4;
+                case clang::BO_Comma:
+                    return kPrecComma;
+                default: // assignment and compound assignment
+                    return kPrecAssign;
+            }
+        }
+
+        // `expr` is the node the printer writes: implicit nodes are skipped by
+        // the caller.
+        unsigned PrintedPrecedence(const clang::Expr *expr) {
+            if (const auto *bo = llvm::dyn_cast< clang::BinaryOperator >(expr)) {
+                return BinaryPrecedence(bo->getOpcode());
+            }
+            if (llvm::isa< clang::AbstractConditionalOperator >(expr)) {
+                return kPrecConditional;
+            }
+            if (const auto *uo = llvm::dyn_cast< clang::UnaryOperator >(expr)) {
+                return uo->isPostfix() ? kPrecPostfix : kPrecUnary;
+            }
+            if (llvm::isa< clang::CStyleCastExpr >(expr)
+                || llvm::isa< clang::UnaryExprOrTypeTraitExpr >(expr))
+            {
+                return kPrecUnary;
+            }
+            return kPrecPostfix;
+        }
+
+        // Lowest precedence the operand in slot `index` of `parent` may have
+        // and still print without parentheses; 0 when the slot is delimited
+        // already (a statement, a parenthesized or bracketed position).
+        unsigned RequiredPrecedence(const clang::Stmt *parent, unsigned index) {
+            if (const auto *bo = llvm::dyn_cast< clang::BinaryOperator >(parent)) {
+                unsigned prec = BinaryPrecedence(bo->getOpcode());
+                if (bo->isAssignmentOp()) {
+                    // unary-expression = assignment-expression
+                    return index == 0 ? kPrecUnary : kPrecAssign;
+                }
+                // Left associative: the right operand binds one level tighter.
+                return index == 0 ? prec : prec + 1;
+            }
+            if (llvm::isa< clang::ConditionalOperator >(parent)) {
+                // logical-or ? expression : conditional-expression
+                switch (index) {
+                    case 0:
+                        return kPrecConditional + 1;
+                    case 1:
+                        return 0;
+                    default:
+                        return kPrecConditional;
+                }
+            }
+            if (const auto *uo = llvm::dyn_cast< clang::UnaryOperator >(parent)) {
+                return uo->isPostfix() ? kPrecPostfix : kPrecUnary;
+            }
+            if (llvm::isa< clang::CStyleCastExpr >(parent)) {
+                return kPrecUnary;
+            }
+            if (const auto *sizeof_expr =
+                    llvm::dyn_cast< clang::UnaryExprOrTypeTraitExpr >(parent))
+            {
+                return sizeof_expr->isArgumentType() ? 0 : kPrecUnary;
+            }
+            if (llvm::isa< clang::MemberExpr >(parent)) {
+                return kPrecPostfix;
+            }
+            if (llvm::isa< clang::ArraySubscriptExpr >(parent)) {
+                return index == 0 ? kPrecPostfix : 0;
+            }
+            if (llvm::isa< clang::CallExpr >(parent)) {
+                // The callee is a postfix expression; an argument is an
+                // assignment expression, so only a comma needs wrapping.
+                return index == 0 ? kPrecPostfix : kPrecAssign;
+            }
+            if (llvm::isa< clang::InitListExpr >(parent)) {
+                return kPrecAssign;
+            }
+            return 0;
+        }
+
+        void ParenthesizeOperands(
+            clang::ASTContext &ctx, clang::Stmt *parent,
+            llvm::SmallPtrSetImpl< clang::Stmt * > &seen
+        ) {
+            // A node can be shared between two parents; its operands are
+            // handled once.
+            if (parent == nullptr || !seen.insert(parent).second) {
+                return;
+            }
+            unsigned index = 0;
+            for (auto slot = parent->child_begin(); slot != parent->child_end();
+                 ++slot, ++index)
+            {
+                clang::Stmt *child = *slot;
+                if (child == nullptr) {
+                    continue;
+                }
+                ParenthesizeOperands(ctx, child, seen);
+
+                auto *operand = llvm::dyn_cast< clang::Expr >(child);
+                if (operand == nullptr) {
+                    continue;
+                }
+                unsigned required = RequiredPrecedence(parent, index);
+                if (required == 0
+                    || PrintedPrecedence(operand->IgnoreImplicit()) >= required)
+                {
+                    continue;
+                }
+                // The wrapper goes above any implicit conversion, which keeps
+                // the operand's type and value category.
+                *slot = new (ctx) clang::ParenExpr(
+                    operand->getBeginLoc(), operand->getEndLoc(), operand
+                );
+            }
+        }
+
+    } // namespace
+
+    void ParenthesizeForPrinting(clang::ASTContext &ctx) {
+        llvm::SmallPtrSet< clang::Stmt *, 32 > seen;
+        for (auto *decl : ctx.getTranslationUnitDecl()->decls()) {
+            if (auto *function = llvm::dyn_cast< clang::FunctionDecl >(decl)) {
+                if (function->doesThisDeclarationHaveABody()) {
+                    ParenthesizeOperands(ctx, function->getBody(), seen);
+                }
+            } else if (auto *var = llvm::dyn_cast< clang::VarDecl >(decl)) {
+                if (var->hasInit()) {
+                    ParenthesizeOperands(ctx, var->getInit(), seen);
+                }
+            }
+        }
     }
 
 } // namespace patchestry::ast
