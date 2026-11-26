@@ -1190,24 +1190,49 @@ namespace patchestry::ast {
             return addr;
         }
 
-        // One typedef per (alignment, type), found again by name.
+        // One typedef per (alignment, type), found again by name.  A name is
+        // only reused for a typedef that is one of these: the same underlying
+        // type and the same alignment attribute.  Any other declaration with
+        // the name (a typedef, variable or function of the program) is a
+        // collision, and the next numbered name is tried: reusing a program
+        // typedef of another type would change the width of the access.
         auto unqualified = pointee.getUnqualifiedType();
-        std::string name = "unaligned" + std::to_string(known->getQuantity()) + "_";
+        std::string base = "unaligned" + std::to_string(known->getQuantity()) + "_";
         for (char c : unqualified.getAsString(ctx.getPrintingPolicy())) {
-            name += std::isalnum(static_cast< unsigned char >(c)) != 0 ? c : '_';
+            base += std::isalnum(static_cast< unsigned char >(c)) != 0 ? c : '_';
         }
-        auto *tu     = ctx.getTranslationUnitDecl();
-        auto &ident  = ctx.Idents.get(name);
+        auto known_bits = static_cast< unsigned >(ctx.toBits(*known));
+        auto *tu        = ctx.getTranslationUnitDecl();
+
         clang::TypedefDecl *typedef_decl = nullptr;
-        for (auto *found : tu->lookup(clang::DeclarationName(&ident))) {
-            typedef_decl = clang::dyn_cast< clang::TypedefDecl >(found);
-            if (typedef_decl != nullptr) {
+        clang::IdentifierInfo *free_name = nullptr;
+        for (unsigned attempt = 0; typedef_decl == nullptr && free_name == nullptr; ++attempt) {
+            auto &ident = ctx.Idents.get(
+                attempt == 0 ? base : base + "_" + std::to_string(attempt)
+            );
+            auto found = tu->lookup(clang::DeclarationName(&ident));
+            if (found.empty()) {
+                free_name = &ident;
                 break;
+            }
+            for (auto *decl : found) {
+                auto *candidate = clang::dyn_cast< clang::TypedefDecl >(decl);
+                if (candidate == nullptr) {
+                    continue;
+                }
+                const auto *aligned = candidate->getAttr< clang::AlignedAttr >();
+                if (aligned != nullptr && !aligned->isAlignmentDependent()
+                    && aligned->getAlignment(ctx) == known_bits
+                    && ctx.hasSameType(candidate->getUnderlyingType(), unqualified))
+                {
+                    typedef_decl = candidate;
+                    break;
+                }
             }
         }
         if (typedef_decl == nullptr) {
             typedef_decl = clang::TypedefDecl::Create(
-                ctx, tu, op_loc, op_loc, &ident, ctx.getTrivialTypeSourceInfo(unqualified)
+                ctx, tu, op_loc, op_loc, free_name, ctx.getTrivialTypeSourceInfo(unqualified)
             );
             auto *bytes = clang::IntegerLiteral::Create(
                 ctx,
@@ -1217,9 +1242,7 @@ namespace patchestry::ast {
                 ctx.IntTy, op_loc
             );
             auto *aligned = clang::AlignedAttr::Create(ctx, /*IsAlignmentExpr=*/true, bytes);
-            aligned->setCachedAlignmentValue(
-                static_cast< unsigned >(ctx.toBits(*known))
-            );
+            aligned->setCachedAlignmentValue(known_bits);
             typedef_decl->addAttr(aligned);
             add_before_functions(tu, typedef_decl);
         }
