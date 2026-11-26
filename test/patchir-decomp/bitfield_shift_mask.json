@@ -39,13 +39,14 @@
 // BIG: [[P:%[0-9]+]] = load ptr, ptr
 // BIG-NEXT: store i32 %{{[0-9]+}}, ptr [[P]], align 4
 //
-// The bit-field unit is four bytes at byte 1 of a packed struct.
+// The bit-field unit is four bytes at byte 1 of a packed struct, so its load
+// and store are aligned to one byte, not four.
 // PACKED-LABEL: define dso_local void @packed_set(
 // PACKED: [[A:%[0-9]+]] = getelementptr i8, ptr %{{[0-9]+}}, i64 1
-// PACKED-NEXT: load i32, ptr [[A]]
+// PACKED-NEXT: load i32, ptr [[A]], align 1
 // PACKED: shl i32 %{{[0-9]+}}, 6
 // PACKED: [[B:%[0-9]+]] = getelementptr i8, ptr %{{[0-9]+}}, i64 1
-// PACKED-NEXT: store i32 %{{[0-9]+}}, ptr [[B]]
+// PACKED-NEXT: store i32 %{{[0-9]+}}, ptr [[B]], align 1
 //
 // Two fields written by one load and one store, as in the binary.
 // SET-LABEL: define dso_local void @bitfield_set(

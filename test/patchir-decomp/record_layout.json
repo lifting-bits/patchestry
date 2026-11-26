@@ -36,7 +36,9 @@
 // C-DAG: struct __attribute__((packed)) packed_rec {
 // C-DAG: union view_rec {
 // C-DAG: unsigned char __pad_4[12];
-// C-DAG: return *(unsigned int *)((char *)p + 2U);
+// A 4-byte read at byte 2 is aligned to two bytes, not four.
+// C-DAG: typedef unsigned int unaligned2_unsigned_int __attribute__((aligned(2)));
+// C-DAG: return *(unaligned2_unsigned_int *)((char *)p + 2U);
 //
 // LL-DAG: %struct.gap_rec = type { i8, [7 x i8], i32 }
 // LL-DAG: %struct.packed_rec = type <{ i8, i32 }>

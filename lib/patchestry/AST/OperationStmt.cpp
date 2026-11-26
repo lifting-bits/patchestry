@@ -6,9 +6,11 @@
  */
 
 #include <algorithm>
+#include <cctype>
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <clang/AST/ASTContext.h>
 #include <clang/AST/Attr.h>
@@ -59,6 +61,78 @@ namespace patchestry::ast {
                 }
             }
             return nullptr;
+        }
+
+        // Upper bound on the alignment of the address `expr` that follows
+        // from constant byte offsets in it, or nullopt when there is none.
+        // The base a constant is added to is taken to be aligned for the
+        // access, as it was before this analysis existed: its real alignment
+        // is not known, and the alignment of a lifted record is not evidence
+        // (records are packed to force the recovered layout).  So
+        // `(char *) p + 1` is aligned to one byte and `(char *) p + 44` is
+        // not bounded.  Pointer casts and variable offsets say nothing.
+        std::optional< clang::CharUnits >
+        offset_alignment_bound(clang::ASTContext &ctx, const clang::Expr *expr) {
+            expr = expr->IgnoreParens();
+            while (const auto *cast = clang::dyn_cast< clang::CastExpr >(expr)) {
+                const auto *sub = cast->getSubExpr();
+                if (!sub->getType()->isPointerType()) {
+                    return std::nullopt;
+                }
+                expr = sub->IgnoreParens();
+            }
+            const auto *bin = clang::dyn_cast< clang::BinaryOperator >(expr);
+            if (bin == nullptr || !expr->getType()->isPointerType()
+                || (bin->getOpcode() != clang::BO_Add && bin->getOpcode() != clang::BO_Sub))
+            {
+                return std::nullopt;
+            }
+            const auto *base   = bin->getLHS();
+            const auto *offset = bin->getRHS();
+            if (!base->getType()->isPointerType() && bin->getOpcode() == clang::BO_Add) {
+                std::swap(base, offset);
+            }
+            if (!base->getType()->isPointerType() || offset->getType()->isPointerType()) {
+                return std::nullopt;
+            }
+            auto pointee = expr->getType()->getPointeeType();
+            clang::Expr::EvalResult value;
+            if (pointee->isIncompleteType() || pointee->isFunctionType()
+                || !offset->EvaluateAsInt(value, ctx))
+            {
+                return std::nullopt;
+            }
+
+            auto bound   = offset_alignment_bound(ctx, base);
+            auto element = static_cast< uint64_t >(ctx.getTypeSizeInChars(pointee).getQuantity());
+            auto bytes   = value.Val.getInt().abs().getZExtValue() * element;
+            if (bytes == 0) {
+                return bound;
+            }
+            auto low_bit = clang::CharUnits::fromQuantity(
+                static_cast< clang::CharUnits::QuantityType >(bytes & (~bytes + 1U))
+            );
+            return bound ? std::min(*bound, low_bit) : low_bit;
+        }
+
+        // Add `decl` to the translation unit ahead of the first function.
+        // The unit is printed in declaration order, and a type created while
+        // a function body is built would otherwise be declared after the
+        // body that uses it.
+        void add_before_functions(clang::TranslationUnitDecl *tu, clang::Decl *decl) {
+            std::vector< clang::Decl * > tail;
+            for (auto *existing : tu->decls()) {
+                if (!tail.empty() || clang::isa< clang::FunctionDecl >(existing)) {
+                    tail.push_back(existing);
+                }
+            }
+            for (auto *moved : tail) {
+                tu->removeDecl(moved);
+            }
+            tu->addDecl(decl);
+            for (auto *moved : tail) {
+                tu->addDecl(moved);
+            }
         }
 
         clang::VarDecl *create_variable_decl( // NOLINT
@@ -968,6 +1042,8 @@ namespace patchestry::ast {
             return { create_assign_operation(ctx, result_expr, output_expr, op_loc), false };
         }
 
+        // Alignment of the pointee before a width-changing cast below.
+        std::optional< clang::CharUnits > prior_alignment;
         if (op.type) {
             auto op_type_opt = lookup_op_type(op);
             if (!op_type_opt) {
@@ -987,6 +1063,9 @@ namespace patchestry::ast {
                     && ctx.getTypeSize(from_pointee) != ctx.getTypeSize(*op_type_opt))
                 {
                     cast_expr = make_explicit_cast(ctx, input_expr, pointer_type, op_loc);
+                    if (cast_expr != nullptr) {
+                        prior_alignment = ctx.getTypeAlignInChars(from_pointee);
+                    }
                 }
             }
             if (!cast_expr) {
@@ -1013,6 +1092,7 @@ namespace patchestry::ast {
         // Cancel *(&expr) from PTRADD's &base[index] to produce base[index].
         clang::Expr *result_expr = simplify_deref_addrof(input_expr);
         if (!result_expr) {
+            input_expr = lower_access_alignment(ctx, input_expr, op_loc, prior_alignment);
             auto derefed_expr = sema().CreateBuiltinUnaryOp(
                 SourceLocation(ctx.getSourceManager(), op.key), clang::UO_Deref,
                 clang::dyn_cast< clang::Expr >(input_expr)
@@ -1063,6 +1143,84 @@ namespace patchestry::ast {
         return casted;
     }
 
+    // The access `*addr` takes the alignment of addr's pointee type.  When
+    // the address is known to be less aligned than that (a 4-byte unit at
+    // byte 1 of a packed struct), dereferencing it claims an alignment the
+    // address does not have: undefined behaviour in the printed C and an
+    // `align 4` on the load or store in the IR.  Return the address cast to
+    // a pointer to a typedef of the pointee that carries the known alignment.
+    // The alignment is known from a constant offset in the address and from
+    // `prior_alignment`: the alignment of the type the address pointed at
+    // before the lifter changed the width of the access.
+    clang::Expr *OpBuilder::lower_access_alignment(
+        clang::ASTContext &ctx, clang::Expr *addr, clang::SourceLocation op_loc,
+        std::optional< clang::CharUnits > prior_alignment
+    ) {
+        if (addr == nullptr || !addr->getType()->isPointerType()) {
+            return addr;
+        }
+        auto pointee = addr->getType()->getPointeeType();
+        if (pointee->isIncompleteType() || pointee->isFunctionType()) {
+            return addr;
+        }
+        auto known = offset_alignment_bound(ctx, addr);
+        if (prior_alignment && (!known || *prior_alignment < *known)) {
+            known = prior_alignment;
+        }
+        if (!known || *known >= ctx.getTypeAlignInChars(pointee)) {
+            return addr;
+        }
+
+        // One typedef per (alignment, type), found again by name.
+        auto unqualified = pointee.getUnqualifiedType();
+        std::string name = "unaligned" + std::to_string(known->getQuantity()) + "_";
+        for (char c : unqualified.getAsString(ctx.getPrintingPolicy())) {
+            name += std::isalnum(static_cast< unsigned char >(c)) != 0 ? c : '_';
+        }
+        auto *tu     = ctx.getTranslationUnitDecl();
+        auto &ident  = ctx.Idents.get(name);
+        clang::TypedefDecl *typedef_decl = nullptr;
+        for (auto *found : tu->lookup(clang::DeclarationName(&ident))) {
+            typedef_decl = clang::dyn_cast< clang::TypedefDecl >(found);
+            if (typedef_decl != nullptr) {
+                break;
+            }
+        }
+        if (typedef_decl == nullptr) {
+            typedef_decl = clang::TypedefDecl::Create(
+                ctx, tu, op_loc, op_loc, &ident, ctx.getTrivialTypeSourceInfo(unqualified)
+            );
+            auto *bytes = clang::IntegerLiteral::Create(
+                ctx,
+                llvm::APInt(
+                    ctx.getIntWidth(ctx.IntTy), static_cast< uint64_t >(known->getQuantity())
+                ),
+                ctx.IntTy, op_loc
+            );
+            auto *aligned = clang::AlignedAttr::Create(ctx, /*IsAlignmentExpr=*/true, bytes);
+            aligned->setCachedAlignmentValue(
+                static_cast< unsigned >(ctx.toBits(*known))
+            );
+            typedef_decl->addAttr(aligned);
+            add_before_functions(tu, typedef_decl);
+        }
+
+        auto aligned_type =
+            ctx.getTypedefType(clang::ElaboratedTypeKeyword::None, std::nullopt, typedef_decl);
+        aligned_type = ctx.getQualifiedType(aligned_type, pointee.getQualifiers());
+
+        // Replace a cast that only chose the access type; keep anything else.
+        clang::Expr *operand = addr;
+        if (auto *cast = clang::dyn_cast< clang::CStyleCastExpr >(addr->IgnoreParens())) {
+            if (cast->getSubExpr()->getType()->isPointerType()) {
+                operand = cast->getSubExpr();
+            }
+        }
+        auto *lowered =
+            make_explicit_cast(ctx, operand, ctx.getPointerType(aligned_type), op_loc);
+        return lowered != nullptr ? lowered : addr;
+    }
+
     // A STORE writes exactly the bytes of its value.  The address operand can
     // point at something else: the struct that holds a bit-field unit, or one
     // byte of a packed layout.  Assigning through that pointer would copy the
@@ -1071,7 +1229,8 @@ namespace patchestry::ast {
     // a pointer to an integer of the value's width instead.
     clang::Expr *OpBuilder::retarget_store_address(
         clang::ASTContext &ctx, clang::Expr *addr, clang::Expr *value,
-        const Varnode &value_varnode, clang::SourceLocation op_loc
+        const Varnode &value_varnode, clang::SourceLocation op_loc,
+        std::optional< clang::CharUnits > &prior_alignment
     ) {
         auto addr_type = addr->getType();
         if (value_varnode.size == 0 || !addr_type->isPointerType()
@@ -1102,7 +1261,11 @@ namespace patchestry::ast {
         }
         auto *retargeted =
             make_explicit_cast(ctx, addr, ctx.getPointerType(store_type), op_loc);
-        return retargeted != nullptr ? retargeted : addr;
+        if (retargeted == nullptr) {
+            return addr;
+        }
+        prior_alignment = ctx.getTypeAlignInChars(pointee);
+        return retargeted;
     }
 
     std::pair< clang::Stmt *, bool > OpBuilder::create_store(
@@ -1122,7 +1285,10 @@ namespace patchestry::ast {
             if (!lhs_expr || !rhs_expr) {
                 return {};
             }
-            lhs_expr = retarget_store_address(ctx, lhs_expr, rhs_expr, op.inputs[1], op_loc);
+            std::optional< clang::CharUnits > prior_alignment;
+            lhs_expr = retarget_store_address(
+                ctx, lhs_expr, rhs_expr, op.inputs[1], op_loc, prior_alignment
+            );
 
             // Cancel *(&expr) from PTRADD's &base[index].
             clang::Expr *deref_expr = simplify_deref_addrof(lhs_expr);
@@ -1131,6 +1297,7 @@ namespace patchestry::ast {
                 if (!lhs_expr) {
                     return {};
                 }
+                lhs_expr = lower_access_alignment(ctx, lhs_expr, op_loc, prior_alignment);
                 // Parenthesize pointer arithmetic so the deref binds the whole
                 // expression: *(ptr + offset) instead of *ptr + offset.
                 if (clang::isa< clang::BinaryOperator >(lhs_expr)) {
@@ -1161,7 +1328,10 @@ namespace patchestry::ast {
             if (!lhs_expr || !rhs_expr) {
                 return {};
             }
-            lhs_expr = retarget_store_address(ctx, lhs_expr, rhs_expr, op.inputs[2], op_loc);
+            std::optional< clang::CharUnits > prior_alignment;
+            lhs_expr = retarget_store_address(
+                ctx, lhs_expr, rhs_expr, op.inputs[2], op_loc, prior_alignment
+            );
 
             // Cancel *(&expr) from PTRADD's &base[index].
             clang::Expr *deref_expr = simplify_deref_addrof(lhs_expr);
@@ -1170,6 +1340,7 @@ namespace patchestry::ast {
                 if (!lhs_expr) {
                     return {};
                 }
+                lhs_expr = lower_access_alignment(ctx, lhs_expr, op_loc, prior_alignment);
                 if (clang::isa< clang::BinaryOperator >(lhs_expr)) {
                     lhs_expr = new (ctx) clang::ParenExpr(op_loc, op_loc, lhs_expr);
                 }

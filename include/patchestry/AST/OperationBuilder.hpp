@@ -8,10 +8,12 @@
 #pragma once
 
 #include <functional>
+#include <optional>
 #include <string_view>
 #include <unordered_set>
 
 #include <clang/AST/ASTContext.h>
+#include <clang/AST/CharUnits.h>
 #include <clang/AST/OperationKinds.h>
 #include <clang/AST/Type.h>
 #include <clang/Basic/SourceLocation.h>
@@ -59,10 +61,23 @@ namespace patchestry::ast {
         // Make a STORE write the bytes of its value: when an integer value and
         // the address's pointee disagree in width, or the pointee is an
         // aggregate, cast the address to a pointer to an integer of the
-        // value's width.  Returns the address unchanged otherwise.
+        // value's width and set prior_alignment to the alignment of the old
+        // pointee.  Returns the address unchanged otherwise.
         clang::Expr *retarget_store_address(
             clang::ASTContext &ctx, clang::Expr *addr, clang::Expr *value,
-            const Varnode &value_varnode, clang::SourceLocation op_loc
+            const Varnode &value_varnode, clang::SourceLocation op_loc,
+            std::optional< clang::CharUnits > &prior_alignment
+        );
+
+        // Cast a LOAD or STORE address to a pointer to an under-aligned
+        // typedef of its pointee when the address is known to be less aligned
+        // than the pointee type: by a constant offset in it, or because the
+        // type it pointed at before the access width was changed
+        // (prior_alignment) was less aligned.  Returns the address unchanged
+        // otherwise.
+        clang::Expr *lower_access_alignment(
+            clang::ASTContext &ctx, clang::Expr *addr, clang::SourceLocation op_loc,
+            std::optional< clang::CharUnits > prior_alignment = std::nullopt
         );
 
         std::pair< clang::Stmt *, bool >

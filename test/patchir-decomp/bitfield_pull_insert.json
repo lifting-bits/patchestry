@@ -116,15 +116,17 @@
 // BIG: store i32 %{{[0-9]+}}, ptr %{{[0-9]+}}, align 4
 //
 // The destination points at one byte of a packed struct.  The four-byte unit
-// is loaded and stored whole, not truncated to a byte.
+// is loaded and stored whole, not truncated to a byte.  Its address is byte 1
+// of the struct, so both accesses are aligned to one byte, not four.
 // PACKED-LABEL: define dso_local void @packed_set(
-// PACKED: getelementptr i8, ptr %{{[0-9]+}}, i64 1
-// PACKED: load i32, ptr %{{[0-9]+}}
+// PACKED: [[A:%[0-9]+]] = getelementptr i8, ptr %{{[0-9]+}}, i64 1
+// PACKED-NEXT: load i32, ptr [[A]], align 1
 // PACKED-NEXT: and i32 %{{[0-9]+}}, -67108801
 // PACKED: shl i32 %{{[0-9]+}}, 6
 // PACKED-NEXT: or i32
 // PACKED-NOT: trunc
-// PACKED: store i32 %{{[0-9]+}}, ptr %{{[0-9]+}}
+// PACKED: [[B:%[0-9]+]] = getelementptr i8, ptr %{{[0-9]+}}, i64 1
+// PACKED-NEXT: store i32 %{{[0-9]+}}, ptr [[B]], align 1
 //
 // The printed C states the width of each access and compiles (the
 // -fsyntax-only RUN line above).
@@ -132,7 +134,8 @@
 // TU-DAG: return (int)((((*(unsigned int *)&*f >> 3U) & 31U) ^ 16U) - 16U);
 // TU-DAG: *(unsigned int *)f = ((*(unsigned int *)&*f & 4293918975U) | ((count & 4095U) << 8U));
 // TU-DAG: *(unsigned int *)b = ((*(unsigned int *)b & 4293918975U) | ((count & 4095U) << 8U));
-// TU-DAG: *(unsigned int *)(undefined1 *)((char *)p + 1L) = ((*(undefined4 *)(undefined1 *)((char *)p + 1L) & 4227858495U) | ((mid & 1048575U) << 6U));
+// TU-DAG: typedef unsigned int unaligned1_unsigned_int __attribute__((aligned(1)));
+// TU-DAG: *(unaligned1_unsigned_int *)(undefined1 *)((char *)p + 1L) = ((*(unaligned1_undefined4 *)(undefined1 *)((char *)p + 1L) & 4227858495U) | ((mid & 1048575U) << 6U));
 {
   "architecture": "AARCH64",
   "id": "AARCH64:LE:64:v8A",
