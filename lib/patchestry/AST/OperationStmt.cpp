@@ -4131,11 +4131,66 @@ namespace patchestry::ast {
             return BitRange{ static_cast< unsigned >(pos), static_cast< unsigned >(count) };
         }
 
+        // An unsigned constant of `type`.  A literal of a type wider than 64
+        // bits prints as a bare decimal number: the compiler reads a small one
+        // as an int and rejects one that needs more than 64 bits.  Such a
+        // constant is built from 64-bit literals under explicit casts,
+        // `((unsigned __int128)high << 64U) | low`, which prints as valid C.
         clang::Expr *make_unsigned_literal(
-            clang::ASTContext &ctx, const llvm::APInt &value, clang::QualType type,
-            clang::SourceLocation loc
+            clang::ASTContext &ctx, clang::Sema &sema, const llvm::APInt &value,
+            clang::QualType type, clang::SourceLocation loc
         ) {
-            return clang::IntegerLiteral::Create(ctx, value, type, loc);
+            if (value.getBitWidth() <= 64U) {
+                return clang::IntegerLiteral::Create(ctx, value, type, loc);
+            }
+
+            auto half_type = ctx.getIntTypeForBitwidth(64U, /*Signed=*/false);
+            auto widen     = [&](const llvm::APInt &half) -> clang::Expr * {
+                auto cast = sema.BuildCStyleCastExpr(
+                    loc, ctx.getTrivialTypeSourceInfo(type), loc,
+                    clang::IntegerLiteral::Create(ctx, half, half_type, loc)
+                );
+                return cast.isInvalid() ? nullptr : cast.getAs< clang::Expr >();
+            };
+
+            auto *low = widen(value.trunc(64U));
+            if (low == nullptr || value.getActiveBits() <= 64U) {
+                return low;
+            }
+            auto *high  = widen(value.lshr(64U).trunc(64U));
+            auto *count = clang::IntegerLiteral::Create(
+                ctx, llvm::APInt(ctx.getIntWidth(ctx.UnsignedIntTy), 64U), ctx.UnsignedIntTy, loc
+            );
+            if (high == nullptr) {
+                return nullptr;
+            }
+            auto shifted = sema.CreateBuiltinBinOp(loc, clang::BO_Shl, high, count);
+            if (shifted.isInvalid()) {
+                return nullptr;
+            }
+            auto joined = sema.CreateBuiltinBinOp(
+                loc, clang::BO_Or, new (ctx) clang::ParenExpr(loc, loc, shifted.get()), low
+            );
+            return joined.isInvalid() ? nullptr
+                                      : new (ctx) clang::ParenExpr(loc, loc, joined.get());
+        }
+
+        // A shift count.  It has the working type, so the printed suffix
+        // matches the other operand, except above 64 bits, where a plain
+        // unsigned count reads better than a constant built from casts.
+        clang::Expr *make_shift_count(
+            clang::ASTContext &ctx, unsigned count, unsigned work_bits,
+            clang::QualType work_type, clang::SourceLocation loc
+        ) {
+            if (work_bits > 64U) {
+                return clang::IntegerLiteral::Create(
+                    ctx, llvm::APInt(ctx.getIntWidth(ctx.UnsignedIntTy), count),
+                    ctx.UnsignedIntTy, loc
+                );
+            }
+            return clang::IntegerLiteral::Create(
+                ctx, llvm::APInt(work_bits, count), work_type, loc
+            );
         }
     } // namespace
 
@@ -4251,13 +4306,25 @@ namespace patchestry::ast {
             return result.isInvalid() ? nullptr : paren(result.getAs< clang::Expr >());
         };
         auto literal = [&](const llvm::APInt &value) {
-            return make_unsigned_literal(ctx, value, work_type, op_loc);
+            return make_unsigned_literal(ctx, sema(), value, work_type, op_loc);
+        };
+        auto shift_count = [&](unsigned count) {
+            return make_shift_count(ctx, count, work_bits, work_type, op_loc);
+        };
+        // The widening is written out.  An implicit conversion is not
+        // printed, and a shift takes the type of its left operand alone, so
+        // `v << 70` would be a shift of the narrow operand.
+        auto widen = [&](clang::Expr *expr) -> clang::Expr * {
+            if (ctx.hasSameUnqualifiedType(expr->getType(), work_type)) {
+                return expr;
+            }
+            return make_explicit_cast(ctx, expr, work_type, op_loc);
         };
 
         // (source >> position) & mask
-        clang::Expr *value = make_cast(ctx, source, work_type, op_loc);
+        clang::Expr *value = widen(source);
         if (range->position != 0) {
-            value = binary(clang::BO_Shr, value, literal(llvm::APInt(work_bits, range->position)));
+            value = binary(clang::BO_Shr, value, shift_count(range->position));
         }
         if (range->size < work_bits) {
             value = binary(
@@ -4345,7 +4412,19 @@ namespace patchestry::ast {
             return result.isInvalid() ? nullptr : paren(result.getAs< clang::Expr >());
         };
         auto literal = [&](const llvm::APInt &value) {
-            return make_unsigned_literal(ctx, value, work_type, op_loc);
+            return make_unsigned_literal(ctx, sema(), value, work_type, op_loc);
+        };
+        auto shift_count = [&](unsigned count) {
+            return make_shift_count(ctx, count, work_bits, work_type, op_loc);
+        };
+        // The widening is written out.  An implicit conversion is not
+        // printed, and a shift takes the type of its left operand alone, so
+        // `v << 70` would be a shift of the narrow operand.
+        auto widen = [&](clang::Expr *expr) -> clang::Expr * {
+            if (ctx.hasSameUnqualifiedType(expr->getType(), work_type)) {
+                return expr;
+            }
+            return make_explicit_cast(ctx, expr, work_type, op_loc);
         };
 
         // (container & ~(mask << position)) | ((field & mask) << position)
@@ -4354,14 +4433,17 @@ namespace patchestry::ast {
 
         // Only the low `size` bits of the field are used, so narrowing a
         // wider field to the working type loses nothing.
-        clang::Expr *inserted = make_cast(ctx, field, work_type, op_loc);
+        clang::Expr *inserted = widen(field);
         inserted              = binary(clang::BO_And, inserted, literal(low_mask));
         if (range->position != 0) {
-            inserted =
-                binary(clang::BO_Shl, inserted, literal(llvm::APInt(work_bits, range->position)));
+            inserted = binary(clang::BO_Shl, inserted, shift_count(range->position));
         }
 
-        clang::Expr *kept = make_cast(ctx, container, work_type, op_loc);
+        // The container keeps every bit outside the field.  That includes the
+        // bits of a wider carrier above the container's width: a 3-byte unit
+        // is loaded and stored as 4 bytes, and the fourth byte has to go back
+        // as it was read.
+        clang::Expr *kept = widen(container);
         kept              = binary(clang::BO_And, kept, literal(~field_mask));
 
         auto *value = binary(clang::BO_Or, kept, inserted);
