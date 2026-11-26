@@ -56,6 +56,15 @@ namespace patchestry::ast {
             const Operation &op, clang::SourceLocation op_loc
         );
 
+        // Make a STORE write the bytes of its value: when an integer value and
+        // the address's pointee disagree in width, or the pointee is an
+        // aggregate, cast the address to a pointer to an integer of the
+        // value's width.  Returns the address unchanged otherwise.
+        clang::Expr *retarget_store_address(
+            clang::ASTContext &ctx, clang::Expr *addr, clang::Expr *value,
+            const Varnode &value_varnode, clang::SourceLocation op_loc
+        );
+
         std::pair< clang::Stmt *, bool >
         create_branch(clang::ASTContext &ctx, const Operation &op);
 

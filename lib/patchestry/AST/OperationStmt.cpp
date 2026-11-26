@@ -974,7 +974,24 @@ namespace patchestry::ast {
                 return {};
             }
             auto pointer_type = ctx.getPointerType(*op_type_opt);
-            auto *cast_expr   = make_cast(ctx, input_expr, pointer_type, op_loc);
+            // A cast that changes how many bytes are read is written out.
+            // make_cast builds an implicit cast for a pointer rvalue, which
+            // the printed C omits: a 4-byte load through a pointer to one
+            // byte would print as a 1-byte read.
+            clang::Expr *cast_expr = nullptr;
+            auto from_type         = input_expr->getType();
+            if (from_type->isPointerType() && !from_type->isVoidPointerType()) {
+                auto from_pointee = from_type->getPointeeType();
+                if (!from_pointee->isIncompleteType() && !from_pointee->isFunctionType()
+                    && !(*op_type_opt)->isIncompleteType()
+                    && ctx.getTypeSize(from_pointee) != ctx.getTypeSize(*op_type_opt))
+                {
+                    cast_expr = make_explicit_cast(ctx, input_expr, pointer_type, op_loc);
+                }
+            }
+            if (!cast_expr) {
+                cast_expr = make_cast(ctx, input_expr, pointer_type, op_loc);
+            }
             if (!cast_expr) {
                 LOG(ERROR) << "Failed to make cast expression for LOAD. key: " << op.key;
                 return {};
@@ -1046,6 +1063,48 @@ namespace patchestry::ast {
         return casted;
     }
 
+    // A STORE writes exactly the bytes of its value.  The address operand can
+    // point at something else: the struct that holds a bit-field unit, or one
+    // byte of a packed layout.  Assigning through that pointer would copy the
+    // whole struct out of a narrower value, or truncate the value to the
+    // pointee.  When an integer value and the pointee disagree, store through
+    // a pointer to an integer of the value's width instead.
+    clang::Expr *OpBuilder::retarget_store_address(
+        clang::ASTContext &ctx, clang::Expr *addr, clang::Expr *value,
+        const Varnode &value_varnode, clang::SourceLocation op_loc
+    ) {
+        auto addr_type = addr->getType();
+        if (value_varnode.size == 0 || !addr_type->isPointerType()
+            || addr_type->isVoidPointerType()
+            || !value->getType()->isIntegralOrEnumerationType())
+        {
+            return addr;
+        }
+        auto pointee = addr_type->getPointeeType();
+        if (pointee->isIncompleteType() || pointee->isFunctionType()) {
+            return addr;
+        }
+
+        auto value_bits   = static_cast< uint64_t >(value_varnode.size) * 8U;
+        auto is_aggregate = pointee->isRecordType() || pointee->isArrayType();
+        if (!is_aggregate && ctx.getTypeSize(pointee) == value_bits) {
+            return addr;
+        }
+
+        auto store_type = value->getType().getUnqualifiedType();
+        if (ctx.getTypeSize(store_type) != value_bits) {
+            store_type = ctx.getIntTypeForBitwidth(
+                static_cast< unsigned >(value_bits), /*Signed=*/false
+            );
+        }
+        if (store_type.isNull()) {
+            return addr;
+        }
+        auto *retargeted =
+            make_explicit_cast(ctx, addr, ctx.getPointerType(store_type), op_loc);
+        return retargeted != nullptr ? retargeted : addr;
+    }
+
     std::pair< clang::Stmt *, bool > OpBuilder::create_store(
         clang::ASTContext &ctx, const Function &function, const Operation &op
     ) {
@@ -1063,6 +1122,7 @@ namespace patchestry::ast {
             if (!lhs_expr || !rhs_expr) {
                 return {};
             }
+            lhs_expr = retarget_store_address(ctx, lhs_expr, rhs_expr, op.inputs[1], op_loc);
 
             // Cancel *(&expr) from PTRADD's &base[index].
             clang::Expr *deref_expr = simplify_deref_addrof(lhs_expr);
@@ -1101,6 +1161,7 @@ namespace patchestry::ast {
             if (!lhs_expr || !rhs_expr) {
                 return {};
             }
+            lhs_expr = retarget_store_address(ctx, lhs_expr, rhs_expr, op.inputs[2], op_loc);
 
             // Cancel *(&expr) from PTRADD's &base[index].
             clang::Expr *deref_expr = simplify_deref_addrof(lhs_expr);
