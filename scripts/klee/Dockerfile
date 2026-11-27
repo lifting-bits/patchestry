@@ -110,12 +110,8 @@ RUN git clone --depth 1 --branch v1.16.0 \
 # ---- Build KLEE ----
 # Make minisat/STP/Z3 libs visible to the linker
 ENV LIBRARY_PATH="/opt/minisat/lib:/opt/stp/lib:/opt/z3/lib"
-# Copy patches applied during KLEE build
-COPY patches/ /tmp/klee-patches/
-
 RUN git clone --branch "${KLEE_BRANCH}" "${KLEE_REPO}" /tmp/klee \
     && cd /tmp/klee && git checkout "${KLEE_REF}" \
-    && git apply /tmp/klee-patches/raise-asm-guard-tri.patch \
     && mkdir build && cd build \
     && cmake -G Ninja \
         -DCMAKE_INSTALL_PREFIX=/opt/klee \
